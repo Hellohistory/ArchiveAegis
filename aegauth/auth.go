@@ -18,7 +18,7 @@ import (
 
 /* ---------- 配置 ---------- */
 
-var hmacKey = []byte("ArchiveAegisSecret_ChangeMe") // 默认密钥
+var hmacKey = []byte("ArchiveAegisSecret_Hellohistory")
 
 func init() {
 	// 允许通过环境变量覆盖 JWT 密钥，增强安全性
