@@ -25,7 +25,7 @@ import (
 )
 
 // version 定义当前程序的版本号
-const version = "v0.2.4"
+const version = "v0.2.5"
 
 func genToken() string {
 	b := make([]byte, 16)

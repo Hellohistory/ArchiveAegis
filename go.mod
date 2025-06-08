@@ -9,9 +9,11 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/prometheus/client_golang v1.22.0
 	golang.org/x/crypto v0.38.0
 	golang.org/x/sync v0.14.0
+	golang.org/x/time v0.12.0
 	modernc.org/sqlite v1.37.1
 )
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -78,6 +79,24 @@ type BizQueryConfig struct {
 	Tables               map[string]*TableConfig `json:"tables"`
 }
 
+// IPLimitSetting 定义了全局IP速率限制的配置
+type IPLimitSetting struct {
+	RateLimitPerMinute float64 `json:"rate_limit_per_minute"`
+	BurstSize          int     `json:"burst_size"`
+}
+
+// UserLimitSetting 定义了单个用户的速率限制配置
+type UserLimitSetting struct {
+	RateLimitPerSecond float64 `json:"rate_limit_per_second"`
+	BurstSize          int     `json:"burst_size"`
+}
+
+// BizRateLimitSetting 定义了单个业务组的速率限制配置
+type BizRateLimitSetting struct {
+	RateLimitPerSecond float64 `json:"rate_limit_per_second"`
+	BurstSize          int     `json:"burst_size"`
+}
+
 // QueryAdminConfigService 是一个接口，Manager 将通过它获取管理员定义的查询配置。
 type QueryAdminConfigService interface {
 	GetBizQueryConfig(ctx context.Context, bizName string) (*BizQueryConfig, error)
@@ -86,6 +105,15 @@ type QueryAdminConfigService interface {
 	UpdateAllViewsForBiz(ctx context.Context, bizName string, viewsData map[string][]*ViewConfig) error
 	InvalidateCacheForBiz(bizName string)
 	InvalidateAllCaches()
+
+	// GetIPLimitSettings 速率限制相关的接口
+
+	GetIPLimitSettings(ctx context.Context) (*IPLimitSetting, error)
+	UpdateIPLimitSettings(ctx context.Context, settings IPLimitSetting) error
+	GetUserLimitSettings(ctx context.Context, userID int64) (*UserLimitSetting, error)
+	UpdateUserLimitSettings(ctx context.Context, userID int64, settings UserLimitSetting) error
+	GetBizRateLimitSettings(ctx context.Context, bizName string) (*BizRateLimitSetting, error)
+	UpdateBizRateLimitSettings(ctx context.Context, bizName string, settings BizRateLimitSetting) error
 }
 
 /*
@@ -148,6 +176,22 @@ func NewAdminConfigServiceImpl(authDB *sql.DB, maxCacheEntries int, defaultCache
           is_default BOOLEAN DEFAULT FALSE NOT NULL,
           PRIMARY KEY (biz_name, table_name, view_name)
        );`,
+		`CREATE TABLE IF NOT EXISTS global_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			description TEXT,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS biz_ratelimit_settings (
+			biz_name TEXT PRIMARY KEY,
+			rate_limit_per_second REAL NOT NULL DEFAULT 5.0,
+			burst_size INTEGER NOT NULL DEFAULT 10,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`INSERT OR IGNORE INTO global_settings (key, value, description) VALUES
+			('ip_rate_limit_per_minute', '60', '未认证IP的默认每分钟请求数'),
+			('ip_burst_size', '20', '未认证IP的默认瞬时请求峰值');`,
+
 		`CREATE INDEX IF NOT EXISTS idx_bvd_biz_table_default ON biz_view_definitions(biz_name, table_name, is_default);`,
 		`CREATE INDEX IF NOT EXISTS idx_bst_biz_name ON biz_searchable_tables(biz_name);`,
 		`CREATE INDEX IF NOT EXISTS idx_btfs_biz_table ON biz_table_field_settings(biz_name, table_name);`,
@@ -448,6 +492,155 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 	// 如果所有操作都成功，外部的 err 变量为 nil，defer 将会提交事务
 	return nil
 }
+
+// ============== 新增：速率限制配置相关方法 ==============
+
+// GetIPLimitSettings 获取全局IP速率限制配置
+func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*IPLimitSetting, error) {
+	settings := &IPLimitSetting{}
+	rows, err := s.db.QueryContext(ctx, "SELECT key, value FROM global_settings WHERE key IN (?, ?)", "ip_rate_limit_per_minute", "ip_burst_size")
+	if err != nil {
+		log.Printf("错误: [AdminConfigService DB] 查询IP速率限制配置失败: %v", err)
+		return nil, fmt.Errorf("数据库查询失败")
+	}
+	defer rows.Close()
+
+	foundKeys := 0
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			log.Printf("错误: [AdminConfigService DB] 扫描IP速率限制配置失败: %v", err)
+			return nil, fmt.Errorf("数据库扫描失败")
+		}
+		switch key {
+		case "ip_rate_limit_per_minute":
+			if v, errConv := strconv.ParseFloat(value, 64); errConv == nil {
+				settings.RateLimitPerMinute = v
+				foundKeys++
+			}
+		case "ip_burst_size":
+			if v, errConv := strconv.Atoi(value); errConv == nil {
+				settings.BurstSize = v
+				foundKeys++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代数据库结果时出错: %w", err)
+	}
+
+	if foundKeys < 2 {
+		log.Printf("警告: [AdminConfigService DB] 未能完整获取IP速率限制配置，可能缺少默认值。")
+		return nil, nil // 返回nil表示未找到或不完整
+	}
+	return settings, nil
+}
+
+// UpdateIPLimitSettings 更新全局IP速率限制配置
+func (s *AdminConfigServiceImpl) UpdateIPLimitSettings(ctx context.Context, settings IPLimitSetting) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启事务失败: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+	if err != nil {
+		return fmt.Errorf("准备SQL语句失败: %w", err)
+	}
+	defer stmt.Close()
+
+	if _, err = stmt.ExecContext(ctx, "ip_rate_limit_per_minute", fmt.Sprintf("%f", settings.RateLimitPerMinute)); err != nil {
+		return fmt.Errorf("更新 ip_rate_limit_per_minute 失败: %w", err)
+	}
+	if _, err = stmt.ExecContext(ctx, "ip_burst_size", strconv.Itoa(settings.BurstSize)); err != nil {
+		return fmt.Errorf("更新 ip_burst_size 失败: %w", err)
+	}
+	return nil
+}
+
+// GetUserLimitSettings 获取特定用户的速率限制配置
+func (s *AdminConfigServiceImpl) GetUserLimitSettings(ctx context.Context, userID int64) (*UserLimitSetting, error) {
+	var rateLimit sql.NullFloat64
+	var burstSize sql.NullInt64
+
+	// 注意：这里的 'users' 表是由 aegauth 包管理的，但我们在这里通过共享的 *sql.DB 连接来查询它。
+	query := "SELECT rate_limit_per_second, burst_size FROM users WHERE id = ?"
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(&rateLimit, &burstSize)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // 用户存在但未找到，不是错误
+		}
+		log.Printf("错误: [AdminConfigService DB] 查询用户(ID: %d)速率限制失败: %v", userID, err)
+		return nil, fmt.Errorf("数据库查询失败")
+	}
+
+	// 只有当数据库中明确设置了值时，才返回配置
+	if !rateLimit.Valid || !burstSize.Valid {
+		return nil, nil
+	}
+
+	return &UserLimitSetting{
+		RateLimitPerSecond: rateLimit.Float64,
+		BurstSize:          int(burstSize.Int64),
+	}, nil
+}
+
+// UpdateUserLimitSettings 更新特定用户的速率限制配置
+func (s *AdminConfigServiceImpl) UpdateUserLimitSettings(ctx context.Context, userID int64, settings UserLimitSetting) error {
+	query := "UPDATE users SET rate_limit_per_second = ?, burst_size = ? WHERE id = ?"
+	result, err := s.db.ExecContext(ctx, query, settings.RateLimitPerSecond, settings.BurstSize, userID)
+	if err != nil {
+		log.Printf("错误: [AdminConfigService DB] 更新用户(ID: %d)速率限制失败: %v", userID, err)
+		return fmt.Errorf("数据库更新失败")
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("用户ID %d 不存在", userID)
+	}
+	return nil
+}
+
+// GetBizRateLimitSettings 获取特定业务组的速率限制配置
+func (s *AdminConfigServiceImpl) GetBizRateLimitSettings(ctx context.Context, bizName string) (*BizRateLimitSetting, error) {
+	query := "SELECT rate_limit_per_second, burst_size FROM biz_ratelimit_settings WHERE biz_name = ?"
+	setting := &BizRateLimitSetting{}
+	err := s.db.QueryRowContext(ctx, query, bizName).Scan(&setting.RateLimitPerSecond, &setting.BurstSize)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // 未找到该业务组的特定配置，不是错误
+		}
+		log.Printf("错误: [AdminConfigService DB] 查询业务组 '%s' 速率限制失败: %v", bizName, err)
+		return nil, fmt.Errorf("数据库查询失败")
+	}
+	return setting, nil
+}
+
+// UpdateBizRateLimitSettings 更新特定业务组的速率限制配置
+func (s *AdminConfigServiceImpl) UpdateBizRateLimitSettings(ctx context.Context, bizName string, settings BizRateLimitSetting) error {
+	query := `
+        INSERT INTO biz_ratelimit_settings (biz_name, rate_limit_per_second, burst_size) 
+        VALUES (?, ?, ?) 
+        ON CONFLICT(biz_name) DO UPDATE SET 
+            rate_limit_per_second = excluded.rate_limit_per_second, 
+            burst_size = excluded.burst_size`
+	_, err := s.db.ExecContext(ctx, query, bizName, settings.RateLimitPerSecond, settings.BurstSize)
+	if err != nil {
+		log.Printf("错误: [AdminConfigService DB] 更新业务组 '%s' 速率限制失败: %v", bizName, err)
+		return fmt.Errorf("数据库更新失败")
+	}
+	return nil
+}
+
+// =======================================================
 
 // InvalidateCacheForBiz 用于在管理员更新配置后，手动使指定业务组的缓存失效。
 func (s *AdminConfigServiceImpl) InvalidateCacheForBiz(bizName string) {
