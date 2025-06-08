@@ -19,24 +19,25 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import apiClient, { getToken } from '@/services/apiClient';
+import apiClient, { authService } from '@/services/apiClient';
 import { ENDPOINTS } from '@/services/apiEndpoints';
-
 
 const isInitializing = ref(true);
 const initializationError = ref('');
 const router = useRouter();
 
 const initializeApp = async () => {
-  // 重置状态，以便重试
   isInitializing.value = true;
   initializationError.value = '';
 
   try {
-    const token = getToken();
+    const token = authService.getToken();
 
     if (token) {
-      console.log('App.vue: 检测到本地存在Token，跳过启动状态检查。');
+      console.log('App.vue: 检测到本地存在Token，检查是否需要跳转。');
+      if (router.currentRoute.value.path === '/') {
+        await router.replace({ name: 'AdminDashboard' });
+      }
       isInitializing.value = false;
       return;
     }

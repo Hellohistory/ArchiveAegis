@@ -54,18 +54,15 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import apiClient from '@/services/apiClient';
+import apiClient, { authService } from '@/services/apiClient';
 import { ENDPOINTS } from '@/services/apiEndpoints';
-
 
 const username = ref('');
 const password = ref('');
 const isLoading = ref(false);
 const errorMessage = ref('');
-
 const router = useRouter();
 
-// 处理登录逻辑
 const handleLogin = async () => {
   isLoading.value = true;
   errorMessage.value = '';
@@ -84,17 +81,15 @@ const handleLogin = async () => {
     const response = await apiClient.post(ENDPOINTS.LOGIN, formData);
 
     if (response.data && response.data.token) {
-      localStorage.setItem('authToken', response.data.token);
-      localStorage.setItem('username', response.data.user.username);
-      localStorage.setItem('userRole', response.data.user.role);
+      const { token, user } = response.data;
+      authService.login(token, user);
 
-      await router.push('/admin/dashboard');
+      await router.push({ name: 'AdminDashboard' });
+
     } else {
       errorMessage.value = '登录响应异常，请联系管理员。';
     }
-
   } catch (error) {
-
     if (error.response) {
       errorMessage.value = `登录失败: ${error.response.data.error || '服务器返回未知错误'}`;
     } else if (error.request) {
