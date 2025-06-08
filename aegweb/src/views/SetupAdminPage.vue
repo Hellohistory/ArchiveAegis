@@ -161,7 +161,7 @@ const handleSetupSubmit = async () => {
     localStorage.setItem('userRole', responseData.user.role);
 
     setTimeout(() => {
-      router.push('/dashboard');
+      router.push({ name: 'AdminDashboard' });
     }, 2000);
 
   } catch (error) {

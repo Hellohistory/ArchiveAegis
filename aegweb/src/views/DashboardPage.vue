@@ -9,24 +9,27 @@
       </div>
     </header>
 
+    <section class="global-management-section">
+      <h2>系统管理</h2>
+      <div class="management-card-list">
+        <router-link to="/admin/settings/rate-limit" class="management-card">
+          <div class="card-icon">⚙️</div>
+          <div class="card-title">全局速率限制</div>
+          <div class="card-description">配置全局IP、用户和业务组的默认API请求速率。</div>
+        </router-link>
+      </div>
+    </section>
+
     <section class="biz-groups-section">
       <h2>业务组管理</h2>
-      <div v-if="isLoadingBizGroups" class="loading-message">
-        正在加载业务组列表...
-      </div>
-      <div v-if="bizGroupsError" class="error-message">
-        加载业务组失败: {{ bizGroupsError }}
-      </div>
-      <div v-if="!isLoadingBizGroups && !bizGroupsError && bizGroups.length === 0" class="info-message">
-        目前系统中没有发现任何业务组。
-        <p class="tip">请确保您的 'instance' 目录下已按 '业务组名称/库文件名.db' 的结构放置了数据库文件，并重启后端服务以扫描。</p>
-      </div>
+      <div v-if="isLoadingBizGroups" class="loading-message">正在加载业务组列表...</div>
+      <div v-if="bizGroupsError" class="error-message">加载业务组失败: {{ bizGroupsError }}</div>
       <ul v-if="bizGroups.length > 0" class="biz-group-list">
         <li v-for="group in bizGroups" :key="group.name" class="biz-group-item">
           <div class="group-info">
             <span class="group-name">{{ group.name }}</span>
             <span class="libs-count">包含 {{ group.libs.length }} 个库</span>
-            </div>
+          </div>
           <div class="group-actions">
             <router-link :to="{ name: 'AdminBizConfig', params: { bizName: group.name } }" class="configure-button">
               配置
@@ -48,7 +51,6 @@ import { ENDPOINTS } from '@/services/apiEndpoints';
 const router = useRouter();
 const username = ref('');
 const userRole = ref('');
-
 const bizGroups = ref([]);
 const isLoadingBizGroups = ref(false);
 const bizGroupsError = ref('');
@@ -62,31 +64,21 @@ onMounted(async () => {
 const fetchBizGroups = async () => {
   isLoadingBizGroups.value = true;
   bizGroupsError.value = '';
-  bizGroups.value = [];
   try {
     const response = await apiClient.get(ENDPOINTS.BIZ_SUMMARY);
-    const summaryData = response.data; // 后端返回 map[string][]string
+    const summaryData = response.data;
+    const groups = [];
     if (summaryData && typeof summaryData === 'object') {
       for (const bizName in summaryData) {
-        // 使用 Object.prototype.hasOwnProperty.call 来确保是对象自身的属性
         if (Object.prototype.hasOwnProperty.call(summaryData, bizName)) {
-          bizGroups.value.push({
-            name: bizName,
-            libs: summaryData[bizName] || []
-          });
+          groups.push({ name: bizName, libs: summaryData[bizName] || [] });
         }
       }
-      bizGroups.value.sort((a, b) => a.name.localeCompare(b.name));
+      groups.sort((a, b) => a.name.localeCompare(b.name));
+      bizGroups.value = groups;
     }
   } catch (error) {
-    console.error('获取业务组列表失败:', error);
-    if (error.response && error.response.data && error.response.data.error) {
-      bizGroupsError.value = error.response.data.error;
-    } else if (error.message) {
-      bizGroupsError.value = error.message;
-    } else {
-      bizGroupsError.value = '发生未知错误';
-    }
+    bizGroupsError.value = error.response?.data?.error || '获取业务组列表失败';
   } finally {
     isLoadingBizGroups.value = false;
   }

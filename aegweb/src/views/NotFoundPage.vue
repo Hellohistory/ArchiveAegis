@@ -6,7 +6,7 @@
     <div class="description">
       您访问的页面不存在，或者已经被移动到其他地方。
     </div>
-    <router-link to="/dashboard" class="home-button">返回仪表盘</router-link>
+    <router-link to="/admin/dashboard" class="home-button">返回仪表盘</router-link>
   </div>
 </template>
 
