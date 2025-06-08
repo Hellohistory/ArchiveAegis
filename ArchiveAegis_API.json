@@ -92,20 +92,83 @@
         },
         "required": ["status"]
       },
-      "ReturnableFieldInfo": {
+      "FieldSetting": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "original_name": { "type": "string" },
+          "field_name": { "type": "string", "description": "字段的物理名称" },
           "is_searchable": { "type": "boolean" },
           "is_returnable": { "type": "boolean" },
-          "dataType": { "type": "string" }
+          "dataType": { "type": "string", "description": "数据类型 (string, number, date)" }
         },
-        "required": ["name", "original_name", "is_searchable", "is_returnable", "dataType"]
+        "required": ["field_name", "is_searchable", "is_returnable", "dataType"]
       },
       "FieldSettings": {
+        "description": "用于更新的字段配置数组",
         "type": "array",
-        "items": { "$ref": "#/components/schemas/ReturnableFieldInfo" }
+        "items": { "$ref": "#/components/schemas/FieldSetting" }
+      },
+      "CardBinding": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "subtitle": {"type": "string"},
+          "description": {"type": "string"},
+          "imageUrl": {"type": "string"},
+          "tag": {"type": "string"}
+        }
+      },
+      "TableColumnBinding": {
+        "type": "object",
+        "properties": {
+          "field": {"type": "string"},
+          "displayName": {"type": "string"}
+        }
+      },
+      "TableBinding": {
+        "type": "object",
+        "properties": {
+          "columns": { "type": "array", "items": {"$ref": "#/components/schemas/TableColumnBinding"} }
+        }
+      },
+      "ViewBinding": {
+        "type": "object",
+        "properties": {
+          "card": {"$ref": "#/components/schemas/CardBinding"},
+          "table": {"$ref": "#/components/schemas/TableBinding"}
+        }
+      },
+      "ViewConfig": {
+        "type": "object",
+        "properties": {
+          "view_name": {"type": "string"},
+          "view_type": {"type": "string", "enum": ["cards", "table"]},
+          "display_name": {"type": "string"},
+          "is_default": {"type": "boolean"},
+          "binding": {"$ref": "#/components/schemas/ViewBinding"}
+        }
+      },
+      "TableConfig": {
+        "type": "object",
+        "properties": {
+          "table_name": {"type": "string"},
+          "is_searchable": {"type": "boolean"},
+          "fields": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/FieldSetting" }
+          }
+        }
+      },
+      "BizQueryConfig": {
+        "type": "object",
+        "properties": {
+          "biz_name": {"type": "string"},
+          "is_publicly_searchable": {"type": "boolean"},
+          "default_query_table": {"type": "string"},
+          "tables": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/TableConfig" }
+          }
+        }
       },
       "IPLimitSetting": {
         "type": "object",
@@ -147,19 +210,10 @@
         "description": "此接口受严格的IP速率限制保护。",
         "tags": ["Setup & Auth"],
         "parameters": [
-          {
-            "name": "ping", "in": "query", "required": true,
-            "schema": { "type": "string", "enum": ["1"] },
-            "description": "固定传递 `1`"
-          }
+          { "name": "ping", "in": "query", "required": true, "schema": { "type": "string", "enum": ["1"] }, "description": "固定传递 `1`" }
         ],
         "responses": {
-          "200": {
-            "description": "安装令牌获取成功",
-            "content": { "application/json": { "schema": {
-              "type": "object", "properties": { "token": { "type": "string" } }, "required": ["token"]
-            }}}
-          },
+          "200": { "description": "安装令牌获取成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "token": { "type": "string" } }, "required": ["token"] }}}},
           "403": { "description": "系统已安装，禁止获取", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "429": { "$ref": "#/components/responses/TooManyRequests" }
         },
@@ -169,15 +223,7 @@
         "summary": "创建管理员账户并返回 JWT",
         "description": "此接口受严格的IP速率和失败锁定限制保护。",
         "tags": ["Setup & Auth"],
-        "requestBody": {
-          "content": { "application/x-www-form-urlencoded": { "schema": {
-            "type": "object",
-            "properties": {
-              "token": { "type": "string" }, "user": { "type": "string" }, "pass": { "type": "string" }
-            },
-            "required": ["token", "user", "pass"]
-          }}}
-        },
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "token": { "type": "string" }, "user": { "type": "string" }, "pass": { "type": "string" } }, "required": ["token", "user", "pass"] }}}},
         "responses": {
           "200": { "description": "安装成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" }}}},
           "400": { "description": "请求参数或令牌无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
@@ -190,14 +236,8 @@
     },
     "/api/login": {
       "post": {
-        "summary": "用户登录",
-        "description": "此接口受严格的IP速率和失败锁定限制保护。",
-        "tags": ["Setup & Auth"],
-        "requestBody": {
-          "content": { "application/x-www-form-urlencoded": { "schema": {
-            "type": "object", "properties": { "user": { "type": "string" }, "pass": { "type": "string" } }, "required": ["user", "pass"]
-          }}}
-        },
+        "summary": "用户登录", "description": "此接口受严格的IP速率和失败锁定限制保护。", "tags": ["Setup & Auth"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "user": { "type": "string" }, "pass": { "type": "string" } }, "required": ["user", "pass"] }}}},
         "responses": {
           "200": { "description": "登录成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" }}}},
           "401": { "description": "用户名或密码无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
@@ -209,9 +249,7 @@
     },
     "/api/auth/status": {
       "get": {
-        "summary": "查询系统用户状态（是否需要安装）",
-        "description": "此接口受基础的速率限制保护。",
-        "tags": ["Setup & Auth"],
+        "summary": "查询系统用户状态（是否需要安装）", "description": "此接口受基础的速率限制保护。", "tags": ["Setup & Auth"],
         "responses": {
           "200": { "description": "状态返回", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthStatus" }}}},
           "429": { "$ref": "#/components/responses/TooManyRequests" }
@@ -221,15 +259,9 @@
     },
     "/api/biz": {
       "get": {
-        "summary": "获取所有业务组的摘要信息",
-        "description": "此接口受基础的速率限制保护。",
-        "tags": ["Business"],
+        "summary": "获取所有业务组的摘要信息", "description": "此接口受基础的速率限制保护。", "tags": ["Business"],
         "responses": {
-          "200": {
-            "description": "业务组摘要对象", "content": { "application/json": { "schema": {
-              "type": "object", "additionalProperties": true
-            }}}
-          },
+          "200": { "description": "业务组摘要对象", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true }}}},
           "429": { "$ref": "#/components/responses/TooManyRequests" }
         },
         "security": []
@@ -237,16 +269,10 @@
     },
     "/api/tables": {
       "get": {
-        "summary": "获取指定业务组下的物理表列表",
-        "description": "此接口受基础的速率限制保护。",
-        "tags": ["Business"],
-        "parameters": [
-          { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" }
-        ],
+        "summary": "获取指定业务组下的物理表列表", "description": "此接口受基础的速率限制保护。", "tags": ["Business"],
+        "parameters": [ { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" } ],
         "responses": {
-          "200": { "description": "表名数组", "content": { "application/json": { "schema": {
-            "type": "array", "items": { "type": "string" }
-          }}}},
+          "200": { "description": "表名数组", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "string" }}}}},
           "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "429": { "$ref": "#/components/responses/TooManyRequests" }
         },
@@ -255,9 +281,7 @@
     },
     "/api/columns": {
       "get": {
-        "summary": "获取表的可查询与可返回字段信息",
-        "description": "此接口受业务速率限制保护。",
-        "tags": ["Business"],
+        "summary": "获取表的可查询与可返回字段信息", "description": "此接口受业务速率限制保护。", "tags": ["Business"],
         "parameters": [
           { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
           { "name": "table", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_table" }
@@ -275,15 +299,13 @@
     },
     "/api/view/config": {
       "get": {
-        "summary": "获取业务表默认视图配置",
-        "description": "此接口受业务速率限制保护。",
-        "tags": ["Business"],
+        "summary": "获取业务表默认视图配置", "description": "此接口受业务速率限制保护。", "tags": ["Business"],
         "parameters": [
             { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
             { "name": "table", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_table" }
         ],
         "responses": {
-          "200": { "description": "视图配置对象", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true }}}},
+          "200": { "description": "视图配置对象", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewConfig" }}}},
           "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "404": { "description": "未找到默认视图配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "429": { "$ref": "#/components/responses/TooManyRequests" },
@@ -294,9 +316,7 @@
     },
     "/api/search": {
       "get": {
-        "summary": "执行搜索查询",
-        "description": "此接口受业务速率限制保护。",
-        "tags": ["Business"],
+        "summary": "执行搜索查询", "description": "此接口受业务速率限制保护。", "tags": ["Business"],
         "parameters": [
           { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
           { "name": "table", "in": "query", "schema": { "type": "string" }, "example": "test_table" },
@@ -308,9 +328,7 @@
           { "name": "size", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 2000, "default": 50 }, "example": 20 }
         ],
         "responses": {
-          "200": { "description": "查询结果数组", "content": { "application/json": { "schema": {
-            "type": "array", "items": { "type": "object", "additionalProperties": true }
-          }}}},
+          "200": { "description": "查询结果数组", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "additionalProperties": true }}}}},
           "400": { "description": "请求参数或配置错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "403": { "description": "禁止访问", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "404": { "description": "资源未找到", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
@@ -320,67 +338,68 @@
         "security": []
       }
     },
+    "/api/admin/config/biz/{bizName}": {
+      "get": {
+        "summary": "获取指定业务组的完整配置", "description": "获取用于管理界面的、包含所有表和字段设置的完整业务组配置。","tags": ["Admin - Config"],
+        "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": {
+          "200": { "description": "获取成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BizQueryConfig" }}}},
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "404": { "description": "业务组未找到", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": [{"BearerAuth": []}]
+      }
+    },
     "/api/admin/config/biz/{bizName}/settings": {
         "put": {
-            "summary": "更新业务组总体设置",
-            "tags": ["Admin - Config"],
-            "parameters": [
-                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
-            ],
-            "requestBody": { "content": { "application/json": { "schema": {
-                "type": "object", "properties": {
-                    "is_publicly_searchable": { "type": "boolean" },
-                    "default_query_table": { "type": "string", "nullable": true }
-                }
-            }}}},
+            "summary": "更新业务组总体设置", "tags": ["Admin - Config"],
+            "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
+            "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "is_publicly_searchable": { "type": "boolean" }, "default_query_table": { "type": "string", "nullable": true } } }}}},
             "responses": {
                 "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
                 "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
                 "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/config/biz/{bizName}/tables": {
         "put": {
-            "summary": "更新业务组可搜索表列表",
-            "tags": ["Admin - Config"],
-            "parameters": [
-                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
-            ],
-            "requestBody": { "content": { "application/json": { "schema": {
-                "type": "object", "properties": { "searchable_tables": { "type": "array", "items": { "type": "string" }}}, "required": ["searchable_tables"]
-            }}}},
+            "summary": "更新业务组可搜索表列表", "tags": ["Admin - Config"],
+            "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }} ],
+            "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "searchable_tables": { "type": "array", "items": { "type": "string" }}}, "required": ["searchable_tables"] }}}},
             "responses": {
                 "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
                 "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
                 "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/config/biz/{bizName}/views": {
+        "get": {
+          "summary": "获取业务组的所有视图配置", "description": "以表名为键，返回该业务组下所有已配置的视图数组。", "tags": ["Admin - Config"],
+          "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
+          "responses": {
+            "200": { "description": "获取成功", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/components/schemas/ViewConfig" } } } }}},
+            "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+            "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+          },
+          "security": [{"BearerAuth": []}]
+        },
         "put": {
-            "summary": "批量更新业务组所有视图配置",
-            "tags": ["Admin - Config"],
-            "parameters": [
-                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
-            ],
-            "requestBody": { "description": "一个以表名为键，视图配置数组为值的对象", "content": { "application/json": { "schema": {
-                "type": "object", "additionalProperties": { "type": "array", "items": { "type": "object", "additionalProperties": true }}
-            }}}},
+            "summary": "批量更新业务组所有视图配置", "tags": ["Admin - Config"],
+            "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
+            "requestBody": { "description": "一个以表名为键，视图配置数组为值的对象", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/components/schemas/ViewConfig" }} }}}},
             "responses": {
                 "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
                 "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
                 "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/config/biz/{bizName}/tables/{tableName}/fields": {
         "put": {
-            "summary": "更新表的字段配置",
-            "tags": ["Admin - Config"],
+            "summary": "更新表的字段配置", "tags": ["Admin - Config"],
             "parameters": [
                 { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }},
                 { "name": "tableName", "in": "path", "required": true, "schema": { "type": "string" }}
@@ -390,53 +409,64 @@
               "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
               "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
               "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/config/biz/{bizName}/tables/{tableName}/physical-columns": {
+        "get": {
+            "summary": "获取数据库表的物理列名列表", "description": "用于前端字段配置界面，确保配置与数据库结构同步。", "tags": ["Admin - Config"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }},
+                { "name": "tableName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "responses": {
+              "200": { "description": "获取成功", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "string" } }}}},
+              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/settings/ip_limit": {
+        "get": {
+          "summary": "获取全局IP速率限制", "tags": ["Admin - Rate Limit"],
+          "responses": {
+            "200": { "description": "获取成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IPLimitSetting"}}}},
+            "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+            "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+          }, "security": [{"BearerAuth": []}]
+        },
         "put": {
-            "summary": "更新全局IP速率限制",
-            "tags": ["Admin - Rate Limit"],
+            "summary": "更新全局IP速率限制", "tags": ["Admin - Rate Limit"],
             "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IPLimitSetting"}}}},
             "responses": {
               "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
               "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
               "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/users/{id}/limit": {
         "put": {
-            "summary": "更新指定用户的速率限制",
-            "tags": ["Admin - Rate Limit"],
-            "parameters": [
-                { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }}
-            ],
+            "summary": "更新指定用户的速率限制", "tags": ["Admin - Rate Limit"],
+            "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
             "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserLimitSetting"}}}},
             "responses": {
               "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
               "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
               "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     },
     "/api/admin/config/biz/{bizName}/ratelimit": {
         "put": {
-            "summary": "更新指定业务组的速率限制",
-            "tags": ["Admin - Rate Limit"],
-            "parameters": [
-                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
-            ],
+            "summary": "更新指定业务组的速率限制", "tags": ["Admin - Rate Limit"],
+            "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
             "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BizRateLimitSetting"}}}},
             "responses": {
               "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
               "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
               "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            },
-            "security": [{"BearerAuth": []}]
+            }, "security": [{"BearerAuth": []}]
         }
     }
   }
