@@ -1,0 +1,443 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ArchiveAegis API",
+    "version": "0.2.5",
+    "description": "ArchiveAegis 轻量 SQLite 多库检索服务的后端 API 文档。"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Setup & Auth",
+      "description": "系统安装与身份认证相关接口"
+    },
+    {
+      "name": "Business",
+      "description": "面向普通用户的业务查询接口"
+    },
+    {
+      "name": "Admin - Config",
+      "description": "管理员业务配置接口（需要管理员权限）"
+    },
+    {
+      "name": "Admin - Rate Limit",
+      "description": "管理员速率限制配置接口（需要管理员权限）"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "携带方式：`Authorization: Bearer <token>`"
+      }
+    },
+    "responses": {
+      "TooManyRequests": {
+        "description": "请求过于频繁，速率限制已触发。客户端应在一段时间后重试。",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "建议客户端在多少秒后重试请求。"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "错误信息"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "username": { "type": "string" },
+          "role": { "type": "string", "description": "角色（admin 或 user）" }
+        },
+        "required": ["id", "username", "role"]
+      },
+      "TokenResponse": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "JWT 令牌" },
+          "user": { "$ref": "#/components/schemas/User" }
+        },
+        "required": ["token", "user"]
+      },
+      "AuthStatus": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["ready_for_login", "needs_setup"] }
+        },
+        "required": ["status"]
+      },
+      "ReturnableFieldInfo": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "original_name": { "type": "string" },
+          "is_searchable": { "type": "boolean" },
+          "is_returnable": { "type": "boolean" },
+          "dataType": { "type": "string" }
+        },
+        "required": ["name", "original_name", "is_searchable", "is_returnable", "dataType"]
+      },
+      "FieldSettings": {
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/ReturnableFieldInfo" }
+      },
+      "IPLimitSetting": {
+        "type": "object",
+        "properties": {
+          "rate_limit_per_minute": { "type": "number", "format": "float", "description": "每分钟允许的请求数" },
+          "burst_size": { "type": "integer", "description": "瞬时请求峰值" }
+        },
+        "required": ["rate_limit_per_minute", "burst_size"]
+      },
+      "UserLimitSetting": {
+        "type": "object",
+        "properties": {
+          "rate_limit_per_second": { "type": "number", "format": "float", "description": "每秒允许的请求数" },
+          "burst_size": { "type": "integer", "description": "瞬时请求峰值" }
+        },
+        "required": ["rate_limit_per_second", "burst_size"]
+      },
+      "BizRateLimitSetting": {
+        "type": "object",
+        "properties": {
+          "rate_limit_per_second": { "type": "number", "format": "float", "description": "每秒允许的请求数" },
+          "burst_size": { "type": "integer", "description": "瞬时请求峰值" }
+        },
+        "required": ["rate_limit_per_second", "burst_size"]
+      },
+      "GenericSuccess": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "success" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/setup": {
+      "get": {
+        "summary": "检查系统是否允许安装，返回一次性安装令牌",
+        "description": "此接口受严格的IP速率限制保护。",
+        "tags": ["Setup & Auth"],
+        "parameters": [
+          {
+            "name": "ping", "in": "query", "required": true,
+            "schema": { "type": "string", "enum": ["1"] },
+            "description": "固定传递 `1`"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "安装令牌获取成功",
+            "content": { "application/json": { "schema": {
+              "type": "object", "properties": { "token": { "type": "string" } }, "required": ["token"]
+            }}}
+          },
+          "403": { "description": "系统已安装，禁止获取", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        },
+        "security": []
+      },
+      "post": {
+        "summary": "创建管理员账户并返回 JWT",
+        "description": "此接口受严格的IP速率和失败锁定限制保护。",
+        "tags": ["Setup & Auth"],
+        "requestBody": {
+          "content": { "application/x-www-form-urlencoded": { "schema": {
+            "type": "object",
+            "properties": {
+              "token": { "type": "string" }, "user": { "type": "string" }, "pass": { "type": "string" }
+            },
+            "required": ["token", "user", "pass"]
+          }}}
+        },
+        "responses": {
+          "200": { "description": "安装成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" }}}},
+          "400": { "description": "请求参数或令牌无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "403": { "description": "系统已安装，禁止重复设置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "description": "服务器内部错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": []
+      }
+    },
+    "/api/login": {
+      "post": {
+        "summary": "用户登录",
+        "description": "此接口受严格的IP速率和失败锁定限制保护。",
+        "tags": ["Setup & Auth"],
+        "requestBody": {
+          "content": { "application/x-www-form-urlencoded": { "schema": {
+            "type": "object", "properties": { "user": { "type": "string" }, "pass": { "type": "string" } }, "required": ["user", "pass"]
+          }}}
+        },
+        "responses": {
+          "200": { "description": "登录成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" }}}},
+          "401": { "description": "用户名或密码无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "description": "服务器内部错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": []
+      }
+    },
+    "/api/auth/status": {
+      "get": {
+        "summary": "查询系统用户状态（是否需要安装）",
+        "description": "此接口受基础的速率限制保护。",
+        "tags": ["Setup & Auth"],
+        "responses": {
+          "200": { "description": "状态返回", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthStatus" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        },
+        "security": []
+      }
+    },
+    "/api/biz": {
+      "get": {
+        "summary": "获取所有业务组的摘要信息",
+        "description": "此接口受基础的速率限制保护。",
+        "tags": ["Business"],
+        "responses": {
+          "200": {
+            "description": "业务组摘要对象", "content": { "application/json": { "schema": {
+              "type": "object", "additionalProperties": true
+            }}}
+          },
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        },
+        "security": []
+      }
+    },
+    "/api/tables": {
+      "get": {
+        "summary": "获取指定业务组下的物理表列表",
+        "description": "此接口受基础的速率限制保护。",
+        "tags": ["Business"],
+        "parameters": [
+          { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" }
+        ],
+        "responses": {
+          "200": { "description": "表名数组", "content": { "application/json": { "schema": {
+            "type": "array", "items": { "type": "string" }
+          }}}},
+          "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" }
+        },
+        "security": []
+      }
+    },
+    "/api/columns": {
+      "get": {
+        "summary": "获取表的可查询与可返回字段信息",
+        "description": "此接口受业务速率限制保护。",
+        "tags": ["Business"],
+        "parameters": [
+          { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
+          { "name": "table", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_table" }
+        ],
+        "responses": {
+          "200": { "description": "字段信息数组", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FieldSettings" }}}},
+          "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "403": { "description": "业务组不允许查询", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "404": { "description": "业务或表未配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "description": "服务器内部错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": []
+      }
+    },
+    "/api/view/config": {
+      "get": {
+        "summary": "获取业务表默认视图配置",
+        "description": "此接口受业务速率限制保护。",
+        "tags": ["Business"],
+        "parameters": [
+            { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
+            { "name": "table", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_table" }
+        ],
+        "responses": {
+          "200": { "description": "视图配置对象", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true }}}},
+          "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "404": { "description": "未找到默认视图配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "description": "服务器内部错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": []
+      }
+    },
+    "/api/search": {
+      "get": {
+        "summary": "执行搜索查询",
+        "description": "此接口受业务速率限制保护。",
+        "tags": ["Business"],
+        "parameters": [
+          { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
+          { "name": "table", "in": "query", "schema": { "type": "string" }, "example": "test_table" },
+          { "name": "fields", "in": "query", "schema": { "type": "array", "items": { "type": "string" } }, "style": "form", "explode": true, "example": ["test_field"] },
+          { "name": "values", "in": "query", "schema": { "type": "array", "items": { "type": "string" } }, "style": "form", "explode": true, "example": ["some_value"] },
+          { "name": "fuzzy", "in": "query", "schema": { "type": "array", "items": { "type": "boolean" } }, "style": "form", "explode": true, "example": [true] },
+          { "name": "logic", "in": "query", "schema": { "type": "array", "items": { "type": "string", "enum": ["AND", "OR"] } }, "style": "form", "explode": true },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 }, "example": 1 },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 2000, "default": 50 }, "example": 20 }
+        ],
+        "responses": {
+          "200": { "description": "查询结果数组", "content": { "application/json": { "schema": {
+            "type": "array", "items": { "type": "object", "additionalProperties": true }
+          }}}},
+          "400": { "description": "请求参数或配置错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "403": { "description": "禁止访问", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "404": { "description": "资源未找到", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "description": "服务器内部错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+        },
+        "security": []
+      }
+    },
+    "/api/admin/config/biz/{bizName}/settings": {
+        "put": {
+            "summary": "更新业务组总体设置",
+            "tags": ["Admin - Config"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "requestBody": { "content": { "application/json": { "schema": {
+                "type": "object", "properties": {
+                    "is_publicly_searchable": { "type": "boolean" },
+                    "default_query_table": { "type": "string", "nullable": true }
+                }
+            }}}},
+            "responses": {
+                "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+                "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+                "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/config/biz/{bizName}/tables": {
+        "put": {
+            "summary": "更新业务组可搜索表列表",
+            "tags": ["Admin - Config"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "requestBody": { "content": { "application/json": { "schema": {
+                "type": "object", "properties": { "searchable_tables": { "type": "array", "items": { "type": "string" }}}, "required": ["searchable_tables"]
+            }}}},
+            "responses": {
+                "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+                "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+                "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/config/biz/{bizName}/views": {
+        "put": {
+            "summary": "批量更新业务组所有视图配置",
+            "tags": ["Admin - Config"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "requestBody": { "description": "一个以表名为键，视图配置数组为值的对象", "content": { "application/json": { "schema": {
+                "type": "object", "additionalProperties": { "type": "array", "items": { "type": "object", "additionalProperties": true }}
+            }}}},
+            "responses": {
+                "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+                "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+                "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/config/biz/{bizName}/tables/{tableName}/fields": {
+        "put": {
+            "summary": "更新表的字段配置",
+            "tags": ["Admin - Config"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }},
+                { "name": "tableName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FieldSettings" }}}},
+            "responses": {
+              "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/settings/ip_limit": {
+        "put": {
+            "summary": "更新全局IP速率限制",
+            "tags": ["Admin - Rate Limit"],
+            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IPLimitSetting"}}}},
+            "responses": {
+              "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/users/{id}/limit": {
+        "put": {
+            "summary": "更新指定用户的速率限制",
+            "tags": ["Admin - Rate Limit"],
+            "parameters": [
+                { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }}
+            ],
+            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserLimitSetting"}}}},
+            "responses": {
+              "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    },
+    "/api/admin/config/biz/{bizName}/ratelimit": {
+        "put": {
+            "summary": "更新指定业务组的速率限制",
+            "tags": ["Admin - Rate Limit"],
+            "parameters": [
+                { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }}
+            ],
+            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BizRateLimitSetting"}}}},
+            "responses": {
+              "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
+        }
+    }
+  }
+}
