@@ -99,10 +99,8 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 
 	// --- 速率限制器 ---
 	loginIPLimiter := NewIPRateLimiter(rate.Limit(15.0/60.0), 5)
-	// loginFailureLock := NewLoginFailureLock(5, 15*time.Second) // 测试值
-	loginFailureLock := NewLoginFailureLock(5, 15*time.Minute) // 生产环境值
+	loginFailureLock := NewLoginFailureLock(5, 15*time.Minute)
 
-	// 中间件顺序为：先检查账户锁定，再检查IP速率。
 	loginSecurityChain := func(h http.Handler) http.Handler {
 		return loginFailureLock.Middleware(loginIPLimiter.Middleware(h))
 	}
@@ -156,6 +154,7 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 	// --- 管理员API轨道 ---
 	adminMux := http.NewServeMux()
 	adminMux.HandleFunc("/api/admin/config/biz/", adminConfigBizDispatcher(configService, sysDB, mgr))
+	adminMux.HandleFunc("/api/admin/settings/ip_limit", adminIPLimitSettingsHandler(configService))
 	apiMux.Handle("/api/admin/", aegauth.RequireAdmin(adminMux))
 
 	root := http.NewServeMux()
@@ -951,4 +950,67 @@ func adminUpdateBizViewsHandler(configService aegdb.QueryAdminConfigService, biz
 		log.Printf("信息: [Admin API] 业务组 '%s' 的视图配置已更新。", bizName)
 		NoCORSrespond(w, map[string]string{"status": "success", "message": fmt.Sprintf("业务组 '%s' 视图配置已更新", bizName)})
 	}
+}
+
+/*
+============================================================
+  Admin IP Limit Settings Handler
+============================================================
+*/
+
+// adminIPLimitSettingsHandler 处理全局IP速率限制的GET和PUT请求
+func adminIPLimitSettingsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleGetIPLimit(w, r, configService)
+		case http.MethodPut:
+			handleUpdateIPLimit(w, r, configService)
+		default:
+			NoCORSerrResp(w, http.StatusMethodNotAllowed, "仅支持GET和PUT方法")
+		}
+	}
+}
+
+// handleGetIPLimit: GET /api/admin/settings/ip_limit
+func handleGetIPLimit(w http.ResponseWriter, r *http.Request, configService aegdb.QueryAdminConfigService) {
+	settings, err := configService.GetIPLimitSettings(r.Context())
+	if err != nil {
+		log.Printf("错误: [Admin API GET /settings/ip_limit] 调用服务失败: %v", err)
+		NoCORSerrResp(w, http.StatusInternalServerError, "获取配置时发生内部错误")
+		return
+	}
+
+	// 如果服务层在未找到配置时返回nil，我们提供一个默认值
+	if settings == nil {
+		log.Printf("信息: [Admin API GET /settings/ip_limit] 未找到配置, 返回系统启动默认值。")
+		NoCORSrespond(w, map[string]interface{}{
+			"rate_limit_per_minute": *globalRateLimit * 60, // 注意单位转换, 前端需要每分钟
+			"burst_size":            *globalBurst,
+		})
+		return
+	}
+
+	NoCORSrespond(w, settings)
+}
+
+// handleUpdateIPLimit: PUT /api/admin/settings/ip_limit
+func handleUpdateIPLimit(w http.ResponseWriter, r *http.Request, configService aegdb.QueryAdminConfigService) {
+	var payload aegdb.IPLimitSetting
+
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		NoCORSerrResp(w, http.StatusBadRequest, "无效的JSON请求体: "+err.Error())
+		return
+	}
+	defer r.Body.Close()
+
+	err := configService.UpdateIPLimitSettings(r.Context(), payload)
+	if err != nil {
+		log.Printf("错误: [Admin API PUT /settings/ip_limit] 调用服务更新配置失败: %v", err)
+		NoCORSerrResp(w, http.StatusInternalServerError, "更新配置失败")
+		return
+	}
+
+	log.Printf("信息: [Admin API] 全局IP速率限制已更新。")
+	NoCORSrespond(w, map[string]string{"status": "success", "message": "全局IP速率限制已更新"})
 }
