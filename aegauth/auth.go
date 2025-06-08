@@ -40,7 +40,10 @@ func InitUserTable(db *sql.DB) error {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           username TEXT UNIQUE NOT NULL,
           password_hash TEXT NOT NULL,
-          role TEXT NOT NULL
+          role TEXT NOT NULL,
+          
+          rate_limit_per_second REAL,
+          burst_size INTEGER
        );
     `)
 	if err != nil {
@@ -208,10 +211,6 @@ func NewAuthenticator(db *sql.DB) *Authenticator {
 }
 
 // Middleware 是一个JWT认证中间件。
-// 它检查 Authorization 请求头中的 Bearer Token。
-// 如果 Token 签名和有效期有效，并且 Token 中的用户ID在数据库中存在，
-// 它会将解析出的 Claim 存入请求的 context 中。
-// 否则，请求的 context 中不会包含 Claim，后续处理器可以据此判断认证状态。
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -219,26 +218,20 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 			if tokenString != "" {
-				claims, err := ParseToken(tokenString) // 使用包级的 ParseToken
+				claims, err := ParseToken(tokenString)
 
 				if err == nil && claims != nil {
-					// Token 签名和过期时间有效，现在检查用户是否存在于数据库
 					_, _, userExists := GetUserById(a.DB, claims.ID)
 					if userExists {
-						// 用户存在，Token 完全有效
 						r = r.WithContext(contextWithClaim(r.Context(), claims))
 					} else {
-						// 用户在数据库中不存在，即使 Token 签名和时间有效，也应拒绝
 						log.Printf("认证中间件: 用户 ID %d (来自有效JWT) 在数据库中未找到。Token被拒绝。请求路径: %s, IP: %s", claims.ID, r.URL.Path, r.RemoteAddr)
-						// 不将 claims 存入 context，请求将被视为未认证
 					}
 				} else {
-					// Token 无效或解析失败
 					errMsg := "认证中间件: Token无效或解析错误。"
 					if errors.Is(err, jwt.ErrTokenExpired) {
 						errMsg = "认证中间件: Token已过期。"
 					}
-					// 打印更详细的日志，但避免将内部错误信息泄露给客户端（除非特定需要）
 					log.Printf("%s 请求路径: %s, IP: %s (错误详情: %v)", errMsg, r.URL.Path, r.RemoteAddr, err)
 				}
 			}
@@ -247,15 +240,14 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequireAdmin 是一个中间件，确保只有角色为 "admin" 的用户才能访问。
-// 它依赖于 Authenticator.Middleware 已经将有效的 Claim 存入了请求的 context。
+// RequireAdmin 是一个确保只有管理员能访问的中间件。
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := ClaimFrom(r)
-		if claims == nil { // Token 无效、缺失或用户不存在
+		if claims == nil {
 			log.Printf("RequireAdmin: 访问被拒绝 (无有效Claim - Token可能缺失、无效或用户不存在于DB)。路径: %s, IP: %s", r.URL.Path, r.RemoteAddr)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusUnauthorized) // 使用 401 更合适，因为是身份验证失败
+			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized","message":"Authentication required"}`))
 			return
 		}
