@@ -119,7 +119,6 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
-/* [新增] 为初始化提示添加样式 */
 .setup-prompt {
   border: 1px solid #f0ad4e;
   background-color: #fcf8e3;
@@ -157,7 +156,6 @@ const handleLogin = async () => {
   background-color: #ec971f;
 }
 
-/* ... (原有样式保持不变) ... */
 .login-page-wrapper {
   display: flex;
   justify-content: center;

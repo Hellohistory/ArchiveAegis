@@ -7,44 +7,12 @@
       </header>
 
       <main class="modal-body">
-        <div class="tabs-nav">
-          <button :class="{ active: activeTab === 'fields' }" @click="activeTab = 'fields'">步骤1: 字段属性</button>
-          <button :class="{ active: activeTab === 'view' }" @click="activeTab = 'view'">步骤2: 视图布局</button>
-        </div>
-
         <div v-if="isLoading" class="status-message loading">加载中...</div>
         <div v-if="loadError" class="status-message error">{{ loadError }}</div>
 
         <div v-if="!isLoading && !loadError">
-          <div v-show="activeTab === 'fields'" class="tab-panel">
-            <p class="section-description">为所有物理字段配置基础属性。“数据类型”已根据字段名智能设定，仅在需要时修改。</p>
-            <table class="fields-table">
-              <thead>
-                <tr>
-                  <th>物理字段名</th>
-                  <th>可搜索</th>
-                  <th>可返回</th>
-                  <th>数据类型</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="field in fieldSettings" :key="field.field_name">
-                  <td><strong>{{ field.field_name }}</strong></td>
-                  <td><input type="checkbox" v-model="field.is_searchable" /></td>
-                  <td><input type="checkbox" v-model="field.is_returnable" /></td>
-                  <td>
-                    <select v-model="field.dataType">
-                      <option value="string">文本 (string)</option>
-                      <option value="number">数字 (number)</option>
-                      <option value="date">日期 (date)</option>
-                    </select>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div v-show="activeTab === 'view'" class="tab-panel">
+          <section class="config-section">
+            <h4 class="section-title">1. 视图基本设置</h4>
             <form class="form-grid" @submit.prevent>
               <div class="form-block">
                 <label for="viewDisplayName">视图显示名</label>
@@ -62,10 +30,49 @@
                 </select>
               </div>
             </form>
-            <div class="binding-section">
-              <h4 class="binding-header">字段绑定</h4>
-              <div v-if="returnableFields.length === 0" class="status-message info">请先在“步骤1”中勾选至少一个“可返回”的字段</div>
+          </section>
 
+          <section class="config-section">
+            <h4 class="section-title">2. 字段属性配置</h4>
+            <p class="section-description">
+              为所有物理字段配置基础属性。“数据类型”已根据字段名智能设定，仅在需要时修改。<br/>
+              勾选“可返回”的字段，才能在下方的“视图字段绑定”步骤中使用。
+            </p>
+            <div class="table-wrapper">
+              <table class="fields-table">
+                <thead>
+                  <tr>
+                    <th>物理字段名</th>
+                    <th>可搜索</th>
+                    <th>可返回</th>
+                    <th>数据类型</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="field in fieldSettings" :key="field.field_name">
+                    <td><strong>{{ field.field_name }}</strong></td>
+                    <td><input type="checkbox" v-model="field.is_searchable" /></td>
+                    <td><input type="checkbox" v-model="field.is_returnable" /></td>
+                    <td>
+                      <select v-model="field.dataType">
+                        <option value="string">文本 (string)</option>
+                        <option value="number">数字 (number)</option>
+                        <option value="date">日期 (date)</option>
+                      </select>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="config-section">
+            <h4 class="section-title">3. 视图字段绑定</h4>
+            <div v-if="returnableFields.length === 0" class="status-message info">
+              请先在“2. 字段属性配置”中勾选至少一个“可返回”的字段。
+            </div>
+
+            <div v-else>
               <div v-if="viewConfig.view_type === 'cards' && viewConfig.binding" class="bind-fields-grid">
                 <div class="form-block" v-for="key in Object.keys(viewConfig.binding.card)" :key="key">
                   <label>{{ cardFieldLabels[key] }}</label>
@@ -83,12 +90,12 @@
                     <option v-for="f in returnableFields" :key="f" :value="f">{{ f }}</option>
                   </select>
                   <input v-model.trim="col.displayName" class="column-input" placeholder="列显示名 (可选)" />
-                  <button @click="removeTableColumn(index)" class="btn-icon danger">&times;</button>
+                  <button @click="removeTableColumn(index)" class="btn-icon danger" aria-label="移除此列">&times;</button>
                 </div>
                 <button @click="addTableColumn" class="button-tertiary">添加一列</button>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </main>
 
@@ -113,7 +120,6 @@ const props = defineProps({
 
 const emit = defineEmits(['update:visible', 'saved']);
 
-const activeTab = ref('fields');
 const isLoading = ref(false);
 const loadError = ref(null);
 
@@ -142,6 +148,22 @@ const returnableFields = computed(() => {
   return fieldSettings.value
     .filter(f => f.is_returnable)
     .map(f => f.field_name);
+});
+
+// 确保在切换视图类型时，binding对象结构正确
+const ensureBindingStructure = (viewType) => {
+    if (!viewConfig.binding) {
+        viewConfig.binding = {};
+    }
+    if (viewType === 'cards' && !viewConfig.binding.card) {
+        viewConfig.binding.card = { title: '', subtitle: '', description: '', imageUrl: '', tag: '' };
+    } else if (viewType === 'table' && !viewConfig.binding.table) {
+        viewConfig.binding.table = { columns: [] };
+    }
+};
+
+watch(() => viewConfig.view_type, (newType) => {
+    ensureBindingStructure(newType);
 });
 
 const close = () => { emit('update:visible', false); };
@@ -196,10 +218,11 @@ const fetchData = async () => {
 
     const tableViews = allBizViews[props.tableName] || [];
     let targetView = tableViews.find(v => v.is_default) || tableViews[0] || createDefaultView(props.tableName);
-    Object.assign(viewConfig, targetView);
-    if (!viewConfig.binding) viewConfig.binding = { card: {}, table: { columns: [] } };
-    if (!viewConfig.binding.card) viewConfig.binding.card = { title: '', subtitle: '', description: '', imageUrl: '', tag: '' };
-    if (!viewConfig.binding.table) viewConfig.binding.table = { columns: [] };
+
+    // 重置并安全地合并视图配置
+    Object.assign(viewConfig, createDefaultView(props.tableName), targetView);
+    ensureBindingStructure(viewConfig.view_type);
+
 
   } catch (error) {
     console.error('Failed to load table configuration:', error);
@@ -223,19 +246,26 @@ const removeTableColumn = (index) => {
 const save = async () => {
   isLoading.value = true;
   try {
-    // 准备字段和视图的数据 payload (这部分逻辑不变)
     const fieldsPayload = fieldSettings.value;
 
     const tableViews = allBizViews[props.tableName] || [];
     const viewIndex = tableViews.findIndex(v => v.view_name === viewConfig.view_name);
+
+    // 创建一个干净的副本用于保存
     const viewConfigClean = JSON.parse(JSON.stringify(viewConfig));
+
+    if (viewConfig.view_type === 'cards') {
+        delete viewConfigClean.binding.table;
+    } else {
+        delete viewConfigClean.binding.card;
+    }
+
     if (viewIndex > -1) {
       tableViews[viewIndex] = viewConfigClean;
     } else {
       tableViews.push(viewConfigClean);
     }
     allBizViews[props.tableName] = tableViews;
-
 
     await apiClient.put(
       ENDPOINTS.UPDATE_TABLE_FIELDS(props.bizName, props.tableName),
@@ -260,79 +290,51 @@ const save = async () => {
 </script>
 
 <style scoped>
+/* --- 基本模态框样式 --- */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #fff; border-radius: 8px; width: 90%; max-width: 800px; display: flex; flex-direction: column; max-height: 90vh; }
-.modal-header { padding: 1rem 1.5rem; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
-.modal-header h3 { margin: 0; }
-.table-name-highlight { color: #007bff; }
-.close-button { background: none; border: none; font-size: 1.75rem; cursor: pointer; color: #6c757d; }
-.modal-body { padding: 0 1.5rem 1.5rem; overflow-y: auto; }
-.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 0.75rem; }
-.button-primary { background-color: #007bff; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: none; cursor: pointer; }
-.button-primary:disabled { background-color: #a0cfff; cursor: not-allowed; }
-.button-secondary { background-color: #6c757d; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: none; cursor: pointer; }
-.button-tertiary { background-color: #f8f9fa; color: #333; border: 1px solid #ced4da; padding: 0.4rem 0.8rem; border-radius: 5px; cursor: pointer; }
-.tabs-nav { border-bottom: 2px solid #dee2e6; margin-bottom: 1.5rem; }
-.tabs-nav button { padding: 0.8rem 1.5rem; border: none; background: transparent; cursor: pointer; font-size: 1em; font-weight: 500; color: #6c757d; position: relative; bottom: -2px; border-bottom: 2px solid transparent; }
-.tabs-nav button.active { color: #007bff; border-bottom-color: #007bff; }
-.tab-panel { animation: fadeIn 0.3s ease; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-.section-description { font-size: 0.9em; color: #6c757d; margin-bottom: 1rem; }
+.modal-content { background: #fff; border-radius: 8px; width: 90%; max-width: 800px; display: flex; flex-direction: column; max-height: 90vh; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+.modal-header { padding: 1rem 1.5rem; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.modal-header h3 { margin: 0; font-size: 1.25rem; }
+.table-name-highlight { color: #007bff; font-weight: bold; }
+.close-button { background: none; border: none; font-size: 1.75rem; cursor: pointer; color: #6c757d; line-height: 1; padding: 0.5rem; }
+.modal-body { padding: 1rem 1.5rem; overflow-y: auto; }
+.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 0.75rem; background-color: #f8f9fa; flex-shrink: 0; }
+
+/* --- 按钮样式 --- */
+.button-primary { background-color: #007bff; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: 1px solid #007bff; cursor: pointer; transition: background-color 0.2s; }
+.button-primary:hover { background-color: #0056b3; }
+.button-primary:disabled { background-color: #a0cfff; border-color: #a0cfff; cursor: not-allowed; }
+.button-secondary { background-color: #6c757d; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: 1px solid #6c757d; cursor: pointer; transition: background-color 0.2s; }
+.button-secondary:hover { background-color: #5a6268; }
+.button-tertiary { background-color: #f8f9fa; color: #333; border: 1px solid #ced4da; padding: 0.4rem 0.8rem; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+.button-tertiary:hover { background-color: #e2e6ea; }
+.btn-icon.danger { color: #dc3545; border: none; background: transparent; cursor: pointer; font-size: 1.5rem; line-height: 1; }
+
+/* --- 布局与表单元素 --- */
+.config-section { margin-bottom: 2.5rem; }
+.section-title { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.75rem; border-bottom: 1px solid #e9ecef; padding-bottom: 0.5rem; }
+.section-description { font-size: 0.9em; color: #6c757d; margin-bottom: 1rem; line-height: 1.5; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.25rem; }
+.form-block { display: flex; flex-direction: column; gap: 0.5rem; }
+.form-block label { font-weight: 500; }
+.form-block input, .form-block select, .column-input { width: 100%; padding: 0.6rem; border-radius: 4px; border: 1px solid #ced4da; transition: border-color 0.2s, box-shadow 0.2s; }
+.form-block input:focus, .form-block select:focus, .column-input:focus { border-color: #80bdff; outline: 0; box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25); }
+
+/* --- 字段配置表格 --- */
+.table-wrapper { max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px; }
 .fields-table { width: 100%; border-collapse: collapse; }
 .fields-table th, .fields-table td { padding: 0.8rem; text-align: left; border-bottom: 1px solid #dee2e6; }
-.fields-table th { background-color: #f8f9fa; }
-.fields-table input[type="checkbox"] { transform: scale(1.2); }
-.fields-table select { padding: 0.5rem; border-radius: 4px; border: 1px solid #ced4da; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.form-block { display: flex; flex-direction: column; gap: 0.5rem; }
-.binding-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px dashed #e0e4e9; }
-.binding-header { font-size: 1.1em; font-weight: 600; margin-bottom: 1rem; }
-.bind-fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.table-fields-list .column-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
-.column-input { padding: 0.5rem; border: 1px solid #ced4da; border-radius: 4px; }
-.btn-icon.danger { color: #dc3545; border: none; background: transparent; cursor: pointer; font-size: 1.5rem; }
-.status-message { padding: 1rem; margin-bottom: 1rem; border-radius: 5px; border: 1px solid; text-align: center; }
-.status-message.loading { background-color: #e6f7ff; }
-.status-message.error { background-color: #fff1f0; }
-.status-message.info { background-color: #f8f9fa; }
+.fields-table th { background-color: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+.fields-table tr:last-child td { border-bottom: none; }
+.fields-table input[type="checkbox"] { transform: scale(1.2); cursor: pointer; }
 
-.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #fff; border-radius: 8px; width: 90%; max-width: 800px; display: flex; flex-direction: column; max-height: 90vh; }
-.modal-header { padding: 1rem 1.5rem; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
-.modal-header h3 { margin: 0; }
-.table-name-highlight { color: #007bff; }
-.close-button { background: none; border: none; font-size: 1.75rem; cursor: pointer; color: #6c757d; }
-.modal-body { padding: 0 1.5rem 1.5rem; overflow-y: auto; }
-.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 0.75rem; }
-.button-primary { background-color: #007bff; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: none; cursor: pointer; }
-.button-primary:disabled { background-color: #a0cfff; cursor: not-allowed; }
-.button-secondary { background-color: #6c757d; color: white; padding: 0.6rem 1.2rem; border-radius: 5px; border: none; cursor: pointer; }
-.button-tertiary { background-color: #f8f9fa; color: #333; border: 1px solid #ced4da; padding: 0.4rem 0.8rem; border-radius: 5px; cursor: pointer; }
+/* --- 字段绑定 --- */
+.bind-fields-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.25rem; }
+.table-fields-list .column-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
 
-.tabs-nav { border-bottom: 2px solid #dee2e6; margin-bottom: 1.5rem; }
-.tabs-nav button { padding: 0.8rem 1.5rem; border: none; background: transparent; cursor: pointer; font-size: 1em; font-weight: 500; color: #6c757d; position: relative; bottom: -2px; border-bottom: 2px solid transparent; }
-.tabs-nav button.active { color: #007bff; border-bottom-color: #007bff; }
-.tab-panel { animation: fadeIn 0.3s ease; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-.section-description { font-size: 0.9em; color: #6c757d; margin-bottom: 1rem; }
-.fields-table { width: 100%; border-collapse: collapse; }
-.fields-table th, .fields-table td { padding: 0.8rem; text-align: left; border-bottom: 1px solid #dee2e6; }
-.fields-table th { background-color: #f8f9fa; }
-.fields-table input[type="checkbox"] { transform: scale(1.2); }
-.fields-table select { padding: 0.5rem; border-radius: 4px; border: 1px solid #ced4da; }
-
-.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.form-block { display: flex; flex-direction: column; gap: 0.5rem; }
-.binding-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px dashed #e0e4e9; }
-.binding-header { font-size: 1.1em; font-weight: 600; margin-bottom: 1rem; }
-.bind-fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.table-fields-list .column-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
-.column-input { padding: 0.5rem; border: 1px solid #ced4da; border-radius: 4px; }
-.btn-icon.danger { color: #dc3545; border: none; background: transparent; cursor: pointer; font-size: 1.5rem; }
-
-.status-message { padding: 1rem; margin-bottom: 1rem; border-radius: 5px; border: 1px solid; text-align: center; }
-.status-message.loading { background-color: #e6f7ff; border-color: #91d5ff; }
-.status-message.error { background-color: #fff1f0; border-color: #ffa39e; }
-.status-message.info { background-color: #f8f9fa; border-color: #dee2e6; }
+/* --- 状态消息 --- */
+.status-message { padding: 1rem; margin: 1rem 0; border-radius: 5px; border: 1px solid; text-align: center; }
+.status-message.loading { background-color: #e6f7ff; border-color: #91d5ff; color: #004085; }
+.status-message.error { background-color: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+.status-message.info { background-color: #f8f9fa; border-color: #dee2e6; color: #383d41; }
 </style>
