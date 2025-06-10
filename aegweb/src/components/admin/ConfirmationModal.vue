@@ -117,12 +117,4 @@ const handleCancel = () => {
 .button-danger:hover {
   background-color: #c82333;
 }
-
-/* 动画效果 */
-.modal-fade-enter-active, .modal-fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-.modal-fade-enter-from, .modal-fade-leave-to {
-  opacity: 0;
-}
 </style>
