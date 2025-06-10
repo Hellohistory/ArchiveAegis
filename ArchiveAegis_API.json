@@ -178,14 +178,6 @@
         },
         "required": ["rate_limit_per_minute", "burst_size"]
       },
-      "UserLimitSetting": {
-        "type": "object",
-        "properties": {
-          "rate_limit_per_second": { "type": "number", "format": "float", "description": "每秒允许的请求数" },
-          "burst_size": { "type": "integer", "description": "瞬时请求峰值" }
-        },
-        "required": ["rate_limit_per_second", "burst_size"]
-      },
       "BizRateLimitSetting": {
         "type": "object",
         "properties": {
@@ -281,13 +273,50 @@
     },
     "/api/columns": {
       "get": {
-        "summary": "获取表的可查询与可返回字段信息", "description": "此接口受业务速率限制保护。", "tags": ["Business"],
+        "summary": "获取表的可查询与可返回字段信息",
+        "description": "此接口受业务速率限制保护。",
+        "tags": ["Business"],
         "parameters": [
           { "name": "biz", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_biz" },
           { "name": "table", "in": "query", "required": true, "schema": { "type": "string" }, "example": "test_table" }
         ],
         "responses": {
-          "200": { "description": "字段信息数组", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FieldSettings" }}}},
+          "200": {
+            "description": "字段信息数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "字段的显示名称 (通常与物理名称相同)"
+                      },
+                      "original_name": {
+                        "type": "string",
+                        "description": "字段的物理名称"
+                      },
+                      "is_searchable": {
+                        "type": "boolean",
+                        "description": "该字段是否可用于搜索"
+                      },
+                      "is_returnable": {
+                        "type": "boolean",
+                        "description": "该字段是否在搜索结果中返回"
+                      },
+                      "dataType": {
+                        "type": "string",
+                        "description": "数据类型 (e.g., string, number, date)"
+                      }
+                    },
+                    "required": ["name", "original_name", "is_searchable", "is_returnable", "dataType"]
+                  }
+                }
+              }
+            }
+          },
           "400": { "description": "缺少参数", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "403": { "description": "业务组不允许查询", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
           "404": { "description": "业务或表未配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
@@ -445,28 +474,31 @@
             }, "security": [{"BearerAuth": []}]
         }
     },
-    "/api/admin/users/{id}/limit": {
-        "put": {
-            "summary": "更新指定用户的速率限制", "tags": ["Admin - Rate Limit"],
-            "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
-            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserLimitSetting"}}}},
-            "responses": {
-              "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
-              "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
-              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            }, "security": [{"BearerAuth": []}]
-        }
-    },
     "/api/admin/config/biz/{bizName}/ratelimit": {
         "put": {
-            "summary": "更新指定业务组的速率限制", "tags": ["Admin - Rate Limit"],
-            "parameters": [ { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" } } ],
-            "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BizRateLimitSetting"}}}},
+            "summary": "更新指定业务组的速率限制",
+            "description": "为特定的业务组（biz）设置每秒请求数和瞬时请求峰值。此设置将覆盖全局速率限制。",
+            "tags": ["Admin - Rate Limit"],
+            "parameters": [
+              { "name": "bizName", "in": "path", "required": true, "schema": { "type": "string" }, "description": "要配置的业务组名称" }
+            ],
+            "requestBody": {
+              "description": "业务组的速率限制配置",
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/BizRateLimitSetting"}
+                }
+              }
+            },
             "responses": {
               "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericSuccess" }}}},
+              "400": { "description": "请求体格式错误或参数无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
               "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
-              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
-            }, "security": [{"BearerAuth": []}]
+              "403": { "description": "无管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}},
+              "404": { "description": "指定的业务组不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }}}}
+            },
+            "security": [{"BearerAuth": []}]
         }
     }
   }
