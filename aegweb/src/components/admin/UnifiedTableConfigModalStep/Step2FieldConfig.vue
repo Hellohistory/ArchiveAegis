@@ -19,6 +19,8 @@
               <input
                 type="checkbox"
                 title="全选/全不选 可搜索"
+                :checked="allSearchable"
+                :indeterminate.prop="isSearchableIndeterminate"
                 @change="toggleAll('is_searchable', $event.target.checked)"
               />
               可搜索
@@ -27,6 +29,8 @@
               <input
                 type="checkbox"
                 title="全选/全不选 可返回"
+                :checked="allReturnable"
+                :indeterminate.prop="isReturnableIndeterminate"
                 @change="toggleAll('is_returnable', $event.target.checked)"
               />
               可返回
@@ -55,13 +59,36 @@
 
 <script setup>
 import { ref, computed, defineModel } from 'vue';
+
 const fields = defineModel('fields', { required: true });
 const filterKeyword = ref('');
+
 const filteredFields = computed(() =>
   fields.value.filter(f => f.field_name.toLowerCase().includes(filterKeyword.value.toLowerCase()))
 );
+
+const allSearchable = computed(() =>
+  fields.value.length > 0 && fields.value.every(f => f.is_searchable)
+);
+
+const isSearchableIndeterminate = computed(() =>
+  !allSearchable.value && fields.value.some(f => f.is_searchable)
+);
+
+const allReturnable = computed(() =>
+  fields.value.length > 0 && fields.value.every(f => f.is_returnable)
+);
+
+const isReturnableIndeterminate = computed(() =>
+  !allReturnable.value && fields.value.some(f => f.is_returnable)
+);
+
 const toggleAll = (prop, checked) => {
-  fields.value.forEach(f => f[prop] = checked);
+  fields.value.forEach(f => {
+    if (filteredFields.value.includes(f)) {
+      f[prop] = checked;
+    }
+  });
 };
 </script>
 

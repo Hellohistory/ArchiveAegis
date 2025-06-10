@@ -44,9 +44,8 @@
               <input
                 type="checkbox"
                 :id="`chk-${tableName}`"
-                :value="tableName"
                 :checked="formState.searchable_tables.includes(tableName)"
-                @change="() => toggleTableSelection(tableName)"
+                @change="handleTableSelectionChange($event, tableName)"
               />
               <label :for="`chk-${tableName}`">{{ tableName }}</label>
             </div>
@@ -75,6 +74,13 @@
       @update:visible="isUnifiedModalVisible = $event"
       @saved="handleModalSave"
     />
+
+    <ConfirmationModal
+      v-model:visible="isConfirmModalVisible"
+      title="确认禁用"
+      :message="confirmMessage"
+      @confirm="executeTableDisabling"
+    />
   </div>
 </template>
 
@@ -84,6 +90,7 @@ import { useRoute } from 'vue-router';
 import apiClient from '@/services/apiClient';
 import { ENDPOINTS } from '@/services/apiEndpoints';
 import UnifiedTableConfigModal from '@/components/admin/UnifiedTableConfigModal.vue';
+import ConfirmationModal from '@/components/admin/ConfirmationModal.vue';
 
 const route = useRoute();
 const bizName = route.params.bizName;
@@ -101,6 +108,10 @@ const formState = reactive({
 
 const isUnifiedModalVisible = ref(false);
 const tableToConfigure = ref('');
+
+const isConfirmModalVisible = ref(false);
+const confirmMessage = ref('');
+const tableToDisable = ref(null);
 
 let saveMessageTimer = null;
 
@@ -155,31 +166,43 @@ const togglePublicSearchable = async () => {
   }
 };
 
-const toggleTableSelection = async (tableName) => {
-  const isCurrentlyEnabled = formState.searchable_tables.includes(tableName);
+const handleTableSelectionChange = (event, tableName) => {
+  const isEnabling = event.target.checked;
 
-  if (isCurrentlyEnabled) {
-    if (!confirm(`您确定要禁用数据表 "${tableName}" 吗？\n相关的视图配置将保留，但前端将无法查询此表。`)) {
-      // 通过强制更新来恢复checkbox的视觉状态
-      const tables = [...formState.searchable_tables];
-      formState.searchable_tables = [];
-      await new Promise(resolve => setTimeout(resolve, 0)); // 等待DOM更新
-      formState.searchable_tables = tables;
-      return;
-    }
+  if (isEnabling) {
+    updateTableSelection(tableName, true);
+  } else {
+    event.preventDefault();
+    tableToDisable.value = tableName;
+    confirmMessage.value = `您确定要禁用数据表 "${tableName}" 吗？\n相关的视图配置将保留，但前端将无法查询此表。`;
+    isConfirmModalVisible.value = true;
   }
+};
 
-  const newSearchableTables = isCurrentlyEnabled
-    ? formState.searchable_tables.filter(t => t !== tableName)
-    : [...formState.searchable_tables, tableName];
+const executeTableDisabling = () => {
+  if (tableToDisable.value) {
+    updateTableSelection(tableToDisable.value, false);
+    tableToDisable.value = null; // 清理状态
+  }
+};
+
+const updateTableSelection = async (tableName, enable) => {
+  const originalTables = [...formState.searchable_tables];
+  const newSearchableTables = enable
+    ? [...originalTables, tableName]
+    : originalTables.filter(t => t !== tableName);
+
+  // 乐观更新UI，让用户立即看到变化
+  formState.searchable_tables = newSearchableTables;
 
   try {
     await apiClient.put(ENDPOINTS.UPDATE_BIZ_TABLES(bizName), {
       searchable_tables: newSearchableTables
     });
-    formState.searchable_tables = newSearchableTables;
-    showSaveMessage(`数据表 "${tableName}" 已${isCurrentlyEnabled ? '禁用' : '启用'}。`);
+    showSaveMessage(`数据表 "${tableName}" 已${enable ? '启用' : '禁用'}。`);
   } catch (error) {
+    // 如果API调用失败，则回滚状态
+    formState.searchable_tables = originalTables;
     const msg = error.response?.data?.error || '更新数据表列表失败';
     showSaveMessage(msg, true);
   }
@@ -226,5 +249,4 @@ const handleModalSave = () => {
 .toggle-switch:checked { background: #007bff; }
 .toggle-switch::before { content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: white; top: 2px; left: 2px; transition: 0.3s; }
 .toggle-switch:checked::before { transform: translateX(18px); }
-
 </style>
