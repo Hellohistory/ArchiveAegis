@@ -1,4 +1,3 @@
-<!--src/views/LoginPage.vue-->
 <template>
   <div class="login-page-wrapper">
     <div class="login-container">
@@ -7,7 +6,14 @@
         <p class="subtitle">ArchiveAegis 管理后台</p>
       </header>
 
-      <form @submit.prevent="handleLogin" class="login-form">
+      <div v-if="systemNeedsSetup" class="setup-prompt">
+        <div class="icon">⚠️</div>
+        <h4>系统需要初始化</h4>
+        <p>检测到系统中没有管理员账户。如果您是首次使用或重置了系统，请先完成初始设置。</p>
+        <router-link to="/setup-admin" class="setup-button">前往初始设置</router-link>
+      </div>
+
+      <form v-else @submit.prevent="handleLogin" class="login-form">
         <div class="form-group">
           <label for="username">用户名</label>
           <input
@@ -42,20 +48,16 @@
           {{ isLoading ? '正在登录...' : '登 录' }}
         </button>
       </form>
-
-      <footer class="login-footer">
-        <router-link to="/setup-admin">还没有账户？前往初始设置</router-link>
-        <p class="dev-note">(此链接主要用于首次安装)</p>
-      </footer>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue'; // [修改] 引入 computed
 import { useRouter } from 'vue-router';
 import apiClient, { authService } from '@/services/apiClient';
 import { ENDPOINTS } from '@/services/apiEndpoints';
+import { systemStatus } from '@/services/systemStatus'; // [新增] 导入全局系统状态
 
 const username = ref('');
 const password = ref('');
@@ -63,9 +65,19 @@ const isLoading = ref(false);
 const errorMessage = ref('');
 const router = useRouter();
 
+// [新增] 创建一个计算属性来判断系统是否需要安装
+const systemNeedsSetup = computed(() => systemStatus.value === 'needs_setup');
+
 const handleLogin = async () => {
   isLoading.value = true;
   errorMessage.value = '';
+
+  // [新增] 增加一层防护，防止在 needs_setup 状态下尝试登录
+  if (systemNeedsSetup.value) {
+    errorMessage.value = '系统需要初始化，请先完成设置。';
+    isLoading.value = false;
+    return;
+  }
 
   if (!username.value || !password.value) {
     errorMessage.value = '用户名和密码不能为空。';
@@ -84,7 +96,9 @@ const handleLogin = async () => {
       const { token, user } = response.data;
       authService.login(token, user);
 
-      await router.push({ name: 'AdminDashboard' });
+      // [优化] 登录成功后，跳转到仪表盘或之前的目标页面
+      const redirectPath = router.currentRoute.value.query.redirect || { name: 'AdminDashboard' };
+      await router.push(redirectPath);
 
     } else {
       errorMessage.value = '登录响应异常，请联系管理员。';
@@ -105,6 +119,45 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
+/* [新增] 为初始化提示添加样式 */
+.setup-prompt {
+  border: 1px solid #f0ad4e;
+  background-color: #fcf8e3;
+  color: #8a6d3b;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  margin: 20px 0;
+}
+.setup-prompt .icon {
+  font-size: 2em;
+  line-height: 1;
+}
+.setup-prompt h4 {
+  margin: 10px 0;
+  font-size: 1.2em;
+  color: #8a6d3b;
+}
+.setup-prompt p {
+  font-size: 0.9em;
+  margin-bottom: 15px;
+  line-height: 1.5;
+}
+.setup-button {
+  display: inline-block;
+  background-color: #f0ad4e;
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 5px;
+  text-decoration: none;
+  font-weight: bold;
+  transition: background-color 0.2s;
+}
+.setup-button:hover {
+  background-color: #ec971f;
+}
+
+/* ... (原有样式保持不变) ... */
 .login-page-wrapper {
   display: flex;
   justify-content: center;
@@ -202,23 +255,4 @@ const handleLogin = async () => {
   font-size: 0.9em;
 }
 
-.login-footer {
-  margin-top: 30px;
-  font-size: 0.9em;
-}
-
-.login-footer a {
-  color: #007bff;
-  text-decoration: none;
-}
-
-.login-footer a:hover {
-  text-decoration: underline;
-}
-
-.dev-note {
-  color: #888;
-  font-size: 0.8em;
-  margin-top: 5px;
-}
 </style>

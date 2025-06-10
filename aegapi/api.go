@@ -20,7 +20,7 @@ import (
 	"ArchiveAegis/aegmetric"
 
 	"github.com/NYTimes/gziphandler"
-	"github.com/go-chi/chi/v5" // 引入 chi 路由库
+	"github.com/go-chi/chi/v5"
 )
 
 /*
@@ -142,9 +142,13 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 			return
 		}
 		physicalTables := mgr.Tables(bizName)
+
+		// 如果 mgr.Tables 返回 nil，说明业务组不存在或无效，应该返回 404
 		if physicalTables == nil {
-			physicalTables = []string{}
+			NoCORSerrResp(w, http.StatusNotFound, fmt.Sprintf("业务组 '%s' 未找到或不包含任何表", bizName))
+			return
 		}
+
 		NoCORSrespond(w, physicalTables)
 	})
 	apiMux.Handle("/api/auth/status", businessLimiter.LightweightChain(publicApiMux))
@@ -152,8 +156,11 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 	apiMux.Handle("/api/tables", businessLimiter.LightweightChain(publicApiMux))
 
 	// --- 管理员API轨道 ---
-	// 使用 chi 作为管理员API的路由器
 	adminRouter := chi.NewRouter()
+
+	// ========== 在这里添加新路由 ==========
+	adminRouter.Get("/configured-biz-names", adminGetConfiguredBizNamesHandler(configService))
+	// ========== 添加结束 ==========
 
 	// 定义 /api/admin/settings 路由
 	adminRouter.Route("/settings", func(r chi.Router) {
@@ -990,4 +997,20 @@ func handleUpdateIPLimit(w http.ResponseWriter, r *http.Request, configService a
 
 	log.Printf("信息: [Admin API] 全局IP速率限制已更新。")
 	NoCORSrespond(w, map[string]string{"status": "success", "message": "全局IP速率限制已更新"})
+}
+
+// adminGetConfiguredBizNamesHandler: GET /api/admin/configured-biz-names
+func adminGetConfiguredBizNamesHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		configuredNames, err := configService.GetAllConfiguredBizNames(r.Context())
+		if err != nil {
+			log.Printf("错误: [Admin API GET /configured-biz-names] 获取已配置业务名称失败: %v", err)
+			NoCORSerrResp(w, http.StatusInternalServerError, "获取业务列表失败")
+			return
+		}
+		if configuredNames == nil {
+			configuredNames = []string{} // 确保永不返回 null
+		}
+		NoCORSrespond(w, configuredNames)
+	}
 }

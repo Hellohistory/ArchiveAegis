@@ -43,7 +43,6 @@ const viewComponent = computed(() => {
 
 const viewBindingConfig = computed(() => {
     if (!viewConfig.value) return {};
-    // 修正：确保在 viewConfig.binding 存在时才访问
     return viewConfig.value.binding ? (viewConfig.value.binding[viewConfig.value.view_type] || {}) : {};
 });
 

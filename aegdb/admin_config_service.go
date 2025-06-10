@@ -103,6 +103,9 @@ type QueryAdminConfigService interface {
 	GetDefaultViewConfig(ctx context.Context, bizName, tableName string) (*ViewConfig, error)
 	GetAllViewConfigsForBiz(ctx context.Context, bizName string) (map[string][]*ViewConfig, error)
 	UpdateAllViewsForBiz(ctx context.Context, bizName string, viewsData map[string][]*ViewConfig) error
+	// ========== 在这里添加新方法声明 ==========
+	GetAllConfiguredBizNames(ctx context.Context) ([]string, error)
+	// ========== 添加结束 ==========
 	InvalidateCacheForBiz(bizName string)
 	InvalidateAllCaches()
 
@@ -177,20 +180,20 @@ func NewAdminConfigServiceImpl(authDB *sql.DB, maxCacheEntries int, defaultCache
           PRIMARY KEY (biz_name, table_name, view_name)
        );`,
 		`CREATE TABLE IF NOT EXISTS global_settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			description TEXT,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          description TEXT,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+       );`,
 		`CREATE TABLE IF NOT EXISTS biz_ratelimit_settings (
-			biz_name TEXT PRIMARY KEY,
-			rate_limit_per_second REAL NOT NULL DEFAULT 5.0,
-			burst_size INTEGER NOT NULL DEFAULT 10,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
+          biz_name TEXT PRIMARY KEY,
+          rate_limit_per_second REAL NOT NULL DEFAULT 5.0,
+          burst_size INTEGER NOT NULL DEFAULT 10,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+       );`,
 		`INSERT OR IGNORE INTO global_settings (key, value, description) VALUES
-			('ip_rate_limit_per_minute', '60', '未认证IP的默认每分钟请求数'),
-			('ip_burst_size', '20', '未认证IP的默认瞬时请求峰值');`,
+          ('ip_rate_limit_per_minute', '60', '未认证IP的默认每分钟请求数'),
+          ('ip_burst_size', '20', '未认证IP的默认瞬时请求峰值');`,
 
 		`CREATE INDEX IF NOT EXISTS idx_bvd_biz_table_default ON biz_view_definitions(biz_name, table_name, is_default);`,
 		`CREATE INDEX IF NOT EXISTS idx_bst_biz_name ON biz_searchable_tables(biz_name);`,
@@ -640,7 +643,36 @@ func (s *AdminConfigServiceImpl) UpdateBizRateLimitSettings(ctx context.Context,
 	return nil
 }
 
-// =======================================================
+// GetAllConfiguredBizNames 从 biz_overall_settings 表中检索所有已配置业务组的名称列表。
+func (s *AdminConfigServiceImpl) GetAllConfiguredBizNames(ctx context.Context) ([]string, error) {
+	query := `SELECT biz_name FROM biz_overall_settings ORDER BY biz_name;`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		log.Printf("错误: [AdminConfigService DB] 查询所有已配置业务名称失败: %v", err)
+		return nil, fmt.Errorf("数据库查询失败: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			log.Printf("错误: [AdminConfigService DB] 扫描业务名称失败: %v", err)
+			return nil, fmt.Errorf("数据库扫描失败: %w", err)
+		}
+		names = append(names, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("错误: [AdminConfigService DB] 迭代已配置业务名称结果时出错: %v", err)
+		return nil, fmt.Errorf("迭代数据库结果时出错: %w", err)
+	}
+
+	log.Printf("调试: [AdminConfigService] 成功加载 %d 个已配置的业务名称。", len(names))
+	return names, nil
+}
+
+// ========== 添加结束 ==========
 
 // InvalidateCacheForBiz 用于在管理员更新配置后，手动使指定业务组的缓存失效。
 func (s *AdminConfigServiceImpl) InvalidateCacheForBiz(bizName string) {

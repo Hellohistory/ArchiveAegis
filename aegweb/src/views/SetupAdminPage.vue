@@ -1,4 +1,3 @@
-<!--src/views/SetupAdminPage.vue-->
 <template>
   <div class="setup-admin-container">
     <div class="setup-admin-card">
@@ -51,13 +50,12 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
-import apiClient from '@/services/apiClient';
+import apiClient, { authService } from '@/services/apiClient';
 import { ENDPOINTS } from '@/services/apiEndpoints';
-
+import { systemStatus } from '@/services/systemStatus';
 
 const POLLING_INTERVAL = 3000;
 const MAX_POLLING_ATTEMPTS = 10;
-
 
 const router = useRouter();
 
@@ -100,7 +98,6 @@ const pollForSetupToken = async () => {
         console.log(`轮询尝试 ${pollingAttempts.value}: 等待安装令牌...`);
       }
     } catch (error) {
-      // [优化] 在轮询时提前处理 "已设置" 的情况
       if (error.response && error.response.status === 403) {
         setupNotPossibleMessage.value = '系统已完成初始设置，无需重复操作。';
         redirectToLogin.value = true;
@@ -149,16 +146,16 @@ const handleSetupSubmit = async () => {
 
   try {
     const response = await apiClient.post(ENDPOINTS.SETUP, params);
-
     const responseData = response.data;
+
     if (!responseData || !responseData.token) {
       throw new Error("响应中未找到认证令牌。");
     }
 
     successMessage.value = `管理员账户 '${responseData.user.username}' 创建成功！2秒后将自动跳转...`;
-    localStorage.setItem('authToken', responseData.token);
-    localStorage.setItem('username', responseData.user.username);
-    localStorage.setItem('userRole', responseData.user.role);
+
+    authService.login(responseData.token, responseData.user);
+    systemStatus.value = 'ready_for_login';
 
     setTimeout(() => {
       router.push({ name: 'AdminDashboard' });
@@ -180,11 +177,6 @@ const handleSetupSubmit = async () => {
 };
 
 onMounted(() => {
-  if (localStorage.getItem('authToken')) {
-    setupNotPossibleMessage.value = '您已登录，无需进行初始设置。';
-    redirectToLogin.value = true;
-    return;
-  }
   pollForSetupToken();
 });
 
@@ -204,7 +196,6 @@ onUnmounted(() => {
   background-color: #f4f7f6;
   padding: 20px;
 }
-
 .setup-admin-card {
   background-color: #fff;
   padding: 30px 40px;

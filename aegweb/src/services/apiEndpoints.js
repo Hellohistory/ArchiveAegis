@@ -21,6 +21,7 @@ export const ENDPOINTS = {
   UPDATE_BIZ_SETTINGS: (bizName) => `/admin/config/biz/${encodeURIComponent(bizName)}/settings`,
   UPDATE_BIZ_TABLES: (bizName) => `/admin/config/biz/${encodeURIComponent(bizName)}/tables`,
   GET_PHYSICAL_COLUMNS: (bizName, tableName) => `/admin/config/biz/${encodeURIComponent(bizName)}/tables/${encodeURIComponent(tableName)}/physical-columns`,
+  ADMIN_CONFIGURED_BIZ_NAMES: '/admin/configured-biz-names',
   UPDATE_TABLE_FIELDS: (bizName, tableName) => `/admin/config/biz/${encodeURIComponent(bizName)}/tables/${encodeURIComponent(tableName)}/fields`,
   GET_BIZ_VIEWS: (bizName) => `/admin/config/biz/${encodeURIComponent(bizName)}/views`,
   UPDATE_BIZ_VIEWS: (bizName) => `/admin/config/biz/${encodeURIComponent(bizName)}/views`,
@@ -29,6 +30,5 @@ export const ENDPOINTS = {
   // 管理员 API - 速率限制配置
   // ===============================================
   IP_LIMIT: '/admin/settings/ip_limit',
-  USER_LIMIT: (userId) => `/admin/users/${userId}/limit`,
   BIZ_RATELIMIT: (bizName) => `/admin/config/biz/${encodeURIComponent(bizName)}/ratelimit`,
 };
