@@ -1522,6 +1522,60 @@
       }
     },
     "/api/admin/config/biz/{bizName}/ratelimit": {
+      "get": {
+        "summary": "获取指定业务组的速率限制",
+        "description": "获取为特定业务组（biz）设置的速率限制配置。如果未设置，则可能返回 404。",
+        "tags": [
+          "Admin - Rate Limit"
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "要获取配置的业务组名称"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BizRateLimitSetting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "未找到该业务组的特定速率限制配置",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
       "put": {
         "summary": "更新指定业务组的速率限制",
         "description": "为特定的业务组（biz）设置每秒请求数和瞬时请求峰值。此设置将覆盖全局速率限制。",

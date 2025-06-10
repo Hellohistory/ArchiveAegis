@@ -179,7 +179,8 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 		// PUT /api/admin/config/biz/{bizName}/tables
 		r.Put("/tables", adminUpdateBizSearchableTablesHandler(configService, sysDB))
 
-		// PUT /api/admin/config/biz/{bizName}/ratelimit
+		// GET & PUT /api/admin/config/biz/{bizName}/ratelimit
+		r.Get("/ratelimit", adminGetBizRateLimitHandler(configService))
 		r.Put("/ratelimit", adminUpdateBizRateLimitHandler(configService))
 
 		// GET & PUT /api/admin/config/biz/{bizName}/views
@@ -1012,5 +1013,29 @@ func adminGetConfiguredBizNamesHandler(configService aegdb.QueryAdminConfigServi
 			configuredNames = []string{} // 确保永不返回 null
 		}
 		NoCORSrespond(w, configuredNames)
+	}
+}
+
+// adminGetBizRateLimitHandler: GET /api/admin/config/biz/{bizName}/ratelimit
+func adminGetBizRateLimitHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bizName := chi.URLParam(r, "bizName")
+
+		settings, err := configService.GetBizRateLimitSettings(r.Context(), bizName)
+
+		// 处理 service 层返回的非“未找到”错误
+		if err != nil {
+			log.Printf("错误: [Admin API GET /biz/%s/ratelimit] 获取速率限制失败: %v", bizName, err)
+			NoCORSerrResp(w, http.StatusInternalServerError, "获取配置时发生内部错误")
+			return
+		}
+
+		// service 层返回 (nil, nil) 表示未找到
+		if settings == nil {
+			NoCORSerrResp(w, http.StatusNotFound, fmt.Sprintf("未找到业务组 '%s' 的速率限制配置", bizName))
+			return
+		}
+
+		NoCORSrespond(w, settings)
 	}
 }
