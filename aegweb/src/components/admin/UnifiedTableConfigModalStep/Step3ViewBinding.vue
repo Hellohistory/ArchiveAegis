@@ -32,20 +32,37 @@
         </div>
 
         <div v-else-if="config.view_type === 'table'" class="table-config-wrapper">
-          <div class="column-row-header">
-            <span>源字段</span>
-            <span>显示名称 (可选)</span>
-          </div>
-          <div class="fields-config-list">
-            <div v-for="(col, index) in config.binding.table.columns" :key="index" class="column-row-redesigned">
-              <svg class="drag-handle" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-label="拖拽排序"><path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/></svg>
-              <select v-model="col.field" class="field-select"><option value="">— 选择字段 —</option><option v-for="f in returnableFields" :key="f" :value="f">{{ f }}</option></select>
-              <span class="separator-arrow">→</span>
-              <input v-model.trim="col.displayName" class="display-name-input" placeholder="自定义显示名称" />
-              <button @click="removeTableColumn(index)" class="btn-icon-redesigned danger" aria-label="移除此列"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg></button>
+          <div class="bulk-select-section">
+            <label class="bulk-select-label">勾选要显示的列</label>
+            <div class="checkbox-grid">
+              <div v-for="field in returnableFields" :key="field" class="checkbox-item">
+                <input type="checkbox" :id="`field-${field}`" :value="field" v-model="selectedTableFields">
+                <label :for="`field-${field}`">{{ field }}</label>
+              </div>
             </div>
           </div>
-          <button @click="addTableColumn" class="button-tertiary">+ 添加一列</button>
+
+          <div v-if="config.binding.table.columns && config.binding.table.columns.length > 0">
+            <div class="column-row-header">
+              <span>源字段</span>
+              <span>显示名称 (可拖拽排序)</span>
+            </div>
+            <draggable
+              v-model="config.binding.table.columns"
+              item-key="field"
+              handle=".drag-handle"
+              class="fields-config-list"
+            >
+              <template #item="{element: col}">
+                <div class="column-row-redesigned">
+                  <svg class="drag-handle" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-label="拖拽排序"><path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0M7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0m3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/></svg>
+                  <input :value="col.field" class="field-select" readonly disabled title="通过上方勾选框移除"/>
+                  <span class="separator-arrow">→</span>
+                  <input v-model.trim="col.displayName" class="display-name-input" placeholder="自定义显示名称" />
+                </div>
+              </template>
+            </draggable>
+          </div>
         </div>
 
         <div v-else-if="config.view_type === 'list'" class="table-config-wrapper">
@@ -148,12 +165,35 @@
 </template>
 
 <script setup>
-import { defineModel, computed, watch } from 'vue';
+import {computed, ref, watch} from 'vue';
+import draggable from 'vuedraggable';
 
 const config = defineModel('config', { required: true });
 const props = defineProps({
   returnableFields: { type: Array, required: true }
 });
+
+const selectedTableFields = ref([]);
+
+watch(() => config.value.view_type, (viewType) => {
+  if (viewType === 'table') {
+    if (config.value.binding.table && config.value.binding.table.columns) {
+      selectedTableFields.value = config.value.binding.table.columns.map(c => c.field);
+    }
+  }
+}, { immediate: true });
+
+watch(selectedTableFields, (newSelection) => {
+  if (config.value.view_type !== 'table') return;
+
+  config.value.binding.table.columns = newSelection.map(field => {
+    const existingColumn = config.value.binding.table.columns.find(c => c.field === field);
+    if (existingColumn) {
+      return existingColumn;
+    }
+    return {field: field, displayName: field};
+  });
+}, { deep: true });
 
 watch(() => config.value.view_type, (viewType) => {
   if (!config.value.binding) {
@@ -195,8 +235,6 @@ const cardFieldLabels = { title: '卡片标题 (Title)', subtitle: '卡片副标
 const kanbanFieldLabels = { title: '卡片标题 (Title)', tag: '标签 (Tag)' };
 const addDetailField = () => { if (config.value.binding.card.details.length < 3) { config.value.binding.card.details.push(''); } };
 const removeDetailField = i => { config.value.binding.card.details.splice(i, 1); };
-const addTableColumn = () => { config.value.binding.table.columns.push({ field: '', displayName: '' }); };
-const removeTableColumn = i => { config.value.binding.table.columns.splice(i, 1); };
 const addListColumn = () => { config.value.binding.list.columns.push({ field: '', displayName: '' }); };
 const removeListColumn = i => { config.value.binding.list.columns.splice(i, 1); };
 
@@ -255,7 +293,6 @@ const groupedCalendar = computed(() => {
 .section-title { font-size: 1.15rem; font-weight: 600; margin-bottom: 1rem; border-bottom: 1px solid #e9ecef; padding-bottom: 0.5rem; }
 .form-block { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem; }
 .form-block label { font-weight: 500; color: #343a40; }
-.form-block select, .column-input { width: 100%; padding: 0.6rem; border-radius: 4px; border: 1px solid #ced4da; background-color: #fff; }
 .bind-fields-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem; }
 @media (min-width: 500px) {
   .bind-fields-grid { grid-template-columns: 1fr 1fr; column-gap: 1.25rem; }
@@ -307,4 +344,40 @@ const groupedCalendar = computed(() => {
 .separator-arrow { color: #6c757d; font-size: 1.2rem; }
 .btn-icon-redesigned { border: none; background: transparent; cursor: pointer; color: #6c757d; padding: 0.25rem; display: flex; align-items: center; justify-content: center; border-radius: 50%; width: 32px; height: 32px; transition: background-color 0.2s, color 0.2s; flex-shrink: 0; }
 .btn-icon-redesigned:hover { background-color: #f8d7da; color: #842029; }
+
+.bulk-select-section {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+}
+.bulk-select-label {
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.75rem;
+}
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+.checkbox-item {
+  display: flex;
+  align-items: center;
+}
+.checkbox-item input[type="checkbox"] {
+  width: auto;
+  margin-right: 0.5rem;
+}
+.checkbox-item label {
+  font-weight: 400;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.field-select[readonly] {
+  background-color: #e9ecef;
+  cursor: default;
+  border: 1px solid #ced4da;
+}
 </style>

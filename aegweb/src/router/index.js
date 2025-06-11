@@ -16,6 +16,9 @@ const AdminBizManagement = () => import('../views/admin/refactored/AdminBizManag
 const AdminRateControl = () => import('../views/admin/refactored/AdminRateControl.vue');
 const BizDetailConfig = () => import('../views/admin/refactored/BizDetailConfig.vue');
 
+const SearchPage = () => import('../views/searchbase/SearchPage.vue');
+const ResultsPage = () => import('../views/searchbase/ResultsPage.vue');
+
 
 const routes = [
   {
@@ -29,11 +32,31 @@ const routes = [
     component: LoginPage,
   },
   {
+    path: '/',
+    redirect: () => {
+      if (authService.isAuthenticated()) {
+        return authService.getRole() === 'admin' ? '/admin' : '/search';
+      }
+      return '/login';
+    },
+  },
+  {
+    path: '/search',
+    name: 'Search',
+    component: SearchPage,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/search/results',
+    name: 'Results',
+    component: ResultsPage,
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/admin',
-    component: AdminLayout, // 使用我们修改后的 AdminLayout
+    component: AdminLayout,
     meta: { requiresAuth: true, isAdminRoute: true },
     children: [
-
       {
         path: '',
         redirect: { name: 'AdminDashboard' }
@@ -63,7 +86,6 @@ const routes = [
         name: 'AdminRateControl',
         component: AdminRateControl,
       }
-
     ],
   },
   {
@@ -96,7 +118,8 @@ router.beforeEach((to, from, next) => {
   const userRole = authService.getRole();
 
   if (isAuthenticated && (to.name === 'Login' || to.name === 'SetupAdmin')) {
-      return next({ name: 'AdminDashboard' });
+      const destination = userRole === 'admin' ? { name: 'AdminDashboard' } : { name: 'Search' };
+      return next(destination);
   }
 
   const needsAuth = to.matched.some(record => record.meta.requiresAuth);
