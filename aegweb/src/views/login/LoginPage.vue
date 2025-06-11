@@ -55,9 +55,9 @@
 <script setup>
 import { ref, computed } from 'vue'; // [修改] 引入 computed
 import { useRouter } from 'vue-router';
-import apiClient, { authService } from '@/services/apiClient';
-import { ENDPOINTS } from '@/services/apiEndpoints';
-import { systemStatus } from '@/services/systemStatus'; // [新增] 导入全局系统状态
+import apiClient, { authService } from '@/services/apiClient.js';
+import { ENDPOINTS } from '@/services/apiEndpoints.js';
+import { systemStatus } from '@/services/systemStatus.js'; // [新增] 导入全局系统状态
 
 const username = ref('');
 const password = ref('');

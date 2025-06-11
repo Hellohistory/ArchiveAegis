@@ -1,13 +1,12 @@
 // src/router/index.js
-// src/router/index.js
 
 import { createRouter, createWebHistory } from 'vue-router';
 import { authService } from '@/services/apiClient';
 import { systemStatus } from '@/services/systemStatus';
 
-const SearchView = () => import('../views/SearchView.vue');
-const SetupAdminPage = () => import('../views/SetupAdminPage.vue');
-const LoginPage = () => import('../views/LoginPage.vue');
+
+const SetupAdminPage = () => import('../views/login/SetupAdminPage.vue');
+const LoginPage = () => import('../views/login/LoginPage.vue');
 const NotFoundPage = () => import('../views/NotFoundPage.vue');
 
 const AdminLayout = () => import('../views/admin/AdminLayout.vue');
@@ -19,11 +18,6 @@ const BizDetailConfig = () => import('../views/admin/refactored/BizDetailConfig.
 
 
 const routes = [
-  {
-    path: '/',
-    name: 'Search',
-    component: SearchView,
-  },
   {
     path: '/setup-admin',
     name: 'SetupAdmin',

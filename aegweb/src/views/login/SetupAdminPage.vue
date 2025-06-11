@@ -50,9 +50,9 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
-import apiClient, { authService } from '@/services/apiClient';
-import { ENDPOINTS } from '@/services/apiEndpoints';
-import { systemStatus } from '@/services/systemStatus';
+import apiClient, { authService } from '@/services/apiClient.js';
+import { ENDPOINTS } from '@/services/apiEndpoints.js';
+import { systemStatus } from '@/services/systemStatus.js';
 
 const POLLING_INTERVAL = 3000;
 const MAX_POLLING_ATTEMPTS = 10;
