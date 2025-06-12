@@ -157,10 +157,7 @@ func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdmin
 
 	// --- 管理员API轨道 ---
 	adminRouter := chi.NewRouter()
-
-	// ========== 在这里添加新路由 ==========
 	adminRouter.Get("/configured-biz-names", adminGetConfiguredBizNamesHandler(configService))
-	// ========== 添加结束 ==========
 
 	// 定义 /api/admin/settings 路由
 	adminRouter.Route("/settings", func(r chi.Router) {

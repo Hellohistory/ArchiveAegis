@@ -103,9 +103,7 @@ type QueryAdminConfigService interface {
 	GetDefaultViewConfig(ctx context.Context, bizName, tableName string) (*ViewConfig, error)
 	GetAllViewConfigsForBiz(ctx context.Context, bizName string) (map[string][]*ViewConfig, error)
 	UpdateAllViewsForBiz(ctx context.Context, bizName string, viewsData map[string][]*ViewConfig) error
-	// ========== 在这里添加新方法声明 ==========
 	GetAllConfiguredBizNames(ctx context.Context) ([]string, error)
-	// ========== 添加结束 ==========
 	InvalidateCacheForBiz(bizName string)
 	InvalidateAllCaches()
 
@@ -496,7 +494,7 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 	return nil
 }
 
-// ============== 新增：速率限制配置相关方法 ==============
+// ============== 速率限制配置相关方法 ==============
 
 // GetIPLimitSettings 获取全局IP速率限制配置
 func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*IPLimitSetting, error) {
@@ -671,8 +669,6 @@ func (s *AdminConfigServiceImpl) GetAllConfiguredBizNames(ctx context.Context) (
 	log.Printf("调试: [AdminConfigService] 成功加载 %d 个已配置的业务名称。", len(names))
 	return names, nil
 }
-
-// ========== 添加结束 ==========
 
 // InvalidateCacheForBiz 用于在管理员更新配置后，手动使指定业务组的缓存失效。
 func (s *AdminConfigServiceImpl) InvalidateCacheForBiz(bizName string) {
