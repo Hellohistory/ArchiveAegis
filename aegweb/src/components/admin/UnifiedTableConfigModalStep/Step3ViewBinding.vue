@@ -165,7 +165,7 @@
 </template>
 
 <script setup>
-import {computed, ref, watch} from 'vue';
+import { computed, ref, watch } from 'vue';
 import draggable from 'vuedraggable';
 
 const config = defineModel('config', { required: true });
@@ -174,6 +174,7 @@ const props = defineProps({
 });
 
 const selectedTableFields = ref([]);
+const allTableColumns = ref([]);
 
 watch(() => config.value.view_type, (viewType) => {
   if (viewType === 'table') {
@@ -186,13 +187,31 @@ watch(() => config.value.view_type, (viewType) => {
 watch(selectedTableFields, (newSelection) => {
   if (config.value.view_type !== 'table') return;
 
-  config.value.binding.table.columns = newSelection.map(field => {
-    const existingColumn = config.value.binding.table.columns.find(c => c.field === field);
-    if (existingColumn) {
-      return existingColumn;
+  const currentColumns = config.value.binding.table.columns;
+
+  currentColumns.forEach(col => {
+    const match = allTableColumns.value.find(c => c.field === col.field);
+    if (match) {
+      match.displayName = col.displayName;
+    } else {
+      allTableColumns.value.push({ ...col });
     }
-    return {field: field, displayName: field};
   });
+
+  const newColumns = newSelection.map(field => {
+    const currentCol = currentColumns.find(c => c.field === field);
+    if (currentCol) return currentCol;
+
+    const existingCol = allTableColumns.value.find(c => c.field === field);
+    if (existingCol) return existingCol;
+
+    const newCol = { field: field, displayName: field };
+    allTableColumns.value.push(newCol);
+    return newCol;
+  });
+
+  config.value.binding.table.columns = newColumns.filter(col => newSelection.includes(col.field));
+
 }, { deep: true });
 
 watch(() => config.value.view_type, (viewType) => {
@@ -209,6 +228,12 @@ watch(() => config.value.view_type, (viewType) => {
       if (!config.value.binding.table) {
         config.value.binding.table = { columns: [] };
       }
+
+      config.value.binding.table.columns.forEach(col => {
+          if (!allTableColumns.value.find(c => c.field === col.field)) {
+              allTableColumns.value.push({ ...col });
+          }
+      });
       break;
     case 'list':
       if (!config.value.binding.list) {
@@ -243,8 +268,8 @@ const mockData = computed(() => {
     return Array.from({ length: 10 }).map((_, i) => {
         const obj = {};
         props.returnableFields.forEach(f => {
-            if (f.toLowerCase().includes('date')) obj[f] = `2025-06-1${i % 4 + 1}`; // 生成几天重复的日期方便日历预览
-            else if (f.toLowerCase().includes('status')) obj[f] = i % 3 === 0 ? '已完成' : (i % 3 === 1 ? '进行中' : '待办'); // 生成3种状态方便看板预览
+            if (f.toLowerCase().includes('date')) obj[f] = `2025-06-1${i % 4 + 1}`;
+            else if (f.toLowerCase().includes('status')) obj[f] = i % 3 === 0 ? '已完成' : (i % 3 === 1 ? '进行中' : '待办');
             else if (f.toLowerCase().includes('count')) obj[f] = (i + 1) * 100;
             else if (f.toLowerCase().includes('code')) obj[f] = `CODE-00${i+1}`;
             else if (f.toLowerCase().includes('size')) obj[f] = `${(i+1)*2}M`;
@@ -283,12 +308,21 @@ const groupedCalendar = computed(() => {
 .binding-container { display: flex; gap: 2rem; max-height: 60vh; min-height: 400px; }
 .binding-forms { flex: 1; min-width: 300px; display: flex; flex-direction: column; overflow-y: auto; padding-right: 12px; }
 .preview-section { flex: 1; min-width: 300px; background: #f9f9f9; padding: 1.5rem; border: 1px solid #e9ecef; border-radius: 8px; overflow: auto; }
-.table-config-wrapper { display: flex; flex-direction: column; flex-grow: 1; overflow: hidden; }
-.fields-config-list { overflow-y: auto; flex-grow: 1; padding-right: 8px; }
+
+.table-config-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.fields-config-list {
+  padding-right: 8px;
+}
+
 .fields-config-list::-webkit-scrollbar { width: 6px; }
 .fields-config-list::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
 .fields-config-list::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
 .fields-config-list::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
 .config-section { margin-bottom: 2.5rem; }
 .section-title { font-size: 1.15rem; font-weight: 600; margin-bottom: 1rem; border-bottom: 1px solid #e9ecef; padding-bottom: 0.5rem; }
 .form-block { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem; }
