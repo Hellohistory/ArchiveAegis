@@ -1,15 +1,15 @@
-// Package aegapi aegis_business_limiter.go
-package aegapi
+// Package aegserver aegis_business_limiter.go
+package aegserver
 
 import (
+	"ArchiveAegis/internal/aegauth"
+	"ArchiveAegis/internal/aeglogic"
+
 	"context"
 	"log"
 	"net/http"
 	"sync"
 	"time"
-
-	"ArchiveAegis/aegauth"
-	"ArchiveAegis/aegdb"
 
 	"golang.org/x/time/rate"
 )
@@ -21,7 +21,7 @@ import (
 // BusinessRateLimiter 是一个统一的结构，管理所有业务性能相关的速率限制。
 // 它可以根据全局、IP、用户和业务组等多个维度进行限制。
 type BusinessRateLimiter struct {
-	configService aegdb.QueryAdminConfigService // 依赖注入，用于从数据库获取配置
+	configService aeglogic.QueryAdminConfigService // 依赖注入，用于从数据库获取配置
 
 	// 全局限制器
 	globalLimiter *rate.Limiter
@@ -44,7 +44,7 @@ type BusinessRateLimiter struct {
 }
 
 // NewBusinessRateLimiter 创建一个新的、功能完备的业务速率限制器。
-func NewBusinessRateLimiter(cs aegdb.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
+func NewBusinessRateLimiter(cs aeglogic.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
 	brl := &BusinessRateLimiter{
 		configService: cs,
 

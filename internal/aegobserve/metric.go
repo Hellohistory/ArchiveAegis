@@ -1,6 +1,5 @@
-// Package aegmetric 暴露 Prometheus 指标
-
-package aegmetric
+// Package aegobserve 暴露 Prometheus 指标
+package aegobserve
 
 import (
 	"net/http"

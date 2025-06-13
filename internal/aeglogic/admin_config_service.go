@@ -1,5 +1,5 @@
-// Package aegdb admin_config_service.go
-package aegdb
+// Package aeglogic admin_config_service.go
+package aeglogic
 
 import (
 	"context"

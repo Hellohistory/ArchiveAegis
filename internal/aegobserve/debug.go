@@ -1,6 +1,5 @@
-// Package aegdebug 启用 pprof 调试
-
-package aegdebug
+// Package aegobserve 启用 pprof 调试
+package aegobserve
 
 import (
 	"log"

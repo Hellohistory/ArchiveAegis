@@ -1,6 +1,5 @@
-// Package aegconf 负责集中式配置加载
-
-package aegconf
+// Package aegconfig 负责集中式配置加载
+package aegconfig
 
 import (
 	"fmt"

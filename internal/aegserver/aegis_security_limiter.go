@@ -1,5 +1,5 @@
-// Package aegapi aegis_security_limiter.go
-package aegapi
+// Package aegserver aegis_security_limiter.go
+package aegserver
 
 import (
 	"bufio"

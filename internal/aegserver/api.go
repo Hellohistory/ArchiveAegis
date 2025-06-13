@@ -1,7 +1,11 @@
-// Package aegapi — （Setup / Login / 业务 / 管理）
-package aegapi
+// Package aegserver — （Setup / Login / 业务 / 管理）
+package aegserver
 
 import (
+	"ArchiveAegis/internal/aegauth"
+	"ArchiveAegis/internal/aegdata"
+	"ArchiveAegis/internal/aeglogic"
+	"ArchiveAegis/internal/aegobserve"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,10 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"ArchiveAegis/aegauth"
-	"ArchiveAegis/aegdb"
-	"ArchiveAegis/aegmetric"
 
 	"github.com/NYTimes/gziphandler"
 	"github.com/go-chi/chi/v5"
@@ -86,7 +86,7 @@ var (
 )
 
 // NewRouter 为API路由添加/api前缀，并注册新的状态检查接口。
-func NewRouter(mgr *aegdb.Manager, sysDB *sql.DB, configService aegdb.QueryAdminConfigService) http.Handler {
+func NewRouter(mgr *aegdata.Manager, sysDB *sql.DB, configService aeglogic.QueryAdminConfigService) http.Handler {
 	if sysDB == nil {
 		log.Fatal("严重错误 (aegapi.NewRouter): sysDB (用户数据库) 连接为空！ 应用无法启动。")
 	}
@@ -232,7 +232,7 @@ func authStatusHandler(sysDB *sql.DB) http.HandlerFunc {
 */
 
 // viewConfigHandler 处理获取指定表默认视图配置的请求
-func viewConfigHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func viewConfigHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			NoCORSerrResp(w, http.StatusMethodNotAllowed, "仅支持GET方法")
@@ -374,7 +374,7 @@ func loginHandler(sysDB *sql.DB) http.HandlerFunc {
 ============================================================
 */
 
-func columnsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func columnsHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			NoCORSerrResp(w, http.StatusMethodNotAllowed, "仅支持GET方法")
@@ -451,13 +451,13 @@ func columnsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFun
 ============================================================
 */
 
-func searchHandler(mgr *aegdb.Manager) http.HandlerFunc {
+func searchHandler(mgr *aegdata.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			NoCORSerrResp(w, http.StatusMethodNotAllowed, "仅支持GET方法进行搜索")
 			return
 		}
-		aegmetric.TotalReq.Inc()
+		aegobserve.TotalReq.Inc()
 
 		q := r.URL.Query()
 		bizName := q.Get("biz")
@@ -465,7 +465,7 @@ func searchHandler(mgr *aegdb.Manager) http.HandlerFunc {
 
 		if bizName == "" {
 			NoCORSerrResp(w, http.StatusBadRequest, "缺少 'biz' (业务组) 参数")
-			aegmetric.FailReq.Inc()
+			aegobserve.FailReq.Inc()
 			return
 		}
 
@@ -476,35 +476,35 @@ func searchHandler(mgr *aegdb.Manager) http.HandlerFunc {
 
 		if len(fields) > 0 && (len(fields) != len(values) || len(fields) != len(fuzzyStr)) {
 			NoCORSerrResp(w, http.StatusBadRequest, "当提供 'fields' 时, 'values' 和 'fuzzy' 参数的个数必须与其一致")
-			aegmetric.FailReq.Inc()
+			aegobserve.FailReq.Inc()
 			return
 		}
 		if len(fields) > 1 && len(logics) != len(fields)-1 {
 			NoCORSerrResp(w, http.StatusBadRequest, "当查询条件大于1个时, 'logic' 参数的个数应为 'fields' 个数减 1")
-			aegmetric.FailReq.Inc()
+			aegobserve.FailReq.Inc()
 			return
 		}
 
-		var queryParams []aegdb.Param
+		var queryParams []aegdata.Param
 		for i := range fields {
 			isFuzzy, errConv := strconv.ParseBool(fuzzyStr[i])
 			if errConv != nil {
 				isFuzzy = false
 				log.Printf("警告: [API /search] 无效的 'fuzzy[%d]' 参数值 '%s' (业务 '%s')，已默认为 false。", i, fuzzyStr[i], bizName)
 			}
-			param := aegdb.Param{
+			param := aegdata.Param{
 				Field: fields[i], Value: values[i], Fuzzy: isFuzzy,
 			}
 			if i < len(logics) {
 				param.Logic = strings.ToUpper(logics[i])
 				if param.Logic != "AND" && param.Logic != "OR" {
 					NoCORSerrResp(w, http.StatusBadRequest, fmt.Sprintf("无效的逻辑操作符: '%s' (在第 %d 个条件后)", param.Logic, i+1))
-					aegmetric.FailReq.Inc()
+					aegobserve.FailReq.Inc()
 					return
 				}
 			} else if len(fields) > 1 && i < len(fields)-1 {
 				NoCORSerrResp(w, http.StatusBadRequest, fmt.Sprintf("第 %d 个查询条件后缺少逻辑操作符 'logic'", i+1))
-				aegmetric.FailReq.Inc()
+				aegobserve.FailReq.Inc()
 				return
 			}
 			queryParams = append(queryParams, param)
@@ -526,11 +526,11 @@ func searchHandler(mgr *aegdb.Manager) http.HandlerFunc {
 
 		results, err := mgr.Query(r.Context(), bizName, tableName, queryParams, page, size)
 		if err != nil {
-			aegmetric.FailReq.Inc()
-			if errors.Is(err, aegdb.ErrPermissionDenied) {
+			aegobserve.FailReq.Inc()
+			if errors.Is(err, aegdata.ErrPermissionDenied) {
 				log.Printf("信息: [API /search] 业务 '%s' 表 '%s' 查询权限不足: %v", bizName, tableName, err)
 				NoCORSerrResp(w, http.StatusForbidden, "查询权限不足或业务/表不可查询")
-			} else if errors.Is(err, aegdb.ErrBizNotFound) || errors.Is(err, aegdb.ErrTableNotFoundInBiz) {
+			} else if errors.Is(err, aegdata.ErrBizNotFound) || errors.Is(err, aegdata.ErrTableNotFoundInBiz) {
 				log.Printf("信息: [API /search] 业务 '%s' 或表 '%s' 未找到: %v", bizName, tableName, err)
 				NoCORSerrResp(w, http.StatusNotFound, "业务组或表未找到")
 			} else if strings.Contains(err.Error(), "没有可用的默认视图") {
@@ -556,11 +556,11 @@ func searchHandler(mgr *aegdb.Manager) http.HandlerFunc {
 */
 
 // adminUpdateBizRateLimitHandler: PUT /api/admin/config/biz/{bizName}/ratelimit
-func adminUpdateBizRateLimitHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminUpdateBizRateLimitHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bizName := chi.URLParam(r, "bizName")
 
-		var payload aegdb.BizRateLimitSetting
+		var payload aeglogic.BizRateLimitSetting
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			NoCORSerrResp(w, http.StatusBadRequest, "无效的JSON请求体: "+err.Error())
 			return
@@ -590,7 +590,7 @@ func adminUpdateBizRateLimitHandler(configService aegdb.QueryAdminConfigService)
 }
 
 // adminGetTablePhysicalColumnsHandler: GET /api/admin/config/biz/{bizName}/tables/{tableName}/physical-columns
-func adminGetTablePhysicalColumnsHandler(mgr *aegdb.Manager) http.HandlerFunc {
+func adminGetTablePhysicalColumnsHandler(mgr *aegdata.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bizName := chi.URLParam(r, "bizName")
 		tableName := chi.URLParam(r, "tableName")
@@ -607,7 +607,7 @@ func adminGetTablePhysicalColumnsHandler(mgr *aegdb.Manager) http.HandlerFunc {
 }
 
 // adminGetBizConfigHandler: GET /api/admin/config/biz/{bizName}
-func adminGetBizConfigHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminGetBizConfigHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bizName := chi.URLParam(r, "bizName")
 		cfg, err := configService.GetBizQueryConfig(r.Context(), bizName)
@@ -625,7 +625,7 @@ func adminGetBizConfigHandler(configService aegdb.QueryAdminConfigService) http.
 }
 
 // adminUpdateBizOverallSettingsHandler: PUT /api/admin/config/biz/{bizName}/settings
-func adminUpdateBizOverallSettingsHandler(configService aegdb.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
+func adminUpdateBizOverallSettingsHandler(configService aeglogic.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		bizName := chi.URLParam(r, "bizName")
@@ -727,7 +727,7 @@ func adminUpdateBizOverallSettingsHandler(configService aegdb.QueryAdminConfigSe
 }
 
 // adminUpdateBizSearchableTablesHandler: PUT /api/admin/config/biz/{bizName}/tables
-func adminUpdateBizSearchableTablesHandler(configService aegdb.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
+func adminUpdateBizSearchableTablesHandler(configService aeglogic.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		bizName := chi.URLParam(r, "bizName")
@@ -807,20 +807,20 @@ func adminUpdateBizSearchableTablesHandler(configService aegdb.QueryAdminConfigS
 }
 
 // adminUpdateTableFieldSettingsHandler: PUT /api/admin/config/biz/{bizName}/tables/{tableName}/fields
-func adminUpdateTableFieldSettingsHandler(configService aegdb.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
+func adminUpdateTableFieldSettingsHandler(configService aeglogic.QueryAdminConfigService, sysDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		bizName := chi.URLParam(r, "bizName")
 		tableName := chi.URLParam(r, "tableName")
 
-		var fieldSettings []aegdb.FieldSetting
+		var fieldSettings []aeglogic.FieldSetting
 		if err := json.NewDecoder(r.Body).Decode(&fieldSettings); err != nil {
 			NoCORSerrResp(w, http.StatusBadRequest, "无效的JSON请求体 (期望 FieldSetting 数组): "+err.Error())
 			return
 		}
 
 		if fieldSettings == nil {
-			fieldSettings = []aegdb.FieldSetting{}
+			fieldSettings = []aeglogic.FieldSetting{}
 		}
 
 		var err error
@@ -894,7 +894,7 @@ func adminUpdateTableFieldSettingsHandler(configService aegdb.QueryAdminConfigSe
 }
 
 // adminGetBizViewsHandler: GET /api/admin/config/biz/{bizName}/views
-func adminGetBizViewsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminGetBizViewsHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bizName := chi.URLParam(r, "bizName")
 		views, err := configService.GetAllViewConfigsForBiz(r.Context(), bizName)
@@ -904,19 +904,19 @@ func adminGetBizViewsHandler(configService aegdb.QueryAdminConfigService) http.H
 			return
 		}
 		if views == nil {
-			views = make(map[string][]*aegdb.ViewConfig)
+			views = make(map[string][]*aeglogic.ViewConfig)
 		}
 		NoCORSrespond(w, views)
 	}
 }
 
 // adminUpdateBizViewsHandler: PUT /api/admin/config/biz/{bizName}/views
-func adminUpdateBizViewsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminUpdateBizViewsHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		bizName := chi.URLParam(r, "bizName")
 
-		var viewsData map[string][]*aegdb.ViewConfig
+		var viewsData map[string][]*aeglogic.ViewConfig
 		if err := json.NewDecoder(r.Body).Decode(&viewsData); err != nil {
 			NoCORSerrResp(w, http.StatusBadRequest, "无效的JSON请求体: "+err.Error())
 			return
@@ -942,7 +942,7 @@ func adminUpdateBizViewsHandler(configService aegdb.QueryAdminConfigService) htt
 */
 
 // adminIPLimitSettingsHandler 处理全局IP速率限制的GET和PUT请求
-func adminIPLimitSettingsHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminIPLimitSettingsHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -956,7 +956,7 @@ func adminIPLimitSettingsHandler(configService aegdb.QueryAdminConfigService) ht
 }
 
 // handleGetIPLimit: GET /api/admin/settings/ip_limit
-func handleGetIPLimit(w http.ResponseWriter, r *http.Request, configService aegdb.QueryAdminConfigService) {
+func handleGetIPLimit(w http.ResponseWriter, r *http.Request, configService aeglogic.QueryAdminConfigService) {
 	settings, err := configService.GetIPLimitSettings(r.Context())
 	if err != nil {
 		log.Printf("错误: [Admin API GET /settings/ip_limit] 调用服务失败: %v", err)
@@ -977,9 +977,9 @@ func handleGetIPLimit(w http.ResponseWriter, r *http.Request, configService aegd
 }
 
 // handleUpdateIPLimit: PUT /api/admin/settings/ip_limit
-func handleUpdateIPLimit(w http.ResponseWriter, r *http.Request, configService aegdb.QueryAdminConfigService) {
+func handleUpdateIPLimit(w http.ResponseWriter, r *http.Request, configService aeglogic.QueryAdminConfigService) {
 	defer r.Body.Close()
-	var payload aegdb.IPLimitSetting
+	var payload aeglogic.IPLimitSetting
 
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		NoCORSerrResp(w, http.StatusBadRequest, "无效的JSON请求体: "+err.Error())
@@ -998,7 +998,7 @@ func handleUpdateIPLimit(w http.ResponseWriter, r *http.Request, configService a
 }
 
 // adminGetConfiguredBizNamesHandler: GET /api/admin/configured-biz-names
-func adminGetConfiguredBizNamesHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminGetConfiguredBizNamesHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		configuredNames, err := configService.GetAllConfiguredBizNames(r.Context())
 		if err != nil {
@@ -1014,7 +1014,7 @@ func adminGetConfiguredBizNamesHandler(configService aegdb.QueryAdminConfigServi
 }
 
 // adminGetBizRateLimitHandler: GET /api/admin/config/biz/{bizName}/ratelimit
-func adminGetBizRateLimitHandler(configService aegdb.QueryAdminConfigService) http.HandlerFunc {
+func adminGetBizRateLimitHandler(configService aeglogic.QueryAdminConfigService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bizName := chi.URLParam(r, "bizName")
 

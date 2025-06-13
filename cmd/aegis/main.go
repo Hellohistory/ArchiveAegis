@@ -2,12 +2,12 @@
 package main
 
 import (
-	"ArchiveAegis/aegapi"
-	"ArchiveAegis/aegauth"
-	"ArchiveAegis/aegconf"
-	"ArchiveAegis/aegdb"
-	"ArchiveAegis/aegdebug"
-	"ArchiveAegis/aegmetric"
+	"ArchiveAegis/internal/aegauth"
+	"ArchiveAegis/internal/aegconfig"
+	"ArchiveAegis/internal/aegdata"
+	"ArchiveAegis/internal/aeglogic"
+	"ArchiveAegis/internal/aegobserve"
+	"ArchiveAegis/internal/aegserver"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -40,7 +40,7 @@ func genToken() string {
 
 func main() {
 
-	cfg := aegconf.Load()
+	cfg := aegconfig.Load()
 	log.Printf("ArchiveAegis %s 正在启动... (配置端口: %d)", version, cfg.Port)
 
 	instanceDir := "instance"
@@ -75,13 +75,13 @@ func main() {
 
 	maxCacheEntries := 1000
 	defaultCacheTTL := 5 * time.Minute
-	adminConfigService, err := aegdb.NewAdminConfigServiceImpl(sysDB, maxCacheEntries, defaultCacheTTL)
+	adminConfigService, err := aeglogic.NewAdminConfigServiceImpl(sysDB, maxCacheEntries, defaultCacheTTL)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
 	}
 	log.Println("信息: AdminConfigService (查询配置服务) 初始化完成。")
 
-	manager := aegdb.NewManager(adminConfigService)
+	manager := aegdata.NewManager(adminConfigService)
 	log.Println("信息: 正在初始化业务数据库管理器...")
 
 	if errInit := manager.Init(context.Background(), instanceDir); errInit != nil {
@@ -100,7 +100,7 @@ func main() {
 	if userCount == 0 {
 		setupTokenValue := genToken() // Renamed to avoid conflict with aegapi.setupToken if it were still global here
 		setupTokenDead := time.Now().Add(30 * time.Minute)
-		aegapi.SetSetupToken(setupTokenValue, setupTokenDead) // Pass to aegapi package
+		aegserver.SetSetupToken(setupTokenValue, setupTokenDead) // Pass to aegapi package
 		log.Printf("重要: [SETUP MODE] 系统中尚无管理员账户。请在30分钟内使用以下令牌通过 /setup 接口创建管理员:")
 		log.Printf("          令牌: %s", setupTokenValue)
 		log.Printf("          (请保管好此令牌，仅显示一次。如果浏览器访问，可能是 /setup?token=%s )", setupTokenValue)
@@ -108,11 +108,11 @@ func main() {
 		log.Printf("警告: 检查用户数时出现问题 (UserCount 返回 %d)。请检查认证数据库 '%s'。", userCount, authDbPath)
 	}
 
-	aegdebug.EnablePprof()
-	aegmetric.Register()
+	aegobserve.EnablePprof()
+	aegobserve.Register()
 	log.Println("信息: 调试工具 (pprof, metrics) 已启用。")
 
-	baseHandler := aegapi.NewRouter(manager, sysDB, adminConfigService)
+	baseHandler := aegserver.NewRouter(manager, sysDB, adminConfigService)
 
 	addr := ":" + strconv.Itoa(cfg.Port)
 	server := &http.Server{

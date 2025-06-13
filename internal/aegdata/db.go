@@ -1,8 +1,8 @@
-// Package aegdb — 多库 / 多业务组 SQLite 管理器 (重构版)
-// aegdb/db.go
-package aegdb
+// Package aegdata — 多库 / 多业务组 SQLite 管理器 (重构版)
+package aegdata
 
 import (
+	"ArchiveAegis/internal/aeglogic"
 	"context"
 	"database/sql"
 	"errors"
@@ -81,7 +81,7 @@ type Manager struct {
 	dbSchemaCache map[*sql.DB]*dbPhysicalSchemaInfo // *sql.DB -> 该库的物理Schema信息缓存
 
 	// configService 是外部依赖，用于获取管理员定义的查询配置。
-	configService QueryAdminConfigService
+	configService aeglogic.QueryAdminConfigService
 
 	// schema 用于存储每个业务组下所有库的物理表结构“并集”的缓存。
 	// 它的 key 是业务组名称(bizName)，value 是一个 map，这个 map 的 key 是表名(tableName)，
@@ -101,7 +101,7 @@ type Manager struct {
 
 // NewManager 创建并返回一个新的 Manager 实例。
 // 它需要一个 QueryAdminConfigService 的实例来获取查询配置。
-func NewManager(cfgService QueryAdminConfigService) *Manager {
+func NewManager(cfgService aeglogic.QueryAdminConfigService) *Manager {
 	if cfgService == nil {
 		// 这是一个严重错误，Manager 无法在没有配置服务的情况下正确运行其核心查询逻辑。
 		log.Fatal("[DBManager] 致命错误: QueryAdminConfigService 实例不能为 nil。Manager 初始化失败。")

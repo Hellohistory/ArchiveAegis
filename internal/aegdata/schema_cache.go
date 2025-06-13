@@ -1,5 +1,5 @@
-// Package aegdb — 负责 schema_cache.json 的持久化
-package aegdb
+// Package aegdata — 负责 schema_cache.json 的持久化
+package aegdata
 
 import (
 	"encoding/json"
