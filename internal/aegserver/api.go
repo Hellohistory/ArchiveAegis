@@ -6,6 +6,7 @@ import (
 	"ArchiveAegis/internal/aegdata"
 	"ArchiveAegis/internal/aeglogic"
 	"ArchiveAegis/internal/aegobserve"
+	"ArchiveAegis/pkg/aegmiddleware"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -98,14 +99,14 @@ func NewRouter(mgr *aegdata.Manager, sysDB *sql.DB, configService aeglogic.Query
 	authenticator := aegauth.NewAuthenticator(sysDB)
 
 	// --- 速率限制器 ---
-	loginIPLimiter := NewIPRateLimiter(rate.Limit(15.0/60.0), 5)
-	loginFailureLock := NewLoginFailureLock(5, 15*time.Minute)
+	loginIPLimiter := aegmiddleware.NewIPRateLimiter(rate.Limit(15.0/60.0), 5)
+	loginFailureLock := aegmiddleware.NewLoginFailureLock(5, 15*time.Minute)
 
 	loginSecurityChain := func(h http.Handler) http.Handler {
 		return loginFailureLock.Middleware(loginIPLimiter.Middleware(h))
 	}
 
-	businessLimiter := NewBusinessRateLimiter(configService, *globalRateLimit, *globalBurst)
+	businessLimiter := aegmiddleware.NewBusinessRateLimiter(configService, *globalRateLimit, *globalBurst)
 	apiMux := http.NewServeMux()
 
 	// --- 安全核心轨道 (最严格) ---
@@ -196,7 +197,7 @@ func NewRouter(mgr *aegdata.Manager, sysDB *sql.DB, configService aeglogic.Query
 	})
 
 	// 将所有 /api/admin/ 下的请求都交由 adminRouter 处理，并用管理员权限中间件保护
-	apiMux.Handle("/api/admin/", aegauth.RequireAdmin(http.StripPrefix("/api/admin", adminRouter)))
+	apiMux.Handle("/api/admin/", aegmiddleware.RequireAdmin(http.StripPrefix("/api/admin", adminRouter)))
 
 	root := http.NewServeMux()
 	root.Handle("/api/", authenticator.Middleware(apiMux))
