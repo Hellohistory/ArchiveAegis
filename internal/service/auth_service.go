@@ -33,28 +33,6 @@ func init() {
 	}
 }
 
-// InitUserTable 初始化用户表
-func InitUserTable(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS _user(
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT UNIQUE NOT NULL,
-			password_hash TEXT NOT NULL,
-			role TEXT NOT NULL,
-			rate_limit_per_second REAL,
-			burst_size INTEGER
-		);
-	`)
-	if err != nil {
-		return fmt.Errorf("创建 _user 表失败: %w", err)
-	}
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_user_username ON _user (username);`)
-	if err != nil {
-		log.Printf("警告: 创建 username 索引失败: %v", err)
-	}
-	return nil
-}
-
 // UserCount 返回用户数
 func UserCount(db *sql.DB) int {
 	var n int

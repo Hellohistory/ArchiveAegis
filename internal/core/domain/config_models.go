@@ -1,4 +1,4 @@
-// file: internal/core/domain/config_models.go
+// Package domain file: internal/core/domain/config_models.go
 package domain
 
 // BizQueryConfig 定义了单个业务组的完整查询配置
@@ -9,11 +9,14 @@ type BizQueryConfig struct {
 	Tables               map[string]*TableConfig `json:"tables"`
 }
 
-// TableConfig 定义了单个表的查询配置
+// TableConfig 定义了单个表的查询和写操作配置
 type TableConfig struct {
 	TableName    string                  `json:"table_name"`
 	IsSearchable bool                    `json:"is_searchable"`
 	Fields       map[string]FieldSetting `json:"fields"`
+	AllowCreate  bool                    `json:"allow_create"`
+	AllowUpdate  bool                    `json:"allow_update"`
+	AllowDelete  bool                    `json:"allow_delete"`
 }
 
 // FieldSetting 定义了单个字段的查询和返回配置

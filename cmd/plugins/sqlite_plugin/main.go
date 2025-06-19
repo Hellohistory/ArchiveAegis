@@ -2,7 +2,7 @@
 package main
 
 import (
-	datasourcev2 "ArchiveAegis/gen/go/datasource/v1"
+	datasourcev1 "ArchiveAegis/gen/go/datasource/v1"
 	"ArchiveAegis/internal/adapter/datasource/sqlite"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
@@ -10,25 +10,26 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/structpb"
 	"log"
 	"net"
 	"path/filepath"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
+	_ "modernc.org/sqlite" // 数据库驱动
 )
 
 // server 结构体实现了 gRPC 生成的 DataSourceServer 接口
 type server struct {
-	datasourcev2.UnimplementedDataSourceServer
+	datasourcev1.UnimplementedDataSourceServer
 	manager port.DataSource
 }
 
 // Query 将gRPC请求转换为内部调用，再将结果转换为gRPC响应
-func (s *server) Query(ctx context.Context, req *datasourcev2.QueryRequest) (*datasourcev2.QueryResult, error) {
+func (s *server) Query(ctx context.Context, req *datasourcev1.QueryRequest) (*datasourcev1.QueryResult, error) {
 	log.Printf("插件收到Query请求: biz=%s, table=%s", req.BizName, req.TableName)
 
-	// 将 gRPC 请求转换为 Go 的 port.QueryRequest
 	goReq := port.QueryRequest{
 		BizName:        req.BizName,
 		TableName:      req.TableName,
@@ -45,24 +46,22 @@ func (s *server) Query(ctx context.Context, req *datasourcev2.QueryRequest) (*da
 		})
 	}
 
-	// 调用 Manager 核心逻辑
 	result, err := s.manager.Query(ctx, goReq)
 	if err != nil {
 		return nil, err
 	}
 
-	// 将 Go 的结果 (*port.QueryResult) 转换为 gRPC 的 *datasourcev1.QueryResult
-	var values []*structpb.Value
-	for _, row := range result.Data {
-		val, err := structpb.NewValue(row)
-		if err != nil {
-			return nil, fmt.Errorf("转换 row 为 structpb.Value 失败: %w", err)
-		}
-		values = append(values, val)
+	// 转换Go结果到gRPC响应
+	anySlice := make([]any, len(result.Data))
+	for i, v := range result.Data {
+		anySlice[i] = v
 	}
-	listValue := &structpb.ListValue{Values: values}
+	listValue, err := structpb.NewList(anySlice)
+	if err != nil {
+		return nil, fmt.Errorf("转换查询结果为ListValue失败: %w", err)
+	}
 
-	grpcResult := &datasourcev2.QueryResult{
+	grpcResult := &datasourcev1.QueryResult{
 		Data:   listValue,
 		Total:  result.Total,
 		Source: s.manager.Type(),
@@ -71,8 +70,8 @@ func (s *server) Query(ctx context.Context, req *datasourcev2.QueryRequest) (*da
 	return grpcResult, nil
 }
 
-// GetSchema GetSchema的完整实现
-func (s *server) GetSchema(ctx context.Context, req *datasourcev2.SchemaRequest) (*datasourcev2.SchemaResult, error) {
+// GetSchema 的完整实现
+func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest) (*datasourcev1.SchemaResult, error) {
 	log.Printf("插件收到GetSchema请求: biz=%s", req.BizName)
 	goReq := port.SchemaRequest{BizName: req.BizName, TableName: req.TableName}
 
@@ -81,11 +80,11 @@ func (s *server) GetSchema(ctx context.Context, req *datasourcev2.SchemaRequest)
 		return nil, err
 	}
 
-	grpcTables := make(map[string]*datasourcev2.TableSchema)
+	grpcTables := make(map[string]*datasourcev1.TableSchema)
 	for tableName, tableSchema := range result.Tables {
-		var grpcFields []*datasourcev2.FieldDescription
+		var grpcFields []*datasourcev1.FieldDescription
 		for _, field := range tableSchema {
-			grpcFields = append(grpcFields, &datasourcev2.FieldDescription{
+			grpcFields = append(grpcFields, &datasourcev1.FieldDescription{
 				Name:         field.Name,
 				DataType:     field.DataType,
 				IsSearchable: field.IsSearchable,
@@ -94,27 +93,71 @@ func (s *server) GetSchema(ctx context.Context, req *datasourcev2.SchemaRequest)
 				Description:  field.Description,
 			})
 		}
-		grpcTables[tableName] = &datasourcev2.TableSchema{Fields: grpcFields}
+		grpcTables[tableName] = &datasourcev1.TableSchema{Fields: grpcFields}
 	}
 
-	return &datasourcev2.SchemaResult{Tables: grpcTables}, nil
+	return &datasourcev1.SchemaResult{Tables: grpcTables}, nil
 }
 
-// HealthCheck HealthCheck的完整实现
-func (s *server) HealthCheck(ctx context.Context, req *datasourcev2.HealthCheckRequest) (*datasourcev2.HealthCheckResponse, error) {
+// HealthCheck 的完整实现
+func (s *server) HealthCheck(ctx context.Context, req *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
 	err := s.manager.HealthCheck(ctx)
 	if err != nil {
 		log.Printf("插件健康检查失败: %v", err)
-		return &datasourcev2.HealthCheckResponse{Status: datasourcev2.HealthCheckResponse_NOT_SERVING}, nil
+		return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_NOT_SERVING}, nil
 	}
-	return &datasourcev2.HealthCheckResponse{Status: datasourcev2.HealthCheckResponse_SERVING}, nil
+	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
 }
 
-// Mutate 方法的存根实现
-func (s *server) Mutate(ctx context.Context, req *datasourcev2.MutateRequest) (*datasourcev2.MutateResult, error) {
+// Mutate 方法的完整实现
+func (s *server) Mutate(ctx context.Context, req *datasourcev1.MutateRequest) (*datasourcev1.MutateResult, error) {
 	log.Printf("插件收到Mutate请求: biz=%s", req.BizName)
-	// 实际实现时，需要将 gRPC MutateRequest 转换为 port.MutateRequest，然后调用 s.manager.Mutate
-	return &datasourcev2.MutateResult{Success: false, Message: "Mutate API not implemented in plugin yet"}, nil
+
+	goReq := port.MutateRequest{
+		BizName: req.BizName,
+	}
+
+	switch op := req.Operation.(type) {
+	case *datasourcev1.MutateRequest_CreateOp:
+		goReq.CreateOp = &port.CreateOperation{
+			TableName: op.CreateOp.TableName,
+			Data:      op.CreateOp.Data.AsMap(),
+		}
+	case *datasourcev1.MutateRequest_UpdateOp:
+		filters := make([]port.QueryParam, len(op.UpdateOp.Filters))
+		for i, f := range op.UpdateOp.Filters {
+			filters[i] = port.QueryParam{Field: f.Field, Value: f.Value, Logic: f.Logic, Fuzzy: f.Fuzzy}
+		}
+		goReq.UpdateOp = &port.UpdateOperation{
+			TableName: op.UpdateOp.TableName,
+			Data:      op.UpdateOp.Data.AsMap(),
+			Filters:   filters,
+		}
+	case *datasourcev1.MutateRequest_DeleteOp:
+		filters := make([]port.QueryParam, len(op.DeleteOp.Filters))
+		for i, f := range op.DeleteOp.Filters {
+			filters[i] = port.QueryParam{Field: f.Field, Value: f.Value, Logic: f.Logic, Fuzzy: f.Fuzzy}
+		}
+		goReq.DeleteOp = &port.DeleteOperation{
+			TableName: op.DeleteOp.TableName,
+			Filters:   filters,
+		}
+	default:
+		return nil, fmt.Errorf("收到了无效的Mutate操作类型")
+	}
+
+	goResult, err := s.manager.Mutate(ctx, goReq)
+	if err != nil {
+		return nil, err
+	}
+
+	grpcResult := &datasourcev1.MutateResult{
+		Success:      goResult.Success,
+		RowsAffected: goResult.RowsAffected,
+		Message:      goResult.Message,
+	}
+
+	return grpcResult, nil
 }
 
 func main() {
@@ -128,7 +171,6 @@ func main() {
 	}
 
 	log.Println("🔌 插件开始初始化依赖...")
-
 	authDbPath := filepath.Join(*instanceDir, "auth.db")
 	pluginSysDB, err := initAuthDB(authDbPath)
 	if err != nil {
@@ -155,8 +197,7 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-
-	datasourcev2.RegisterDataSourceServer(grpcServer, &server{manager: sqliteManager})
+	datasourcev1.RegisterDataSourceServer(grpcServer, &server{manager: sqliteManager})
 
 	log.Printf("✅ SQLite插件启动成功，正在监听端口: %d，管理业务组: %s", *portFlag, *bizName)
 	if err := grpcServer.Serve(lis); err != nil {

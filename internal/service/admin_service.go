@@ -1,4 +1,4 @@
-// file: internal/service/admin_service.go
+// Package service file: internal/service/admin_service.go
 package service
 
 import (
@@ -39,64 +39,6 @@ func NewAdminConfigServiceImpl(authDB *sql.DB, maxCacheEntries int, defaultCache
 	}
 
 	lruCacheInstance := lru.NewLRU[string, *domain.BizQueryConfig](maxCacheEntries, nil, defaultCacheTTL)
-
-	// 数据库表结构初始化
-	initStmts := []string{
-		`CREATE TABLE IF NOT EXISTS biz_overall_settings (
-          biz_name TEXT PRIMARY KEY,
-          is_publicly_searchable BOOLEAN DEFAULT TRUE NOT NULL,
-          default_query_table TEXT
-       );`,
-		`CREATE TABLE IF NOT EXISTS biz_searchable_tables (
-          biz_name TEXT NOT NULL,
-          table_name TEXT NOT NULL,
-          PRIMARY KEY (biz_name, table_name),
-          FOREIGN KEY (biz_name) REFERENCES biz_overall_settings(biz_name) ON DELETE CASCADE ON UPDATE CASCADE
-       );`,
-		`CREATE TABLE IF NOT EXISTS biz_table_field_settings (
-            biz_name TEXT NOT NULL,
-            table_name TEXT NOT NULL,
-            field_name TEXT NOT NULL,
-            is_searchable BOOLEAN DEFAULT FALSE NOT NULL,
-            is_returnable BOOLEAN DEFAULT FALSE NOT NULL,
-            return_alias TEXT,
-            default_return_order INTEGER DEFAULT 0 NOT NULL,
-            data_type TEXT DEFAULT 'string' NOT NULL,
-            PRIMARY KEY (biz_name, table_name, field_name),
-            FOREIGN KEY (biz_name, table_name) REFERENCES biz_searchable_tables(biz_name, table_name) ON DELETE CASCADE ON UPDATE CASCADE
-        );`,
-		`CREATE TABLE IF NOT EXISTS biz_view_definitions (
-          biz_name TEXT NOT NULL,
-          table_name TEXT NOT NULL,
-          view_name TEXT NOT NULL,
-          view_config_json TEXT NOT NULL,
-          is_default BOOLEAN DEFAULT FALSE NOT NULL,
-          PRIMARY KEY (biz_name, table_name, view_name)
-       );`,
-		`CREATE TABLE IF NOT EXISTS global_settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          description TEXT,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-       );`,
-		`CREATE TABLE IF NOT EXISTS biz_ratelimit_settings (
-          biz_name TEXT PRIMARY KEY,
-          rate_limit_per_second REAL NOT NULL DEFAULT 5.0,
-          burst_size INTEGER NOT NULL DEFAULT 10,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-       );`,
-		`INSERT OR IGNORE INTO global_settings (key, value, description) VALUES
-          ('ip_rate_limit_per_minute', '60', '未认证IP的默认每分钟请求数'),
-          ('ip_burst_size', '20', '未认证IP的默认瞬时请求峰值');`,
-		`CREATE INDEX IF NOT EXISTS idx_bvd_biz_table_default ON biz_view_definitions(biz_name, table_name, is_default);`,
-		`CREATE INDEX IF NOT EXISTS idx_bst_biz_name ON biz_searchable_tables(biz_name);`,
-		`CREATE INDEX IF NOT EXISTS idx_btfs_biz_table ON biz_table_field_settings(biz_name, table_name);`,
-	}
-	for _, stmt := range initStmts {
-		if _, err := authDB.Exec(stmt); err != nil {
-			log.Printf("警告: [AdminConfigService] 执行 auth.db 初始化语句失败 (可能是表已存在或其他原因): %v. SQL: %s", err, stmt)
-		}
-	}
 
 	return &AdminConfigServiceImpl{
 		db:    authDB,
@@ -148,68 +90,64 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 		bizConfig.DefaultQueryTable = defaultQueryTableNullable.String
 	}
 
-	rowsTables, err := s.db.QueryContext(ctx,
-		"SELECT table_name FROM biz_searchable_tables WHERE biz_name = ?",
-		bizName)
+	queryTables := `
+        SELECT table_name, is_searchable, allow_create, allow_update, allow_delete
+        FROM biz_searchable_tables WHERE biz_name = ?
+    `
+	rowsTables, err := s.db.QueryContext(ctx, queryTables, bizName)
 	if err != nil {
-		return nil, fmt.Errorf("获取业务组 '%s' 可搜索表列表失败: %w", bizName, err)
+		return nil, fmt.Errorf("获取业务组 '%s' 可配置表列表失败: %w", bizName, err)
 	}
 	defer rowsTables.Close()
 
-	var searchableTableNamesFound []string
 	for rowsTables.Next() {
-		var tableName string
-		if errScan := rowsTables.Scan(&tableName); errScan != nil {
-			return nil, fmt.Errorf("扫描业务组 '%s' 可搜索表名失败: %w", bizName, errScan)
-		}
-		searchableTableNamesFound = append(searchableTableNamesFound, tableName)
-	}
-	if errRows := rowsTables.Err(); errRows != nil {
-		return nil, fmt.Errorf("处理业务组 '%s' 可搜索表列表时出错: %w", bizName, errRows)
-	}
-
-	if len(searchableTableNamesFound) == 0 {
-		return bizConfig, nil
-	}
-
-	for _, tableNameFromAdmin := range searchableTableNamesFound {
 		currentTableConfig := &domain.TableConfig{
-			TableName:    tableNameFromAdmin,
-			IsSearchable: true,
-			Fields:       make(map[string]domain.FieldSetting),
+			Fields: make(map[string]domain.FieldSetting),
 		}
 
+		if errScan := rowsTables.Scan(
+			&currentTableConfig.TableName,
+			&currentTableConfig.IsSearchable,
+			&currentTableConfig.AllowCreate,
+			&currentTableConfig.AllowUpdate,
+			&currentTableConfig.AllowDelete,
+		); errScan != nil {
+			log.Printf("警告: [AdminConfigService] 扫描业务组 '%s' 的表配置失败: %v。已跳过此表。", bizName, errScan)
+			continue
+		}
+
+		// 5. 加载该表的字段配置 (这部分逻辑不变)
 		fieldRows, errFieldQuery := s.db.QueryContext(ctx,
 			`SELECT field_name, is_searchable, is_returnable, data_type
            FROM biz_table_field_settings
            WHERE biz_name = ? AND table_name = ?`,
-			bizName, tableNameFromAdmin)
+			bizName, currentTableConfig.TableName)
 
 		if errFieldQuery != nil {
-			log.Printf("错误: [AdminConfigService DB] 查询字段失败 (业务 '%s', 表 '%s'): %v. 跳过此表。", bizName, tableNameFromAdmin, errFieldQuery)
+			log.Printf("错误: [AdminConfigService DB] 查询字段失败 (业务 '%s', 表 '%s'): %v. 跳过此表。", bizName, currentTableConfig.TableName, errFieldQuery)
 			continue
 		}
-		defer fieldRows.Close()
 
-		for fieldRows.Next() {
-			var fs domain.FieldSetting
-			errScan := fieldRows.Scan(
-				&fs.FieldName,
-				&fs.IsSearchable,
-				&fs.IsReturnable,
-				&fs.DataType,
-			)
-			if errScan != nil {
-				log.Printf("错误: [AdminConfigService DB] 扫描字段失败 (业务 '%s', 表 '%s'): %v. 跳过此字段。", bizName, tableNameFromAdmin, errScan)
-				continue
+		// 使用 defer in a loop 的标准做法
+		func() {
+			defer fieldRows.Close()
+			for fieldRows.Next() {
+				var fs domain.FieldSetting
+				if errScan := fieldRows.Scan(&fs.FieldName, &fs.IsSearchable, &fs.IsReturnable, &fs.DataType); errScan != nil {
+					log.Printf("错误: [AdminConfigService DB] 扫描字段失败 (业务 '%s', 表 '%s'): %v. 跳过此字段。", bizName, currentTableConfig.TableName, errScan)
+					continue
+				}
+				currentTableConfig.Fields[fs.FieldName] = fs
 			}
-			currentTableConfig.Fields[fs.FieldName] = fs
-		}
+		}()
 		if errFieldRows := fieldRows.Err(); errFieldRows != nil {
-			log.Printf("错误: [AdminConfigService DB] 迭代字段结果失败 (业务 '%s', 表 '%s'): %v.", bizName, tableNameFromAdmin, errFieldRows)
+			log.Printf("错误: [AdminConfigService DB] 迭代字段结果失败 (业务 '%s', 表 '%s'): %v.", bizName, currentTableConfig.TableName, errFieldRows)
 		}
 
-		bizConfig.Tables[tableNameFromAdmin] = currentTableConfig
+		bizConfig.Tables[currentTableConfig.TableName] = currentTableConfig
+	}
+	if errRows := rowsTables.Err(); errRows != nil {
+		return nil, fmt.Errorf("处理业务组 '%s' 可配置表列表时出错: %w", bizName, errRows)
 	}
 
 	return bizConfig, nil
@@ -494,4 +432,38 @@ func (s *AdminConfigServiceImpl) InvalidateCacheForBiz(bizName string) {
 func (s *AdminConfigServiceImpl) InvalidateAllCaches() {
 	s.cache.Purge()
 	log.Printf("信息: [AdminConfigService] 所有查询配置LRU缓存已清除。")
+}
+
+// UpdateTableWritePermissions 更新指定表的写权限设置
+func (s *AdminConfigServiceImpl) UpdateTableWritePermissions(ctx context.Context, bizName, tableName string, perms domain.TableConfig) error {
+	// 为了确保数据一致性，我们使用一个更健壮的 "INSERT ... ON CONFLICT DO UPDATE" 语句。
+	// 这可以处理表在 biz_searchable_tables 中尚不存在，但用户想直接为其设置权限的情况。
+	// 首先，需要确保 biz_name 存在于 biz_overall_settings 中。
+	var exists bool
+	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM biz_overall_settings WHERE biz_name = ?", bizName).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("业务组 '%s' 不存在，无法为其下的表设置权限", bizName)
+		}
+		return fmt.Errorf("检查业务组是否存在时出错: %w", err)
+	}
+
+	query := `
+        INSERT INTO biz_searchable_tables (biz_name, table_name, allow_create, allow_update, allow_delete)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(biz_name, table_name) DO UPDATE SET
+            allow_create = excluded.allow_create,
+            allow_update = excluded.allow_update,
+            allow_delete = excluded.allow_delete;
+    `
+	_, err = s.db.ExecContext(ctx, query, bizName, tableName, perms.AllowCreate, perms.AllowUpdate, perms.AllowDelete)
+	if err != nil {
+		return fmt.Errorf("更新表 '%s' 的写权限失败: %w", tableName, err)
+	}
+
+	// 关键一步：在配置变更后，立即让相关的缓存失效！
+	s.InvalidateCacheForBiz(bizName)
+	log.Printf("信息: [AdminConfigService] 表 '%s/%s' 的写权限已更新，相关缓存已失效。", bizName, tableName)
+
+	return nil
 }
