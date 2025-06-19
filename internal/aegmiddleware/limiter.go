@@ -1,52 +1,58 @@
 package aegmiddleware
 
 import (
-	"ArchiveAegis/internal/aegauth"
-	"ArchiveAegis/internal/aeglogic"
+	"ArchiveAegis/internal/core/port" // ✅ 依赖倒置：导入port接口包
+	"ArchiveAegis/internal/service"
 	"bufio"
+	"bytes" // ✅ 新增：用于处理请求体
 	"context"
 	"encoding/json"
-	"github.com/patrickmn/go-cache"
-	"golang.org/x/time/rate"
+	"io" // ✅ 新增：用于处理请求体
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/patrickmn/go-cache"
+	"golang.org/x/time/rate"
 )
 
+// limiterEntry 存储限制器和最后访问时间，被 BusinessRateLimiter 复用
+type limiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 // ============================================================================
-//  业务性能限制器 (Business Performance Limiter)
+//  业务性能限制器 (Business Performance Limiter) - V2版本
 // ============================================================================
 
 // BusinessRateLimiter 是一个统一的结构，管理所有业务性能相关的速率限制。
-// 它可以根据全局、IP、用户和业务组等多个维度进行限制。
 type BusinessRateLimiter struct {
-	configService aeglogic.QueryAdminConfigService // 依赖注入，用于从数据库获取配置
+	// ✅ 修正：依赖于抽象接口，而不是具体实现
+	configService port.QueryAdminConfigService
 
-	// 全局限制器
 	globalLimiter *rate.Limiter
 
-	// Per-IP 限制器相关字段
 	ipLimiters     map[string]*limiterEntry
 	ipMu           sync.Mutex
-	ipDefaultRate  rate.Limit // IP限制的默认速率 (每秒)
-	ipDefaultBurst int        // IP限制的默认峰值
+	ipDefaultRate  rate.Limit
+	ipDefaultBurst int
 
-	// Per-User 限制器相关字段
 	userLimiters     map[int64]*limiterEntry
 	userMu           sync.Mutex
-	userDefaultRate  rate.Limit // 已认证用户的默认速率
-	userDefaultBurst int        // 已认证用户的默认峰值
+	userDefaultRate  rate.Limit
+	userDefaultBurst int
 
-	// Per-Biz 限制器相关字段
 	bizLimiters map[string]*limiterEntry
 	bizMu       sync.Mutex
 }
 
 // NewBusinessRateLimiter 创建一个新的、功能完备的业务速率限制器。
-func NewBusinessRateLimiter(cs aeglogic.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
+// ✅ 修正：构造函数接收的是 port.QueryAdminConfigService 接口类型
+func NewBusinessRateLimiter(cs port.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
 	brl := &BusinessRateLimiter{
 		configService: cs,
 
@@ -63,10 +69,7 @@ func NewBusinessRateLimiter(cs aeglogic.QueryAdminConfigService, globalRate floa
 		bizLimiters: make(map[string]*limiterEntry),
 	}
 
-	// 尝试从数据库加载IP限制的默认值，覆盖硬编码的默认值
 	brl.loadIPDefaultSettings()
-
-	// 启动后台清理守护进程，为每个动态创建的limiter map清理内存
 	go brl.cleanupIPs()
 	go brl.cleanupUsers()
 	go brl.cleanupBizs()
@@ -83,7 +86,7 @@ func NewBusinessRateLimiter(cs aeglogic.QueryAdminConfigService, globalRate floa
 func (brl *BusinessRateLimiter) loadIPDefaultSettings() {
 	settings, err := brl.configService.GetIPLimitSettings(context.Background())
 	if err == nil && settings != nil {
-		brl.ipDefaultRate = rate.Limit(settings.RateLimitPerMinute / 60.0) // 将“每分钟”转换为“每秒”
+		brl.ipDefaultRate = rate.Limit(settings.RateLimitPerMinute / 60.0)
 		brl.ipDefaultBurst = settings.BurstSize
 		log.Printf("信息: [Business Limiter] 已从数据库加载IP速率限制默认值 (Rate: %.2f/min, Burst: %d)", settings.RateLimitPerMinute, settings.BurstSize)
 	} else if err != nil {
@@ -173,7 +176,7 @@ func (brl *BusinessRateLimiter) PerIP(next http.Handler) http.Handler {
 // PerUser 返回用户限制中间件
 func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := aegauth.ClaimFrom(r)
+		claims := service.ClaimFrom(r)
 		if claims == nil { // 对于未认证用户，此中间件直接放行
 			next.ServeHTTP(w, r)
 			return
@@ -204,20 +207,47 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 	})
 }
 
-// PerBiz 返回业务组限制中间件
+// PerBiz ✅ 修正: PerBiz 中间件现在可以处理 V1 API 的 POST JSON 请求体
 func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bizName := r.URL.Query().Get("biz")
-		if bizName == "" { // 如果请求没有biz参数，此中间件直接放行
+		var bizName string
+
+		// 优先尝试从JSON Body中解析biz_name，以适配V1 API
+		if r.Method == http.MethodPost && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("WARN: [PerBiz Limiter] 读取请求体失败: %v", err)
+				next.ServeHTTP(w, r)
+				return
+			}
+			// 关键：将读取过的内容重新放回 r.Body 中，以供后续的处理器使用
+			r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+			// 只解析我们需要的字段，提高性能
+			var extractor struct {
+				BizName string `json:"biz_name"`
+			}
+			if err := json.Unmarshal(bodyBytes, &extractor); err == nil {
+				bizName = extractor.BizName
+			}
+		}
+
+		// 如果不是POST JSON请求，或解析失败，尝试回退到旧的URL参数方式
+		if bizName == "" {
+			bizName = r.URL.Query().Get("biz")
+		}
+
+		if bizName == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
+		// 后续的速率限制逻辑完全不变
 		brl.bizMu.Lock()
 		entry, exists := brl.bizLimiters[bizName]
 		if !exists {
-			// 缓存未命中，从数据库加载该业务组的特定配置
-			rateLimit, burstSize := brl.userDefaultRate, brl.userDefaultBurst // 若无特定配置，可复用认证用户默认值或设另一套默认值
+			rateLimit, burstSize := brl.userDefaultRate, brl.userDefaultBurst
 			if bizSettings, err := brl.configService.GetBizRateLimitSettings(r.Context(), bizName); err == nil && bizSettings != nil {
 				rateLimit = rate.Limit(bizSettings.RateLimitPerSecond)
 				burstSize = bizSettings.BurstSize
@@ -234,6 +264,7 @@ func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 			errResp(w, http.StatusTooManyRequests, "此业务接口请求过于频繁，请稍后再试 (per-biz limit)")
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -253,12 +284,6 @@ func (brl *BusinessRateLimiter) LightweightChain(next http.Handler) http.Handler
 // ==================================================================
 //  Tactic 1: 按 IP 地址的严格速率限制器 (Strict Per-IP Rate Limiter)
 // ==================================================================
-
-// limiterEntry 存储限制器和最后访问时间，用于清理
-type limiterEntry struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
 
 // IPRateLimiter 结构体，用于管理IP速率限制
 type IPRateLimiter struct {
