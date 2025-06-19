@@ -4,7 +4,6 @@ package datasourcer
 import "context"
 
 // QueryRequest 定义了发起一次查询所需要的所有参数。
-// 我们将原来 aegdata.Param 稍作调整，使其更通用。
 type QueryRequest struct {
 	BizName        string
 	TableName      string

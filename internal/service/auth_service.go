@@ -1,5 +1,5 @@
-// Package aegauth — 用户表 + JWT 鉴权 + Middleware
-package aegauth
+// Package service — 用户表 + JWT 鉴权服务 + HTTP 中间件
+package service
 
 import (
 	"context"
@@ -16,60 +16,57 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-/* ---------- 配置 ---------- */
+/* =============================================================================
+   服务层：用户表操作 + JWT 生成解析（无HTTP依赖）
+============================================================================= */
 
+// JWT HMAC 密钥（可通过环境变量 AEGIS_JWT_KEY 覆盖）
 var hmacKey = []byte("ArchiveAegisSecret_Hellohistory")
 
 func init() {
-	// 允许通过环境变量覆盖 JWT 密钥，增强安全性
 	envKey := os.Getenv("AEGIS_JWT_KEY")
 	if envKey != "" {
 		hmacKey = []byte(envKey)
-		log.Println("信息: aegauth 使用环境变量 AEGIS_JWT_KEY 设置的JWT密钥。")
+		log.Println("信息: 使用环境变量 AEGIS_JWT_KEY 设置 JWT 密钥")
 	} else {
-		log.Println("警告: aegauth 未找到环境变量 AEGIS_JWT_KEY，将使用默认JWT密钥。强烈建议设置环境变量以增强安全性！")
+		log.Println("警告: 未设置 AEGIS_JWT_KEY，使用默认 JWT 密钥。建议设置环境变量以提高安全性")
 	}
 }
 
-/* ---------- DB schema and operations ---------- */
-
-// InitUserTable 初始化用户表 (如果不存在)
+// InitUserTable 初始化用户表
 func InitUserTable(db *sql.DB) error {
 	_, err := db.Exec(`
-       CREATE TABLE IF NOT EXISTS _user(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT UNIQUE NOT NULL,
-          password_hash TEXT NOT NULL,
-          role TEXT NOT NULL,
-          
-          rate_limit_per_second REAL,
-          burst_size INTEGER
-       );
-    `)
+		CREATE TABLE IF NOT EXISTS _user(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL,
+			rate_limit_per_second REAL,
+			burst_size INTEGER
+		);
+	`)
 	if err != nil {
 		return fmt.Errorf("创建 _user 表失败: %w", err)
 	}
-	// 考虑为 username 创建索引以提高查询效率 (如果并发写入不多)
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_user_username ON _user (username);`)
 	if err != nil {
-		log.Printf("警告: 为 _user 表创建 username 索引失败 (可能已存在或DB不支持): %v", err)
-		// 通常这不是一个致命错误，可以继续
+		log.Printf("警告: 创建 username 索引失败: %v", err)
 	}
 	return nil
 }
 
-// UserCount 返回用户表中的用户数量
+// UserCount 返回用户数
 func UserCount(db *sql.DB) int {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM _user`).Scan(&n)
 	if err != nil {
 		log.Printf("错误: UserCount 查询失败: %v", err)
-		return 0 // 或返回 -1 表示错误，让调用方判断
+		return 0
 	}
 	return n
 }
 
-// CreateAdmin 创建一个管理员用户
+// CreateAdmin 创建管理员账户
 func CreateAdmin(db *sql.DB, user, pass string) error {
 	if user == "" || pass == "" {
 		return errors.New("用户名或密码不能为空")
@@ -79,22 +76,22 @@ func CreateAdmin(db *sql.DB, user, pass string) error {
 		return fmt.Errorf("生成密码哈希失败: %w", err)
 	}
 	_, err = db.Exec(`
-       INSERT INTO _user(username, password_hash, role)
-       VALUES (?, ?, ?)`, user, string(hash), "admin")
+		INSERT INTO _user(username, password_hash, role)
+		VALUES (?, ?, ?)`, user, string(hash), "admin")
 	if err != nil {
-		return fmt.Errorf("插入管理员用户 '%s' 失败: %w", user, err)
+		return fmt.Errorf("插入管理员用户失败: %w", err)
 	}
 	return nil
 }
 
-// CheckUser 校验用户名和密码，成功则返回用户 ID、角色和 true
+// CheckUser 校验用户名密码
 func CheckUser(db *sql.DB, user, pass string) (id int64, role string, ok bool) {
 	var hash string
 	err := db.QueryRow(`SELECT id, password_hash, role FROM _user WHERE username = ?`, user).
 		Scan(&id, &hash, &role)
 	if err != nil {
-		if !errors.Is(sql.ErrNoRows, err) {
-			log.Printf("错误: CheckUser 查询用户 '%s' 时失败: %v", user, err)
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("错误: 查询用户 '%s' 失败: %v", user, err)
 		}
 		return 0, "", false
 	}
@@ -102,30 +99,27 @@ func CheckUser(db *sql.DB, user, pass string) (id int64, role string, ok bool) {
 	return id, role, err == nil
 }
 
-// GetUserById 检索给定用户ID的用户名和角色
-// 返回用户名、角色，如果找到则返回true，否则返回空字符串和false
+// GetUserById 根据 ID 获取用户信息
 func GetUserById(db *sql.DB, id int64) (username string, role string, ok bool) {
 	err := db.QueryRow(`SELECT username, role FROM _user WHERE id = ?`, id).
 		Scan(&username, &role)
 	if err != nil {
-		if !errors.Is(sql.ErrNoRows, err) {
-			log.Printf("错误: GetUserById 查询用户 ID %d 时失败: %v", id, err)
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("错误: 查询用户 ID %d 失败: %v", id, err)
 		}
 		return "", "", false
 	}
 	return username, role, true
 }
 
-/* ---------- JWT Handling ---------- */
-
-// Claim 定义 JWT 的载荷结构
+// Claim 定义 JWT payload
 type Claim struct {
 	ID   int64  `json:"id"`
 	Role string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-// GenToken 生成一个新的 JWT (有效期24小时)
+// GenToken 生成新的 JWT
 func GenToken(uid int64, role string) (string, error) {
 	claims := Claim{
 		ID:   uid,
@@ -138,41 +132,34 @@ func GenToken(uid int64, role string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signedToken, err := token.SignedString(hmacKey)
-	if err != nil {
-		return "", fmt.Errorf("签名 JWT 失败: %w", err)
-	}
-	return signedToken, nil
+	return token.SignedString(hmacKey)
 }
 
-// ErrInvalidToken 表示 JWT 无效、过期或解析失败。
+// ErrInvalidToken 表示 JWT 无效或过期
 var ErrInvalidToken = errors.New("invalid or expired token")
 
-// ParseToken 解析并验证 JWT 字符串
+// ParseToken 解析 JWT 字符串
 func ParseToken(tokenString string) (*Claim, error) {
 	claims := &Claim{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("非预期的签名方法: %v", token.Header["alg"])
+			return nil, fmt.Errorf("非预期签名方法: %v", token.Header["alg"])
 		}
 		return hmacKey, nil
 	})
-
 	if err != nil {
-		// 特别处理过期错误，使其能被外部识别
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidToken, jwt.ErrTokenExpired)
 		}
 		return nil, fmt.Errorf("%w (detail: %v)", ErrInvalidToken, err)
 	}
-
 	if !token.Valid {
-		return nil, ErrInvalidToken // 如果 token.Valid 是 false 但 err 是 nil (理论上不常见)
+		return nil, ErrInvalidToken
 	}
 	return claims, nil
 }
 
-/* ---------- Context Helpers for Claims ---------- */
+/* ---------- Context 助手函数 ---------- */
 
 type ctxKey int
 
@@ -195,22 +182,24 @@ func ClaimFrom(r *http.Request) *Claim {
 	return claims
 }
 
-/* ---------- 中间件 (Middleware) ---------- */
+/* =============================================================================
+   HTTP 层: Authenticator 结构体与中间件（未来可移至 middleware 包）
+============================================================================= */
 
-// Authenticator 结构体，用于持有数据库连接等依赖
+// Authenticator 是 HTTP 中间件用的结构，持有 DB
 type Authenticator struct {
 	DB *sql.DB
 }
 
-// NewAuthenticator 创建 Authenticator 实例
+// NewAuthenticator 构造器
 func NewAuthenticator(db *sql.DB) *Authenticator {
 	if db == nil {
-		log.Fatal("严重错误: NewAuthenticator 接收到空的数据库连接！") // 或者返回错误
+		log.Fatal("严重错误: NewAuthenticator 接收到空的数据库连接！")
 	}
 	return &Authenticator{DB: db}
 }
 
-// Middleware 是一个JWT认证中间件。
+// Middleware 是 JWT 中间件：验证 Token 并注入 Claim
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -225,14 +214,14 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 					if userExists {
 						r = r.WithContext(contextWithClaim(r.Context(), claims))
 					} else {
-						log.Printf("认证中间件: 用户 ID %d (来自有效JWT) 在数据库中未找到。Token被拒绝。请求路径: %s, IP: %s", claims.ID, r.URL.Path, r.RemoteAddr)
+						log.Printf("认证中间件: 用户 ID %d 不存在，拒绝请求. 路径: %s, IP: %s", claims.ID, r.URL.Path, r.RemoteAddr)
 					}
 				} else {
-					errMsg := "认证中间件: Token无效或解析错误。"
+					errMsg := "认证中间件: Token 无效或解析失败"
 					if errors.Is(err, jwt.ErrTokenExpired) {
-						errMsg = "认证中间件: Token已过期。"
+						errMsg = "认证中间件: Token 已过期"
 					}
-					log.Printf("%s 请求路径: %s, IP: %s (错误详情: %v)", errMsg, r.URL.Path, r.RemoteAddr, err)
+					log.Printf("%s，请求路径: %s, IP: %s (详情: %v)", errMsg, r.URL.Path, r.RemoteAddr, err)
 				}
 			}
 		}
