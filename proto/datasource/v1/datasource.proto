@@ -1,0 +1,116 @@
+// file: proto/datasource/v1/datasource.proto
+syntax = "proto3";
+
+package datasource.v1;
+
+// 这一行至关重要，它指定了生成的Go代码将放在哪个包下
+option go_package = "gen/go/datasource/v1;datasourcev1";
+
+import "google/protobuf/struct.proto";
+
+// --- 服务定义 ---
+service DataSource {
+  // Query 对应 "R" (Read)
+  rpc Query(QueryRequest) returns (QueryResult);
+  // Mutate 对应 "C, U, D" (Create, Update, Delete)
+  rpc Mutate(MutateRequest) returns (MutateResult);
+  // GetSchema 获取元数据
+  rpc GetSchema(SchemaRequest) returns (SchemaResult);
+  // HealthCheck 检查健康状况
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// --- 消息体定义 ---
+
+// 查询参数
+message QueryParam {
+  string field = 1;
+  string value = 2;
+  string logic = 3;
+  bool fuzzy = 4;
+}
+
+// 查询请求
+message QueryRequest {
+  string biz_name = 1;
+  string table_name = 2;
+  repeated QueryParam query_params = 3;
+  int32 page = 4;
+  int32 size = 5;
+  repeated string fields_to_return = 6;
+}
+
+// 查询结果
+message QueryResult {
+  // 使用 google.protobuf.ListValue 来表示 []map[string]any
+  google.protobuf.ListValue data = 1;
+  int64 total = 2;
+  string source = 3;
+}
+
+// --- Mutate 相关 ---
+message MutateRequest {
+  string biz_name = 1;
+  oneof operation {
+    CreateOperation create_op = 2;
+    UpdateOperation update_op = 3;
+    DeleteOperation delete_op = 4;
+  }
+}
+
+message CreateOperation {
+  string table_name = 1;
+  google.protobuf.Struct data = 2;
+}
+
+message UpdateOperation {
+  string table_name = 1;
+  google.protobuf.Struct data = 2;
+  repeated QueryParam filters = 3;
+}
+
+message DeleteOperation {
+  string table_name = 1;
+  repeated QueryParam filters = 2;
+}
+
+message MutateResult {
+  bool success = 1;
+  int64 rows_affected = 2;
+  string message = 3;
+}
+
+
+// --- Schema 相关 ---
+message SchemaRequest {
+  string biz_name = 1;
+  string table_name = 2;
+}
+
+message FieldDescription {
+  string name = 1;
+  string data_type = 2;
+  bool is_searchable = 3;
+  bool is_returnable = 4;
+  bool is_primary = 5;
+  string description = 6;
+}
+
+message SchemaResult {
+  map<string, TableSchema> tables = 1;
+}
+
+message TableSchema {
+  repeated FieldDescription fields = 1;
+}
+
+// --- HealthCheck 相关 ---
+message HealthCheckRequest {}
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+}

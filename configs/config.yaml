@@ -1,0 +1,14 @@
+# ArchiveAegis 平台配置文件 V1
+
+# 网关服务自身的配置
+server:
+  port: 10224
+  log_level: "info" # 可选: debug, info, warn, error
+
+# 数据源注册中心
+datasources:
+  - name: "sales_report_db"
+    type: "sqlite_plugin"
+    enabled: true
+    params:
+      address: "localhost:50051"

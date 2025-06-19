@@ -1,96 +1,50 @@
-// Package aegdata — 多库 / 多业务组 SQLite 管理器 (重构版)
-package aegdata
+// Package sqlite — 多库 / 多业务组 SQLite 管理器 (重构版)
+package sqlite
 
 import (
-	"ArchiveAegis/internal/aeglogic"
+	"ArchiveAegis/internal/core/port"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort" // 用于对表名、列名等进行排序，以保证输出顺序的稳定性
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"golang.org/x/sync/errgroup"
-	_ "modernc.org/sqlite" // SQLite 驱动
+	_ "modernc.org/sqlite"
 )
 
-/*
-================================================================================
+// 断言 *Manager 实现 port.DataSource 接口，编译期校验
+var _ port.DataSource = (*Manager)(nil)
 
-	aegdb 包级错误定义
-
-================================================================================
-*/
-
-// 包级错误变量，用于指示特定的操作失败原因。
-var (
-	// ErrPermissionDenied 表示操作因权限不足而被拒绝。
-	ErrPermissionDenied = errors.New("权限不足，操作被拒绝")
-
-	// ErrBizNotFound 表示请求的业务组在系统中不存在或未被加载。
-	ErrBizNotFound = errors.New("指定的业务组未找到")
-
-	// ErrTableNotFoundInBiz 表示在给定的业务组配置中，未找到用户请求的表。
-	// 这与物理表是否存在于数据库文件中是不同的概念；这里指的是管理员配置层面。
-	ErrTableNotFoundInBiz = errors.New("在当前业务组的配置中未找到指定的表")
-)
-
-/*
-================================================================================
-
-	aegdb 内部常量定义
-
-================================================================================
-*/
 const (
-	// innerPrefix 用于标识 ArchiveAegis 内部自动管理的表或对象，
-	innerPrefix = "_archiveaegis_internal_" // 例如：_archiveaegis_internal_some_table
-
-	// schemaCacheFilename 是用于存储每个业务组物理表结构并集缓存的文件名。
+	innerPrefix         = "_archiveaegis_internal_"
 	schemaCacheFilename = "schema_cache.json"
-
-	// debounceDuration 是文件系统事件处理的防抖延迟。
-	debounceDuration = 2 * time.Second
+	debounceDuration    = 2 * time.Second
 )
 
-/*
-================================================================================
-  aegdb 内部核心结构体定义
-================================================================================
-*/
-
-// dbPhysicalSchemaInfo 存储从单个数据库文件实际扫描到的物理结构信息。
-// 这与管理员配置的“逻辑”查询schema (通过QueryAdminConfigService获取) 是分开的。
 type dbPhysicalSchemaInfo struct {
-	detectedDefaultTable string              // 自动检测到的默认表名 (通常是按字母顺序的第一个用户表)
-	allTablesAndColumns  map[string][]string // 物理表名 -> 该表所有物理列名的列表
+	detectedDefaultTable string
+	allTablesAndColumns  map[string][]string
 }
 
-// Manager 是 aegdb 包的核心，负责管理多个业务组及其下的 SQLite 数据库文件。
 type Manager struct {
-	mu            sync.RWMutex                      // 保护 Manager 内部状态的读写锁
-	root          string                            // instance 目录的根路径, 例如 "instance"
-	group         map[string]map[string]*sql.DB     // bizName -> libName -> *sql.DB (数据库连接池)
-	dbSchemaCache map[*sql.DB]*dbPhysicalSchemaInfo // *sql.DB -> 该库的物理Schema信息缓存
-
-	// configService 是外部依赖，用于获取管理员定义的查询配置。
-	configService aeglogic.QueryAdminConfigService
-
-	// schema 用于存储每个业务组下所有库的物理表结构“并集”的缓存。
-	// 它的 key 是业务组名称(bizName)，value 是一个 map，这个 map 的 key 是表名(tableName)，
-	// value 是一个 string 切片，表示该表在业务组所有库中出现过的所有列名的并集。
-	schema map[string]map[string][]string // bizName -> tableName -> union of physical columnNames
-
-	// 文件监控相关，用于热加载/卸载数据库文件。
-	eventTimers   map[string]*time.Timer // path -> timer
-	eventTimersMu sync.Mutex             // 保护 eventTimers
+	mu            sync.RWMutex
+	root          string
+	group         map[string]map[string]*sql.DB
+	dbSchemaCache map[*sql.DB]*dbPhysicalSchemaInfo
+	schema        map[string]map[string][]string
+	eventTimers   map[string]*time.Timer
+	eventTimersMu sync.Mutex
+	configService port.QueryAdminConfigService
 }
 
 /*
@@ -99,75 +53,79 @@ type Manager struct {
 ================================================================================
 */
 
-// NewManager 创建并返回一个新的 Manager 实例。
-// 它需要一个 QueryAdminConfigService 的实例来获取查询配置。
-func NewManager(cfgService aeglogic.QueryAdminConfigService) *Manager {
+// NewManager 创建实例
+func NewManager(cfgService port.QueryAdminConfigService) *Manager {
 	if cfgService == nil {
-		// 这是一个严重错误，Manager 无法在没有配置服务的情况下正确运行其核心查询逻辑。
-		log.Fatal("[DBManager] 致命错误: QueryAdminConfigService 实例不能为 nil。Manager 初始化失败。")
+		log.Fatal("[DBManager] 致命错误: QueryAdminConfigService 实例不能为 nil。")
 	}
 	return &Manager{
 		group:         make(map[string]map[string]*sql.DB),
 		dbSchemaCache: make(map[*sql.DB]*dbPhysicalSchemaInfo),
 		schema:        make(map[string]map[string][]string),
 		eventTimers:   make(map[string]*time.Timer),
-		configService: cfgService, // 存储配置服务实例
+		configService: cfgService,
 	}
 }
 
-// Init 初始化 Manager，扫描指定根目录下的所有业务数据库。
-// rootDir 是 "instance" 目录。
-func (m *Manager) Init(ctx context.Context, rootDir string) error {
+// InitForBiz 根据指定的业务组名称，精确地初始化该业务组下的所有数据库。
+// 这是配置驱动模式下的核心初始化方法。
+func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.root = filepath.Clean(rootDir)
 
-	log.Printf("[DBManager] 开始初始化，扫描业务数据库目录: %s", m.root)
-	// 模式匹配 instance/<bizName>/<libName>.db
-	files, err := filepath.Glob(filepath.Join(m.root, "*", "*.db"))
+	// 确保根目录已设置
+	if m.root == "" {
+		m.root = filepath.Clean(rootDir)
+	}
+
+	// 1. 构建精确的、只针对目标业务组的 glob 模式
+	bizPath := filepath.Join(m.root, bizName)
+	globPattern := filepath.Join(bizPath, "*.db")
+	log.Printf("[DBManager] 开始为业务组 '%s' 初始化, 扫描模式: %s", bizName, globPattern)
+
+	// 2. 查找该业务组目录下的所有 .db 文件
+	files, err := filepath.Glob(globPattern)
 	if err != nil {
-		// 如果 Glob 本身失败，通常是模式有问题或权限问题，记录错误但允许服务继续。
-		log.Printf("错误: [DBManager] Init 时扫描数据库目录 '%s' (模式: %s) 失败: %v。管理器将以空状态运行。",
-			m.root, filepath.Join(m.root, "*", "*.db"), err)
-		return nil // 非致命，允许服务以空Manager启动
+		// Glob 失败通常是模式有问题，对于单个业务组，这应该被视为一个错误
+		return fmt.Errorf("为业务组 '%s' 扫描数据库目录失败: %w", bizName, err)
 	}
 
 	if len(files) == 0 {
-		log.Printf("信息: [DBManager] Init 时在 '%s' 目录下未找到任何符合 '*.db' 的文件。", m.root)
+		log.Printf("信息: [DBManager] 在业务组 '%s' 的目录 '%s' 下未找到任何 '.db' 文件。", bizName, bizPath)
+		// 即使没有文件，也刷新一次schema，以防该业务组被清空
+		m.loadOrRefreshSchemaInternal()
+		return nil
 	}
 
+	// 3. 循环打开并加载找到的数据库文件
 	var loadedCount int
 	var errorMessages []string
 	for _, f := range files {
-		relPath, errRel := filepath.Rel(m.root, f)
-		if errRel != nil {
-			log.Printf("警告: [DBManager] Init 时无法获取文件 '%s' 相对于根目录 '%s' 的路径: %v，已跳过。", f, m.root, errRel)
-			errorMessages = append(errorMessages, fmt.Sprintf("文件 '%s' (无法获取相对路径): %v", f, errRel))
-			continue
-		}
-		if strings.Count(filepath.ToSlash(relPath), "/") != 1 {
-			log.Printf("信息: [DBManager] Init 时文件 '%s' (相对路径 '%s') 不符合 'bizName/libName.db' 结构，已跳过。", f, relPath)
-			continue
-		}
-
 		// 调用内部的 openDBInternal 来打开并加载物理schema
 		if errOpen := m.openDBInternal(ctx, f); errOpen != nil {
 			errMsg := fmt.Sprintf("文件 '%s': %v", f, errOpen)
-			log.Printf("警告: [DBManager] Init 时打开数据库失败: %s", errMsg)
+			log.Printf("警告: [DBManager] 为业务组 '%s' 初始化时打开数据库失败: %s", bizName, errMsg)
 			errorMessages = append(errorMessages, errMsg)
 		} else {
 			loadedCount++
 		}
 	}
 
-	log.Printf("[DBManager] 初始化扫描完成。成功加载 %d 个数据库。", loadedCount)
+	log.Printf("[DBManager] 业务组 '%s' 初始化扫描完成。成功加载 %d 个数据库。", bizName, loadedCount)
 	if len(errorMessages) > 0 {
-		log.Printf("警告: [DBManager] 初始化过程中有 %d 个数据库文件加载失败，详情: %s", len(errorMessages), strings.Join(errorMessages, "; "))
+		log.Printf("警告: [DBManager] 业务组 '%s' 初始化过程中有 %d 个数据库文件加载失败。", bizName, len(errorMessages))
 	}
 
-	// 初始化或刷新 m.schema (所有业务组的物理表结构并集缓存)
+	// 4. 刷新内部的 schema 缓存，以包含新加载的业务组信息
 	m.loadOrRefreshSchemaInternal()
 	return nil
+}
+
+// Mutate ✨ 新增: Mutate 方法的存根实现，以满足新的 DataSource 接口
+func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.MutateResult, error) {
+	// 这是为了让 Manager 类型完整实现 DataSource 接口。
+	// 具体的写操作逻辑将在后续阶段实现。
+	return nil, errors.New("写操作 (Mutate) 尚未在此数据源中实现")
 }
 
 /*
@@ -567,9 +525,57 @@ func (m *Manager) processDebouncedEvent(path string, originalOp fsnotify.Op) {
 /*
 ================================================================================
   业务组物理 Schema 并集缓存 (m.schema) 的加载与刷新
-  这部分逻辑与 schema_cache.go 文件中的 readSchemaCache/writeSchemaCache 协作。
+  这部分逻辑与 schema_cache.json 文件中的 readSchemaCache/writeSchemaCache 协作。
 ================================================================================
 */
+
+/*
+================================================================
+  schema_cache.json 结构体
+================================================================
+*/
+
+// schemaFile 表示写入磁盘的整体 JSON 结构
+type schemaFile struct {
+	UpdatedAt time.Time                      `json:"updated_at"`
+	Tables    map[string][]string            `json:"tables"` // 并集，用/columns 时够用
+	Libs      map[string]map[string][]string `json:"libs"`   // 每库各表列
+}
+
+// readSchemaCache 读取并反序列化 schema_cache.json；文件不存在或解析失败都返回错误
+func readSchemaCache(bizDir string) (map[string][]string, map[string]map[string][]string, error) {
+	path := filepath.Join(bizDir, "schema_cache.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var sf schemaFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return nil, nil, err
+	}
+	return sf.Tables, sf.Libs, nil
+}
+
+// writeSchemaCache 覆盖写 schema_cache.json（先写 tmp 再 rename，避免半文件）
+func writeSchemaCache(bizDir string, libs map[string]map[string][]string, tables map[string][]string) error {
+	tmp := filepath.Join(bizDir, "schema_cache.json.tmp")
+	final := filepath.Join(bizDir, "schema_cache.json")
+
+	sf := schemaFile{
+		UpdatedAt: time.Now().UTC(),
+		Tables:    tables,
+		Libs:      libs,
+	}
+	data, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, final)
+}
 
 // loadOrRefreshSchemaInternal 负责计算并更新 m.schema。
 // m.schema 存储每个业务组下所有库的物理表及列的并集。
@@ -748,7 +754,7 @@ func (m *Manager) GetAnyDB() (*sql.DB, error) {
 
 /*
 ================================================================================
-  核心查询逻辑 (Manager.Query 和 buildSQL_new)
+  ⚠️ Query 方法接口变更 —— 适配 port.DataSource
 ================================================================================
 */
 
@@ -760,156 +766,136 @@ type Param struct {
 	Fuzzy bool   // 是否模糊查询
 }
 
-// Query 支持跨库并发检索，并根据管理员配置进行权限校验和结果构造。
-func (m *Manager) Query(
-	ctx context.Context,
-	bizName string, // 业务组名称
-	tableNameOrEmpty string, // 用户请求的表名，如果为空，则尝试使用业务组的默认表
-	queryParams []Param, // 查询参数列表
-	page int, // 页码 (1-based)
-	size int, // 每页大小
-) ([]map[string]any, error) {
-
-	// 从配置服务获取该业务组的查询配置
-	bizAdminConfig, err := m.configService.GetBizQueryConfig(ctx, bizName)
+// Query 是实现 port.DataSource 接口的公开方法。
+// 它的职责是接收标准的 QueryRequest，调用内部实现，并封装返回标准 QueryResult。
+func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.QueryResult, error) {
+	// 1. 调用重构后的内部核心实现，同时获取数据和总数
+	results, total, err := m.queryInternal(ctx, req)
 	if err != nil {
-		log.Printf("错误: [DBManager Query] 获取业务 '%s' 的查询配置失败: %v", bizName, err)
-		return nil, fmt.Errorf("业务 '%s' 查询配置不可用或获取失败", bizName)
+		// 直接将内部错误向上传递。即使有部分数据，也把错误作为主要信息。
+		// 返回部分数据可以让前端在出错时也能展示一些内容。
+		return &port.QueryResult{Data: results, Total: total, Source: m.Type()}, err
+	}
+
+	// 2. 将内部结果封装成标准的、可被外部消费的 QueryResult 结构
+	queryResult := &port.QueryResult{
+		Data:   results,
+		Total:  total,
+		Source: m.Type(), // 标明数据源类型
+	}
+
+	return queryResult, nil
+}
+
+// queryInternal 是查询逻辑的内部核心实现。
+func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]map[string]any, int64, error) {
+	bizAdminConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
+	if err != nil {
+		return nil, 0, fmt.Errorf("业务 '%s' 查询配置不可用: %w", req.BizName, err)
 	}
 	if bizAdminConfig == nil {
-		log.Printf("信息: [DBManager Query] 业务 '%s' 未找到对应的查询配置。", bizName)
-		return nil, fmt.Errorf("业务 '%s' 未配置查询规则", bizName)
+		return nil, 0, fmt.Errorf("业务 '%s' 未配置查询规则", req.BizName)
 	}
 	if !bizAdminConfig.IsPubliclySearchable {
-		log.Printf("信息: [DBManager Query] 业务 '%s' (配置名: '%s') 已配置，但未开放公开查询。", bizName, bizAdminConfig.BizName)
-		return nil, ErrPermissionDenied // 返回特定错误类型
+		return nil, 0, port.ErrPermissionDenied
 	}
 
-	// 确定实际查询的表名
-	targetTableName := tableNameOrEmpty
+	targetTableName := req.TableName
 	if targetTableName == "" {
 		targetTableName = bizAdminConfig.DefaultQueryTable
 	}
 	if targetTableName == "" {
-		log.Printf("错误: [DBManager Query] 业务 '%s' 查询请求未指定表名，且该业务未配置默认查询表。", bizName)
-		return nil, fmt.Errorf("业务 '%s' 未能确定查询目标表，请指定表名或由管理员配置默认表", bizName)
+		return nil, 0, fmt.Errorf("业务 '%s' 未能确定查询目标表", req.BizName)
 	}
 
-	// 获取目标表的具体配置
 	tableAdminConfig, tableConfigExists := bizAdminConfig.Tables[targetTableName]
 	if !tableConfigExists {
-		log.Printf("错误: [DBManager Query] 表 '%s' 在业务 '%s' 的查询配置中未定义。", targetTableName, bizName)
-		return nil, ErrTableNotFoundInBiz
+		return nil, 0, port.ErrTableNotFoundInBiz
 	}
 	if !tableAdminConfig.IsSearchable {
-		log.Printf("信息: [DBManager Query] 表 '%s' 在业务 '%s' 中已配置，但管理员设定其为不可查询。", targetTableName, bizName)
-		return nil, ErrPermissionDenied
+		return nil, 0, port.ErrPermissionDenied // ✅ 修正: 使用 port 包定义的标准错误
 	}
 
-	// 校验并准备查询参数
-	validatedQueryParams := make([]Param, 0, len(queryParams))
-	if len(queryParams) > 0 {
-		for i, p := range queryParams {
-			if p.Field == "" {
-				return nil, fmt.Errorf("查询条件字段名不能为空")
-			}
-			fieldSetting, fieldExists := tableAdminConfig.Fields[p.Field]
-			if !fieldExists || !fieldSetting.IsSearchable {
-				return nil, fmt.Errorf("查询条件字段 '%s' 无效或不被允许用于搜索", p.Field)
-			}
-
-			paramIsLast := (i == len(queryParams)-1)
-			if !paramIsLast {
-				p.Logic = strings.ToUpper(p.Logic)
-				if p.Logic != "AND" && p.Logic != "OR" {
-					return nil, fmt.Errorf("查询参数逻辑操作符 '%s' 无效", p.Logic)
-				}
-			} else {
-				p.Logic = ""
-			}
-			validatedQueryParams = append(validatedQueryParams, p)
+	// 将 port.QueryParam 转换为内部使用的 Param 类型 (如果需要的话，或者直接使用 port.QueryParam)
+	validatedQueryParams := make([]Param, 0, len(req.QueryParams))
+	for _, p := range req.QueryParams {
+		fieldSetting, fieldExists := tableAdminConfig.Fields[p.Field]
+		if !fieldExists || !fieldSetting.IsSearchable {
+			return nil, 0, fmt.Errorf("字段 '%s' 无效或不可搜索", p.Field)
 		}
+
+		validatedQueryParams = append(validatedQueryParams, Param{
+			Field: p.Field,
+			Value: p.Value,
+			Logic: strings.ToUpper(p.Logic),
+			Fuzzy: p.Fuzzy,
+		})
 	}
 
-	defaultView, err := m.configService.GetDefaultViewConfig(ctx, bizName, targetTableName)
-	if err != nil {
-		log.Printf("错误: [DBManager Query] 获取表 '%s' 的默认视图配置失败: %v", targetTableName, err)
-		return nil, fmt.Errorf("获取视图配置失败，无法继续查询")
-	}
-	if defaultView == nil {
-		log.Printf("错误: [DBManager Query] 表 '%s' (业务 '%s') 没有配置默认视图。", targetTableName, bizName)
-		return nil, fmt.Errorf("表 '%s' 没有可用的默认视图，请联系管理员配置", targetTableName)
-	}
-	if defaultView.ViewType != "table" && defaultView.ViewType != "cards" {
-		// 当前查询只为表格和卡片视图提供数据
-		log.Printf("错误: [DBManager Query] 表 '%s' 的默认视图类型 '%s' 不支持数据查询。", targetTableName, defaultView.ViewType)
-		return nil, fmt.Errorf("默认视图类型 '%s' 不支持查询", defaultView.ViewType)
-	}
-
-	// 根据视图配置，构建 SELECT 列和别名映射
-	selectFieldsForSQL := make([]string, 0)
-	dbFieldToAliasMap := make(map[string]string)
-
-	// 我们需要从数据库 SELECT 所有在视图中定义的字段，无论是卡片还是表格。为此，我们先将所有需要的字段名收集到一个set中去重
-	requiredFieldsSet := make(map[string]string) // key: 数据库字段名, value: 显示名/别名
-
-	if defaultView.Binding.Table != nil && len(defaultView.Binding.Table.Columns) > 0 {
-		for _, col := range defaultView.Binding.Table.Columns {
-			if col.Field != "" {
-				requiredFieldsSet[col.Field] = col.DisplayName
+	var selectFieldsForSQL []string
+	if len(req.FieldsToReturn) > 0 {
+		for _, fieldName := range req.FieldsToReturn {
+			fieldSetting, fieldExists := tableAdminConfig.Fields[fieldName]
+			if !fieldExists || !fieldSetting.IsReturnable {
+				return nil, 0, fmt.Errorf("安全策略冲突：字段 '%s' 未被授权返回", fieldName)
+			}
+			selectFieldsForSQL = append(selectFieldsForSQL, fieldName)
+		}
+	} else {
+		// 情况B: 客户端未指定，默认返回所有被配置为“可返回”的字段
+		for fieldName, fieldSetting := range tableAdminConfig.Fields {
+			if fieldSetting.IsReturnable {
+				selectFieldsForSQL = append(selectFieldsForSQL, fieldName)
 			}
 		}
 	}
-	if defaultView.Binding.Card != nil {
-		cardBinding := defaultView.Binding.Card
-		if cardBinding.Title != "" {
-			requiredFieldsSet[cardBinding.Title] = ""
-		} // 卡片视图通常不需要别名
-		if cardBinding.Subtitle != "" {
-			requiredFieldsSet[cardBinding.Subtitle] = ""
-		}
-		if cardBinding.Description != "" {
-			requiredFieldsSet[cardBinding.Description] = ""
-		}
-		if cardBinding.ImageUrl != "" {
-			requiredFieldsSet[cardBinding.ImageUrl] = ""
-		}
-		if cardBinding.Tag != "" {
-			requiredFieldsSet[cardBinding.Tag] = ""
-		}
-	}
 
-	if len(requiredFieldsSet) == 0 {
-		log.Printf("错误: [DBManager Query] 表 '%s' (业务 '%s') 的默认视图未绑定任何字段。", targetTableName, bizName)
-		return nil, fmt.Errorf("默认视图未配置任何展示字段")
+	if len(selectFieldsForSQL) == 0 {
+		return nil, 0, fmt.Errorf("在表 '%s' 的配置中，没有找到任何可供返回的字段", targetTableName)
 	}
+	sort.Strings(selectFieldsForSQL) // 保证顺序，便于测试和缓存
 
-	// 校验视图中定义的字段是否都允许返回
-	for dbField, displayName := range requiredFieldsSet {
-		fieldSetting, fieldExists := tableAdminConfig.Fields[dbField]
-		if !fieldExists || !fieldSetting.IsReturnable {
-			log.Printf("错误: [DBManager Query] 视图配置尝试返回一个不可返回的字段 '%s'", dbField)
-			return nil, fmt.Errorf("安全策略冲突：视图配置尝试访问未授权返回的字段 '%s'", dbField)
-		}
-		selectFieldsForSQL = append(selectFieldsForSQL, dbField)
-		if displayName != "" {
-			dbFieldToAliasMap[dbField] = displayName
-		}
-	}
-	sort.Strings(selectFieldsForSQL) // 排序以保证 SELECT 子句的稳定性
-
+	// --- 3. 并发查询  ---
 	m.mu.RLock()
-	dbInstancesInBiz, bizGroupExists := m.group[bizName]
+	dbInstancesInBiz, bizGroupExists := m.group[req.BizName]
 	m.mu.RUnlock()
 	if !bizGroupExists || len(dbInstancesInBiz) == 0 {
-		return []map[string]any{}, nil
+		return []map[string]any{}, 0, nil
+	}
+
+	var totalCount int64 = -1 // 默认为-1，表示未计算或计算失败
+	var firstDB *sql.DB
+
+	// 随机获取一个DB实例，仅用于计算总数。这是一个性能与准确性的权衡。
+	for _, db := range dbInstancesInBiz {
+		firstDB = db
+		break
+	}
+
+	// 计算符合条件的总记录数，用于分页
+	if firstDB != nil {
+		// 将 Param 转换回 port.QueryParam 以便传递
+		countQueryParams := make([]port.QueryParam, len(validatedQueryParams))
+		for i, p := range validatedQueryParams {
+			countQueryParams[i] = port.QueryParam(p)
+		}
+
+		countSQL, countArgs, errBuild := buildCountSQL(targetTableName, countQueryParams)
+		if errBuild != nil {
+			return nil, 0, fmt.Errorf("构建COUNT查询失败: %w", errBuild)
+		}
+		err = firstDB.QueryRowContext(ctx, countSQL, countArgs...).Scan(&totalCount)
+		if err != nil {
+			// 计算总数失败不应中断主查询流程，但需要记录警告
+			log.Printf("WARN: [DBManager Query] 计算总数失败 (不影响查询数据): %v", err)
+			totalCount = -1 // 保持-1作为计算失败的标记
+		}
 	}
 
 	sem := make(chan struct{}, runtime.NumCPU())
 	resultsChannel := make(chan []map[string]any, len(dbInstancesInBiz))
 	errGroup, queryCtx := errgroup.WithContext(ctx)
 
-	processedLibsCount := 0
 	for libName, dbConn := range dbInstancesInBiz {
 		m.mu.RLock()
 		physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[dbConn]
@@ -921,7 +907,6 @@ func (m *Manager) Query(
 			continue
 		}
 
-		processedLibsCount++
 		currentLibName := libName
 		currentDBConn := dbConn
 
@@ -933,22 +918,24 @@ func (m *Manager) Query(
 				return queryCtx.Err()
 			}
 
+			// 别名逻辑已解耦，此处传空map
 			sqlQuery, queryArgs, errBuild := buildsqlNew(
 				targetTableName,
 				selectFieldsForSQL,
-				dbFieldToAliasMap,
+				make(map[string]string),
 				validatedQueryParams,
-				page,
-				size,
+				req.Page,
+				req.Size,
 			)
 			if errBuild != nil {
-				return nil
+				log.Printf("ERROR: [DBManager Query] 构建SQL失败，已跳过此库: %v", errBuild)
+				return nil // 不中断其他goroutine
 			}
 
-			log.Printf("调试: [DBManager Query] 执行SQL for %s/%s, Table: %s. SQL: %s, Args: %v", bizName, currentLibName, targetTableName, sqlQuery, queryArgs)
+			log.Printf("调试: [DBManager Query] 执行SQL for %s/%s, Table: %s. SQL: %s, Args: %v", req.BizName, currentLibName, targetTableName, sqlQuery, queryArgs)
 			rows, errExec := currentDBConn.QueryContext(queryCtx, sqlQuery, queryArgs...)
 			if errExec != nil {
-				return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", bizName, currentLibName, targetTableName, errExec)
+				return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", req.BizName, currentLibName, targetTableName, errExec)
 			}
 			defer rows.Close()
 
@@ -961,10 +948,11 @@ func (m *Manager) Query(
 					scanDestPtrs[i] = &scanDest[i]
 				}
 				if errScan := rows.Scan(scanDestPtrs...); errScan != nil {
-					return fmt.Errorf("扫描库 '%s/%s' 表 '%s' 行数据失败: %w", bizName, currentLibName, targetTableName, errScan)
+					log.Printf("WARN: [DBManager Query] 扫描库 '%s/%s' 行数据失败: %v。跳过此行。", req.BizName, currentLibName, errScan)
+					continue
 				}
 				rowData := make(map[string]any)
-				rowData["__lib"] = currentLibName
+				rowData["__lib"] = currentLibName // 依然注入来源库信息
 				for i, colName := range actualReturnedColumns {
 					if bytes, ok := scanDest[i].([]byte); ok {
 						rowData[colName] = string(bytes)
@@ -975,7 +963,7 @@ func (m *Manager) Query(
 				libResults = append(libResults, rowData)
 			}
 			if errRows := rows.Err(); errRows != nil {
-				return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据失败: %w", bizName, currentLibName, targetTableName, errRows)
+				return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据时发生错误: %w", req.BizName, currentLibName, targetTableName, errRows)
 			}
 			if len(libResults) > 0 {
 				resultsChannel <- libResults
@@ -996,12 +984,64 @@ func (m *Manager) Query(
 	}
 
 	if firstErrorEncountered != nil {
-		log.Printf("错误: [DBManager Query] 业务 '%s' 表 '%s' 的并发查询中至少一个库操作失败: %v", bizName, targetTableName, firstErrorEncountered)
-		return allAggregatedResults, fmt.Errorf("查询业务 '%s' 的表 '%s' 时发生部分错误: %w", bizName, targetTableName, firstErrorEncountered)
+		log.Printf("错误: [DBManager Query] 业务 '%s' 表 '%s' 并发查询中发生错误: %v", req.BizName, targetTableName, firstErrorEncountered)
+		// 即使部分失败，依然可以返回成功部分的数据和总数
+		return allAggregatedResults, totalCount, fmt.Errorf("查询业务 '%s' 的表 '%s' 时发生部分错误: %w", req.BizName, targetTableName, firstErrorEncountered)
 	}
 
-	return allAggregatedResults, nil
+	return allAggregatedResults, totalCount, nil
 }
+
+// buildCountSQL 用于构建计算总数的SQL查询
+func buildCountSQL(tableName string, queryParams []port.QueryParam) (string, []any, error) {
+	if tableName == "" {
+		return "", nil, fmt.Errorf("表名不能为空 (buildCountSQL)")
+	}
+
+	var whereConditions []string
+	var queryArgsForWhere []any
+
+	if len(queryParams) > 0 {
+		for i, p := range queryParams {
+			var operator string
+			var valueToBind any
+			if p.Fuzzy {
+				operator = "LIKE"
+				likeValue := strings.ReplaceAll(p.Value, `\`, `\\`)
+				likeValue = strings.ReplaceAll(likeValue, `%`, `\%`)
+				likeValue = strings.ReplaceAll(likeValue, `_`, `\_`)
+				valueToBind = "%" + likeValue + "%"
+			} else {
+				operator = "="
+				valueToBind = p.Value
+			}
+			whereConditions = append(whereConditions, fmt.Sprintf("%q %s ?", p.Field, operator))
+			queryArgsForWhere = append(queryArgsForWhere, valueToBind)
+
+			if i < len(queryParams)-1 {
+				if p.Logic == "AND" || p.Logic == "OR" {
+					whereConditions = append(whereConditions, p.Logic)
+				}
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("SELECT COUNT(*) FROM %q", tableName))
+
+	if len(whereConditions) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(whereConditions, " "))
+	}
+
+	return sb.String(), queryArgsForWhere, nil
+}
+
+/*
+================================================================================
+  buildsqlNew — 动态 SQL 生成
+================================================================================
+*/
 
 // buildsqlNew 根据管理员配置动态构建SQL语句
 func buildsqlNew(
@@ -1013,7 +1053,6 @@ func buildsqlNew(
 	size int, // 每页大小
 ) (sqlQuery string, args []any, err error) {
 
-	// --- 基本校验 ---
 	if tableName == "" {
 		return "", nil, fmt.Errorf("表名不能为空 (buildSQL_new)")
 	}
@@ -1024,9 +1063,9 @@ func buildsqlNew(
 		log.Printf("调试: [buildSQL_new] 无效的页码 %d，修正为 1。", page)
 		page = 1
 	}
-	if size < 1 || size > 1000 { // 假设最大页大小为1000，可配置
+	if size < 1 || size > 1000 {
 		log.Printf("调试: [buildSQL_new] 无效的页大小 %d，修正为默认值 50。", size)
-		size = 50 // 默认且合理的大小
+		size = 50
 	}
 
 	selectClauseParts := make([]string, len(selectDBFields))
@@ -1049,7 +1088,7 @@ func buildsqlNew(
 			var valueToBind any
 			if p.Fuzzy {
 				operator = "LIKE"
-				likeValue := strings.ReplaceAll(p.Value, `\`, `\\`) // 先转义反斜杠本身
+				likeValue := strings.ReplaceAll(p.Value, `\`, `\\`)
 				likeValue = strings.ReplaceAll(likeValue, `%`, `\%`)
 				likeValue = strings.ReplaceAll(likeValue, `_`, `\_`)
 				valueToBind = "%" + likeValue + "%"
@@ -1060,12 +1099,11 @@ func buildsqlNew(
 			whereConditions = append(whereConditions, fmt.Sprintf("%q %s ?", p.Field, operator))
 			queryArgsForWhere = append(queryArgsForWhere, valueToBind)
 
-			if i < len(queryParams)-1 { // 如果不是最后一个条件
-				// p.Logic 应已由 Manager.Query 校验为 "AND" 或 "OR" (或为空，表示默认处理)
+			if i < len(queryParams)-1 {
 				if p.Logic == "AND" || p.Logic == "OR" {
 					whereConditions = append(whereConditions, p.Logic)
 				} else if p.Logic == "" {
-					log.Printf("调试: [buildSQL_new] 查询参数 %d 的 Logic 为空，且不是最后一个参数。这可能导致SQL语法问题，除非只有一个查询参数。", i)
+					log.Printf("调试: [buildSQL_new] 查询参数 %d 的 Logic 为空，且不是最后一个参数。", i)
 				}
 			}
 		}
@@ -1085,6 +1123,67 @@ func buildsqlNew(
 
 	sqlQuery = sb.String()
 	args = append(queryArgsForWhere, size, (page-1)*size)
-
 	return sqlQuery, args, nil
+}
+
+// GetSchema 实现，以匹配新的 port.FieldDescription 结构
+func (m *Manager) GetSchema(ctx context.Context, req port.SchemaRequest) (*port.SchemaResult, error) {
+	bizConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
+	if err != nil {
+		return nil, fmt.Errorf("获取业务 '%s' 的 schema 配置失败: %w", req.BizName, err)
+	}
+	if bizConfig == nil {
+		return nil, fmt.Errorf("业务 '%s' 未找到配置", req.BizName)
+	}
+
+	schemaTables := make(map[string][]port.FieldDescription)
+
+	for tableName, tableConfig := range bizConfig.Tables {
+		if req.TableName != "" && req.TableName != tableName {
+			continue
+		}
+
+		var fields []port.FieldDescription
+		for _, fieldSetting := range tableConfig.Fields {
+			fields = append(fields, port.FieldDescription{
+				Name:         fieldSetting.FieldName,
+				DataType:     fieldSetting.DataType,
+				IsSearchable: fieldSetting.IsSearchable,
+				IsReturnable: fieldSetting.IsReturnable,
+				// ✅ 填充新字段 (即使是默认值)
+				// 注意: 要完全支持这些新字段，未来需要扩展 biz_table_field_settings 表和 domain.FieldSetting 结构
+				IsPrimary:   false, // 暂设为false
+				Description: "",    // 暂设为空
+			})
+		}
+		// 保证字段顺序稳定
+		sort.Slice(fields, func(i, j int) bool {
+			return fields[i].Name < fields[j].Name
+		})
+		schemaTables[tableName] = fields
+	}
+
+	if req.TableName != "" && len(schemaTables) == 0 {
+		return nil, fmt.Errorf("表 '%s' 在业务 '%s' 的配置中未找到", req.TableName, req.BizName)
+	}
+
+	return &port.SchemaResult{
+		Tables: schemaTables,
+	}, nil
+}
+
+// HealthCheck 实现 port.DataSource.HealthCheck
+func (m *Manager) HealthCheck(ctx context.Context) error {
+	db, err := m.GetAnyDB()
+	if err != nil {
+		// 如果没有任何DB连接，可以认为是不健康的
+		return err
+	}
+	// Ping第一个可用的DB作为健康检查
+	return db.PingContext(ctx)
+}
+
+// Type 实现 port.DataSource.Type
+func (m *Manager) Type() string {
+	return "sqlite_builtin"
 }
