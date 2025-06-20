@@ -1,10 +1,11 @@
-// file: internal/transport/http/router/router.go
+// Package router file: internal/transport/http/router/router.go
 package router
 
 import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
+	"ArchiveAegis/internal/transport/http/middleware"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -42,6 +43,9 @@ func New(deps Dependencies) http.Handler {
 		MaxAge:           12 * time.Hour,
 	}))
 
+	// 2. 应用统一错误处理中间件，它将捕获后续所有路由产生的错误
+	router.Use(middleware.ErrorHandlingMiddleware())
+
 	authService := service.NewAuthenticator(deps.AuthDB)
 	v1 := router.Group("/api/v1")
 	{
@@ -49,7 +53,6 @@ func New(deps Dependencies) http.Handler {
 		authGroup := v1.Group("/auth")
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
-			// 未来可在这里添加 /refresh, /logout, /verify-2fa 等
 		}
 		systemGroup := v1.Group("/system")
 		{
@@ -59,7 +62,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 元数据/发现平面 (Metadata/Discovery Plane) ---
 		metaGroup := v1.Group("/meta")
-		metaGroup.Use(authMiddleware(authService)) // 发现API也需要认证
+		metaGroup.Use(authMiddleware(authService))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
 			metaGroup.GET("/schema/:bizName", schemaHandlerV1(deps.Registry))
@@ -68,7 +71,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 数据平面 (Data Plane) ---
 		dataGroup := v1.Group("/data")
-		dataGroup.Use(authMiddleware(authService)) // 数据API需要认证
+		dataGroup.Use(authMiddleware(authService))
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
@@ -76,7 +79,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 控制平面 (Control Plane) ---
 		adminGroup := v1.Group("/admin")
-		adminGroup.Use(authMiddleware(authService), requireAdmin()) // 控制平面需要管理员权限
+		adminGroup.Use(authMiddleware(authService), requireAdmin())
 		{
 			adminGroup.GET("/resources/datasources/configured-names", adminGetConfiguredBizNamesHandler(deps.AdminConfigService))
 
@@ -86,11 +89,9 @@ func New(deps Dependencies) http.Handler {
 				securityGroup.PUT("/rate-limiting/global", adminUpdateIPLimitSettingsHandler(deps.AdminConfigService))
 			}
 
-			// 按资源 "datasources" 组织 biz 相关的配置
 			bizConfigGroup := adminGroup.Group("/resources/datasources/:bizName")
 			{
 				bizConfigGroup.GET("/", getBizConfigHandler(deps.AdminConfigService))
-				// ✅ 重构: 移除了不再需要的 deps.AuthDB 依赖
 				bizConfigGroup.PUT("/settings", updateBizOverallSettingsHandler(deps.AdminConfigService))
 				bizConfigGroup.PUT("/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService))
 				bizConfigGroup.GET("/rate-limit", adminGetBizRateLimitHandler(deps.AdminConfigService))
@@ -133,6 +134,7 @@ func requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := service.ClaimFrom(c.Request)
 		if claims == nil {
+			// 对于认证和授权中间件，我们直接返回响应，因为错误处理中间件可能在此之前运行
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "需要认证"})
 			return
 		}
@@ -168,13 +170,13 @@ func schemaHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 		bizName := c.Param("bizName")
 		dataSource, exists := registry[bizName]
 		if !exists {
-			c.JSON(http.StatusNotFound, gin.H{"error": "业务组 '" + bizName + "' 未找到或未注册"})
+			_ = c.Error(fmt.Errorf("业务组 '%s' 未找到或未注册", bizName)) // 使用错误中间件处理
 			return
 		}
 
 		schema, err := dataSource.GetSchema(c.Request.Context(), port.SchemaRequest{BizName: bizName})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取Schema失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 
@@ -188,16 +190,16 @@ func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.Hand
 		bizName := c.Query("biz")
 		tableName := c.Query("table")
 		if bizName == "" || tableName == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 'biz' 或 'table' 参数"})
+			_ = c.Error(errors.New("缺少 'biz' 或 'table' 参数"))
 			return
 		}
 		viewConfig, err := configService.GetDefaultViewConfig(c.Request.Context(), bizName, tableName)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取表现层配置时发生内部错误"})
+			_ = c.Error(err)
 			return
 		}
 		if viewConfig == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("未找到业务 '%s' 表 '%s' 的默认表现层配置", bizName, tableName)})
+			_ = c.Error(fmt.Errorf("未找到业务 '%s' 表 '%s' 的默认表现层配置", bizName, tableName))
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": viewConfig})
@@ -223,13 +225,13 @@ func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var reqBody RequestBody
 		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 
 		dataSource, exists := registry[reqBody.BizName]
 		if !exists {
-			c.JSON(http.StatusNotFound, gin.H{"error": "业务组 '" + reqBody.BizName + "' 未找到或未注册"})
+			_ = c.Error(port.ErrBizNotFound)
 			return
 		}
 
@@ -255,13 +257,7 @@ func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 		result, err := dataSource.Query(c.Request.Context(), queryReq)
 		if err != nil {
 			log.Printf("ERROR: queryHandlerV1 query failed for biz '%s': %v", reqBody.BizName, err)
-			if errors.Is(err, port.ErrPermissionDenied) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "查询权限不足"})
-			} else if errors.Is(err, port.ErrTableNotFoundInBiz) || errors.Is(err, port.ErrBizNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败: " + err.Error()})
-			}
+			_ = c.Error(err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": result.Data, "total": result.Total})
@@ -283,7 +279,6 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 		Table   string            `json:"table" binding:"required"`
 		Filters []port.QueryParam `json:"filters" binding:"required"`
 	}
-
 	type RequestBody struct {
 		BizName    string         `json:"biz_name" binding:"required"`
 		Operation  string         `json:"operation" binding:"required,oneof=create update delete"`
@@ -295,13 +290,13 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var reqBody RequestBody
 		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 
 		dataSource, exists := registry[reqBody.BizName]
 		if !exists {
-			c.JSON(http.StatusNotFound, gin.H{"error": "业务组 '" + reqBody.BizName + "' 未找到或未注册"})
+			_ = c.Error(port.ErrBizNotFound)
 			return
 		}
 
@@ -311,7 +306,7 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 		switch reqBody.Operation {
 		case "create":
 			if reqBody.CreateData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "create操作缺少'create_data'字段"})
+				_ = c.Error(errors.New("create操作缺少'create_data'字段"))
 				return
 			}
 			goReq.CreateOp = &port.CreateOperation{
@@ -320,7 +315,7 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			}
 		case "update":
 			if reqBody.UpdateData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "update操作缺少'update_data'字段"})
+				_ = c.Error(errors.New("update操作缺少'update_data'字段"))
 				return
 			}
 			goReq.UpdateOp = &port.UpdateOperation{
@@ -330,7 +325,7 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			}
 		case "delete":
 			if reqBody.DeleteData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "delete操作缺少'delete_data'字段"})
+				_ = c.Error(errors.New("delete操作缺少'delete_data'字段"))
 				return
 			}
 			goReq.DeleteOp = &port.DeleteOperation{
@@ -345,14 +340,9 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 		result, err := dataSource.Mutate(c.Request.Context(), goReq)
 		if err != nil {
 			log.Printf("ERROR: mutateHandlerV1 failed for biz '%s': %v", reqBody.BizName, err)
-			if errors.Is(err, port.ErrPermissionDenied) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "写操作权限不足"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "执行写操作失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
@@ -380,17 +370,18 @@ func loginHandler(db *sql.DB) gin.HandlerFunc {
 			Pass string `form:"pass" json:"pass" binding:"required"`
 		}
 		if err := c.ShouldBind(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "用户名或密码不能为空"})
+			_ = c.Error(err)
 			return
 		}
 		id, role, ok := service.CheckUser(db, req.User, req.Pass)
 		if !ok {
+			// 对于登录失败，我们直接返回401，不通过错误中间件
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码无效"})
 			return
 		}
 		token, err := service.GenToken(id, role)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成令牌失败"})
+			_ = c.Error(err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"token": token, "user": gin.H{"id": id, "username": req.User, "role": role}})
@@ -411,7 +402,7 @@ func setupHandler(db *sql.DB, token string, deadline time.Time) gin.HandlerFunc 
 
 		if c.Request.Method == http.MethodPost {
 			if service.UserCount(db) > 0 {
-				c.JSON(http.StatusForbidden, gin.H{"error": "系统已存在管理员账户，无法重复设置"})
+				_ = c.Error(errors.New("系统已存在管理员账户，无法重复设置"))
 				return
 			}
 			var req struct {
@@ -420,22 +411,21 @@ func setupHandler(db *sql.DB, token string, deadline time.Time) gin.HandlerFunc 
 				Pass  string `form:"pass" json:"pass" binding:"required"`
 			}
 			if err := c.ShouldBind(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "令牌、用户名或密码不能为空"})
+				_ = c.Error(err)
 				return
 			}
 			if req.Token != token || token == "" || time.Now().After(deadline) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "无效或过期的安装令牌"})
+				_ = c.Error(errors.New("无效或过期的安装令牌"))
 				return
 			}
 			if err := service.CreateAdmin(db, req.User, req.Pass); err != nil {
-				log.Printf("ERROR: [API /setup] 创建管理员 '%s' 失败: %v", req.User, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "创建管理员失败: " + err.Error()})
+				_ = c.Error(fmt.Errorf("创建管理员失败: %w", err))
 				return
 			}
 			id, _, _ := service.CheckUser(db, req.User, req.Pass)
 			jwtToken, err := service.GenToken(id, "admin")
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "为新管理员生成令牌失败"})
+				_ = c.Error(fmt.Errorf("为新管理员生成令牌失败: %w", err))
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"token": jwtToken, "user": gin.H{"id": id, "username": req.User, "role": "admin"}})
@@ -453,7 +443,7 @@ func adminGetConfiguredBizNamesHandler(configService port.QueryAdminConfigServic
 	return func(c *gin.Context) {
 		names, err := configService.GetAllConfiguredBizNames(c.Request.Context())
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取业务列表失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if names == nil {
@@ -467,11 +457,11 @@ func adminGetIPLimitSettingsHandler(configService port.QueryAdminConfigService) 
 	return func(c *gin.Context) {
 		settings, err := configService.GetIPLimitSettings(c.Request.Context())
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if settings == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "未找到IP速率限制配置"})
+			_ = c.Error(errors.New("未找到IP速率限制配置"))
 			return
 		}
 		c.JSON(http.StatusOK, settings)
@@ -482,11 +472,11 @@ func adminUpdateIPLimitSettingsHandler(configService port.QueryAdminConfigServic
 	return func(c *gin.Context) {
 		var payload domain.IPLimitSetting
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if err := configService.UpdateIPLimitSettings(c.Request.Context(), payload); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
@@ -498,11 +488,11 @@ func getBizConfigHandler(configService port.QueryAdminConfigService) gin.Handler
 		bizName := c.Param("bizName")
 		cfg, err := configService.GetBizQueryConfig(c.Request.Context(), bizName)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if cfg == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("业务 '%s' 未找到查询配置", bizName)})
+			_ = c.Error(port.ErrBizNotFound)
 			return
 		}
 		c.JSON(http.StatusOK, cfg)
@@ -514,11 +504,11 @@ func adminGetBizRateLimitHandler(configService port.QueryAdminConfigService) gin
 		bizName := c.Param("bizName")
 		settings, err := configService.GetBizRateLimitSettings(c.Request.Context(), bizName)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if settings == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "未找到该业务的速率限制配置"})
+			_ = c.Error(errors.New("未找到该业务的速率限制配置"))
 			return
 		}
 		c.JSON(http.StatusOK, settings)
@@ -530,11 +520,11 @@ func adminUpdateBizRateLimitHandler(configService port.QueryAdminConfigService) 
 		bizName := c.Param("bizName")
 		var payload domain.BizRateLimitSetting
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if err := configService.UpdateBizRateLimitSettings(c.Request.Context(), bizName, payload); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
@@ -546,7 +536,7 @@ func adminGetBizViewsHandler(configService port.QueryAdminConfigService) gin.Han
 		bizName := c.Param("bizName")
 		views, err := configService.GetAllViewConfigsForBiz(c.Request.Context(), bizName)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取视图配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if views == nil {
@@ -561,38 +551,33 @@ func adminUpdateBizViewsHandler(configService port.QueryAdminConfigService) gin.
 		bizName := c.Param("bizName")
 		var viewsData map[string][]*domain.ViewConfig
 		if err := c.ShouldBindJSON(&viewsData); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		if err := configService.UpdateAllViewsForBiz(c.Request.Context(), bizName, viewsData); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新视图配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
 	}
 }
 
-// updateBizOverallSettingsHandler 更新业务组的总体设置
 func updateBizOverallSettingsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
-		// 使用 domain.BizOverallSettings 来绑定 payload，支持部分更新
 		var payload domain.BizOverallSettings
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		if err := configService.UpdateBizOverallSettings(c.Request.Context(), bizName, payload); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新业务组设置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "业务组配置已更新"})
 	}
 }
 
-// adminUpdateBizSearchableTablesHandler 更新业务组可搜索的数据表列表
 func adminUpdateBizSearchableTablesHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
@@ -600,40 +585,34 @@ func adminUpdateBizSearchableTablesHandler(configService port.QueryAdminConfigSe
 			SearchableTables []string `json:"searchable_tables"`
 		}
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		if err := configService.UpdateBizSearchableTables(c.Request.Context(), bizName, payload.SearchableTables); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新可搜索表列表失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "可搜索表列表已更新"})
 	}
 }
 
-// adminUpdateTableFieldSettingsHandler 更新数据表的字段设置
 func adminUpdateTableFieldSettingsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
 		tableName := c.Param("tableName")
 		var payload []domain.FieldSetting
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		if err := configService.UpdateTableFieldSettings(c.Request.Context(), bizName, tableName, payload); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新字段配置失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "字段配置已更新"})
 	}
 }
 
-// adminUpdateTablePermissionsHandler 更新数据表的写入权限
 func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	type permissionsPayload struct {
 		AllowCreate bool `json:"allow_create"`
@@ -647,21 +626,18 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 
 		var payload permissionsPayload
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		perms := domain.TableConfig{
 			AllowCreate: payload.AllowCreate,
 			AllowUpdate: payload.AllowUpdate,
 			AllowDelete: payload.AllowDelete,
 		}
-
 		if err := configService.UpdateTableWritePermissions(c.Request.Context(), bizName, tableName, perms); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新权限失败: " + err.Error()})
+			_ = c.Error(err)
 			return
 		}
-
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "表的写权限已成功更新。"})
 	}
 }
