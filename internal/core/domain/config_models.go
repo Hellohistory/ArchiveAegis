@@ -1,6 +1,13 @@
 // Package domain file: internal/core/domain/config_models.go
 package domain
 
+// BizOverallSettings 定义了业务组的总体设置，用于更新操作。
+// 使用指针类型是为了方便地判断客户端是否传递了某个字段，从而实现部分更新。
+type BizOverallSettings struct {
+	IsPubliclySearchable *bool   `json:"is_publicly_searchable"`
+	DefaultQueryTable    *string `json:"default_query_table"`
+}
+
 // BizQueryConfig 定义了单个业务组的完整查询配置
 type BizQueryConfig struct {
 	BizName              string                  `json:"biz_name"`

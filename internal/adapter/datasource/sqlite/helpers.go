@@ -129,10 +129,12 @@ func buildDeleteSQL(tableName string, filters []port.QueryParam) (string, []inte
 // buildWhereClause 是一个用于构建 WHERE 子句的通用辅助函数
 func buildWhereClause(filters []port.QueryParam) (string, []interface{}, error) {
 	if len(filters) == 0 {
-		return "", nil, nil
+		return "", make([]interface{}, 0), nil
 	}
+
 	var conditions []string
-	var args []interface{}
+	args := make([]interface{}, 0, len(filters))
+
 	for i, p := range filters {
 		var operator, value string
 		if p.Fuzzy {

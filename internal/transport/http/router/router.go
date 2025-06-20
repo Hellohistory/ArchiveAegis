@@ -71,7 +71,6 @@ func New(deps Dependencies) http.Handler {
 		dataGroup.Use(authMiddleware(authService)) // 数据API需要认证
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
-
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
 		}
 
@@ -91,8 +90,9 @@ func New(deps Dependencies) http.Handler {
 			bizConfigGroup := adminGroup.Group("/resources/datasources/:bizName")
 			{
 				bizConfigGroup.GET("/", getBizConfigHandler(deps.AdminConfigService))
-				bizConfigGroup.PUT("/settings", updateBizOverallSettingsHandler(deps.AdminConfigService, deps.AuthDB))
-				bizConfigGroup.PUT("/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService, deps.AuthDB))
+				// ✅ 重构: 移除了不再需要的 deps.AuthDB 依赖
+				bizConfigGroup.PUT("/settings", updateBizOverallSettingsHandler(deps.AdminConfigService))
+				bizConfigGroup.PUT("/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService))
 				bizConfigGroup.GET("/rate-limit", adminGetBizRateLimitHandler(deps.AdminConfigService))
 				bizConfigGroup.PUT("/rate-limit", adminUpdateBizRateLimitHandler(deps.AdminConfigService))
 				bizConfigGroup.GET("/views", adminGetBizViewsHandler(deps.AdminConfigService))
@@ -100,10 +100,8 @@ func New(deps Dependencies) http.Handler {
 
 				tableGroup := bizConfigGroup.Group("/tables/:tableName")
 				{
-					tableGroup.PUT("/fields", adminUpdateTableFieldSettingsHandler(deps.AdminConfigService, deps.AuthDB))
-
+					tableGroup.PUT("/fields", adminUpdateTableFieldSettingsHandler(deps.AdminConfigService))
 					tableGroup.PUT("/permissions", adminUpdateTablePermissionsHandler(deps.AdminConfigService))
-
 				}
 			}
 		}
@@ -116,6 +114,7 @@ func New(deps Dependencies) http.Handler {
 //  Gin 中间件 (Middleware)
 // =============================================================================
 
+// authMiddleware 是一个将 service.Authenticator 集成到 gin 流程的中间件
 func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +128,7 @@ func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	}
 }
 
+// requireAdmin 是一个确保只有管理员角色才能访问的中间件
 func requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := service.ClaimFrom(c.Request)
@@ -150,6 +150,7 @@ func requireAdmin() gin.HandlerFunc {
 
 // --- V1 元数据平面处理器 ---
 
+// bizHandlerV1 返回所有已注册的业务组名称
 func bizHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizNames := make([]string, 0, len(registry))
@@ -161,6 +162,7 @@ func bizHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	}
 }
 
+// schemaHandlerV1 返回指定业务组的 Schema 信息
 func schemaHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
@@ -170,7 +172,6 @@ func schemaHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			return
 		}
 
-		// 注意：第二个参数 tableName 为空，表示获取整个 biz 的 schema
 		schema, err := dataSource.GetSchema(c.Request.Context(), port.SchemaRequest{BizName: bizName})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取Schema失败: " + err.Error()})
@@ -181,6 +182,7 @@ func schemaHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	}
 }
 
+// presentationsHandlerV1 返回指定业务组和表的默认表现层（视图）配置
 func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Query("biz")
@@ -204,8 +206,8 @@ func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.Hand
 
 // --- V1 数据平面处理器 ---
 
+// queryHandlerV1 处理统一的数据查询请求
 func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	// 定义请求体的结构
 	type QueryPayload struct {
 		Table          string            `json:"table"`
 		FieldsToReturn []string          `json:"fields_to_return"`
@@ -231,14 +233,13 @@ func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			return
 		}
 
-		// 默认分页
 		if reqBody.Query.Page <= 0 {
 			reqBody.Query.Page = 1
 		}
 		if reqBody.Query.Size <= 0 {
 			reqBody.Query.Size = 50
 		}
-		if reqBody.Query.Size > 2000 { // 安全限制
+		if reqBody.Query.Size > 2000 {
 			reqBody.Query.Size = 2000
 		}
 
@@ -248,13 +249,12 @@ func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			QueryParams:    reqBody.Query.Filters,
 			Page:           reqBody.Query.Page,
 			Size:           reqBody.Query.Size,
-			FieldsToReturn: reqBody.Query.FieldsToReturn, // 传递要求返回的字段
+			FieldsToReturn: reqBody.Query.FieldsToReturn,
 		}
 
 		result, err := dataSource.Query(c.Request.Context(), queryReq)
 		if err != nil {
 			log.Printf("ERROR: queryHandlerV1 query failed for biz '%s': %v", reqBody.BizName, err)
-			// 现在这些 port.Err... 引用是合法的，因为它们是接口契约的一部分
 			if errors.Is(err, port.ErrPermissionDenied) {
 				c.JSON(http.StatusForbidden, gin.H{"error": "查询权限不足"})
 			} else if errors.Is(err, port.ErrTableNotFoundInBiz) || errors.Is(err, port.ErrBizNotFound) {
@@ -268,12 +268,100 @@ func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	}
 }
 
+// mutateHandlerV1 处理统一的数据写入（增删改）请求
+func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+	type CreatePayload struct {
+		Table string                 `json:"table" binding:"required"`
+		Data  map[string]interface{} `json:"data" binding:"required"`
+	}
+	type UpdatePayload struct {
+		Table   string                 `json:"table" binding:"required"`
+		Data    map[string]interface{} `json:"data" binding:"required"`
+		Filters []port.QueryParam      `json:"filters" binding:"required"`
+	}
+	type DeletePayload struct {
+		Table   string            `json:"table" binding:"required"`
+		Filters []port.QueryParam `json:"filters" binding:"required"`
+	}
+
+	type RequestBody struct {
+		BizName    string         `json:"biz_name" binding:"required"`
+		Operation  string         `json:"operation" binding:"required,oneof=create update delete"`
+		CreateData *CreatePayload `json:"create_data,omitempty"`
+		UpdateData *UpdatePayload `json:"update_data,omitempty"`
+		DeleteData *DeletePayload `json:"delete_data,omitempty"`
+	}
+
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求体: " + err.Error()})
+			return
+		}
+
+		dataSource, exists := registry[reqBody.BizName]
+		if !exists {
+			c.JSON(http.StatusNotFound, gin.H{"error": "业务组 '" + reqBody.BizName + "' 未找到或未注册"})
+			return
+		}
+
+		var goReq port.MutateRequest
+		goReq.BizName = reqBody.BizName
+
+		switch reqBody.Operation {
+		case "create":
+			if reqBody.CreateData == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "create操作缺少'create_data'字段"})
+				return
+			}
+			goReq.CreateOp = &port.CreateOperation{
+				TableName: reqBody.CreateData.Table,
+				Data:      reqBody.CreateData.Data,
+			}
+		case "update":
+			if reqBody.UpdateData == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "update操作缺少'update_data'字段"})
+				return
+			}
+			goReq.UpdateOp = &port.UpdateOperation{
+				TableName: reqBody.UpdateData.Table,
+				Data:      reqBody.UpdateData.Data,
+				Filters:   reqBody.UpdateData.Filters,
+			}
+		case "delete":
+			if reqBody.DeleteData == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "delete操作缺少'delete_data'字段"})
+				return
+			}
+			goReq.DeleteOp = &port.DeleteOperation{
+				TableName: reqBody.DeleteData.Table,
+				Filters:   reqBody.DeleteData.Filters,
+			}
+		}
+
+		claims := service.ClaimFrom(c.Request)
+		log.Printf("审计日志: 用户ID '%d' 正在尝试对业务 '%s' 执行 '%s' 操作。", claims.ID, reqBody.BizName, reqBody.Operation)
+
+		result, err := dataSource.Mutate(c.Request.Context(), goReq)
+		if err != nil {
+			log.Printf("ERROR: mutateHandlerV1 failed for biz '%s': %v", reqBody.BizName, err)
+			if errors.Is(err, port.ErrPermissionDenied) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "写操作权限不足"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "执行写操作失败: " + err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": result})
+	}
+}
+
 // =============================================================================
-//  旧处理器实现 (暂时保留，在新路由结构下被调用)
+//  系统与认证处理器
 // =============================================================================
 
-// --- 系统与认证处理器 ---
-
+// statusHandler 返回系统状态，用于前端判断是否需要进入安装流程
 func statusHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if service.UserCount(db) > 0 {
@@ -284,6 +372,7 @@ func statusHandler(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// loginHandler 处理用户登录请求
 func loginHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
@@ -308,6 +397,7 @@ func loginHandler(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
+// setupHandler 处理首次安装时的管理员创建请求
 func setupHandler(db *sql.DB, token string, deadline time.Time) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodGet {
@@ -355,7 +445,9 @@ func setupHandler(db *sql.DB, token string, deadline time.Time) gin.HandlerFunc 
 	}
 }
 
-// --- 管理员 API 处理器 ---
+// =============================================================================
+//  管理员 API 处理器
+// =============================================================================
 
 func adminGetConfiguredBizNamesHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -417,53 +509,6 @@ func getBizConfigHandler(configService port.QueryAdminConfigService) gin.Handler
 	}
 }
 
-func updateBizOverallSettingsHandler(configService port.QueryAdminConfigService, db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		bizName := c.Param("bizName")
-		var payload struct {
-			IsPubliclySearchable *bool   `json:"is_publicly_searchable"`
-			DefaultQueryTable    *string `json:"default_query_table"`
-		}
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
-			return
-		}
-		// TODO: 此处的具体实现应迁移到 service 层
-		configService.InvalidateCacheForBiz(bizName)
-		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "业务组配置已更新"})
-	}
-}
-
-func adminUpdateBizSearchableTablesHandler(configService port.QueryAdminConfigService, db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		bizName := c.Param("bizName")
-		var payload struct {
-			SearchableTables []string `json:"searchable_tables"`
-		}
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
-			return
-		}
-		// TODO: 此处的具体实现应迁移到 service 层
-		configService.InvalidateCacheForBiz(bizName)
-		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "可搜索表列表已更新"})
-	}
-}
-
-func adminUpdateTableFieldSettingsHandler(configService port.QueryAdminConfigService, db *sql.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		bizName := c.Param("bizName")
-		var payload []domain.FieldSetting
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
-			return
-		}
-		// TODO: 此处的具体实现应迁移到 service 层
-		configService.InvalidateCacheForBiz(bizName)
-		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "字段配置已更新"})
-	}
-}
-
 func adminGetBizRateLimitHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
@@ -492,7 +537,6 @@ func adminUpdateBizRateLimitHandler(configService port.QueryAdminConfigService) 
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新配置失败: " + err.Error()})
 			return
 		}
-		configService.InvalidateCacheForBiz(bizName)
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
 	}
 }
@@ -524,13 +568,73 @@ func adminUpdateBizViewsHandler(configService port.QueryAdminConfigService) gin.
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新视图配置失败: " + err.Error()})
 			return
 		}
-		configService.InvalidateCacheForBiz(bizName)
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
 	}
 }
 
+// updateBizOverallSettingsHandler 更新业务组的总体设置
+func updateBizOverallSettingsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		bizName := c.Param("bizName")
+		// 使用 domain.BizOverallSettings 来绑定 payload，支持部分更新
+		var payload domain.BizOverallSettings
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			return
+		}
+
+		if err := configService.UpdateBizOverallSettings(c.Request.Context(), bizName, payload); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新业务组设置失败: " + err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "业务组配置已更新"})
+	}
+}
+
+// adminUpdateBizSearchableTablesHandler 更新业务组可搜索的数据表列表
+func adminUpdateBizSearchableTablesHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		bizName := c.Param("bizName")
+		var payload struct {
+			SearchableTables []string `json:"searchable_tables"`
+		}
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			return
+		}
+
+		if err := configService.UpdateBizSearchableTables(c.Request.Context(), bizName, payload.SearchableTables); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新可搜索表列表失败: " + err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "可搜索表列表已更新"})
+	}
+}
+
+// adminUpdateTableFieldSettingsHandler 更新数据表的字段设置
+func adminUpdateTableFieldSettingsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		bizName := c.Param("bizName")
+		tableName := c.Param("tableName")
+		var payload []domain.FieldSetting
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的JSON请求体: " + err.Error()})
+			return
+		}
+
+		if err := configService.UpdateTableFieldSettings(c.Request.Context(), bizName, tableName, payload); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新字段配置失败: " + err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "字段配置已更新"})
+	}
+}
+
+// adminUpdateTablePermissionsHandler 更新数据表的写入权限
 func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigService) gin.HandlerFunc {
-	// 定义用于绑定请求JSON的结构体
 	type permissionsPayload struct {
 		AllowCreate bool `json:"allow_create"`
 		AllowUpdate bool `json:"allow_update"`
@@ -547,7 +651,6 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 			return
 		}
 
-		// 将载荷转换为 domain.TableConfig，只填充我们关心的字段
 		perms := domain.TableConfig{
 			AllowCreate: payload.AllowCreate,
 			AllowUpdate: payload.AllowUpdate,
@@ -560,100 +663,5 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 		}
 
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "表的写权限已成功更新。"})
-	}
-}
-
-func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	// 为不同操作定义清晰的Payload结构
-	type CreatePayload struct {
-		Table string                 `json:"table" binding:"required"`
-		Data  map[string]interface{} `json:"data" binding:"required"`
-	}
-	type UpdatePayload struct {
-		Table   string                 `json:"table" binding:"required"`
-		Data    map[string]interface{} `json:"data" binding:"required"`
-		Filters []port.QueryParam      `json:"filters" binding:"required"`
-	}
-	type DeletePayload struct {
-		Table   string            `json:"table" binding:"required"`
-		Filters []port.QueryParam `json:"filters" binding:"required"`
-	}
-
-	// 定义总的请求体结构
-	type RequestBody struct {
-		BizName    string         `json:"biz_name" binding:"required"`
-		Operation  string         `json:"operation" binding:"required,oneof=create update delete"`
-		CreateData *CreatePayload `json:"create_data,omitempty"`
-		UpdateData *UpdatePayload `json:"update_data,omitempty"`
-		DeleteData *DeletePayload `json:"delete_data,omitempty"`
-	}
-
-	return func(c *gin.Context) {
-		var reqBody RequestBody
-		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求体: " + err.Error()})
-			return
-		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			c.JSON(http.StatusNotFound, gin.H{"error": "业务组 '" + reqBody.BizName + "' 未找到或未注册"})
-			return
-		}
-
-		// 1. 将HTTP请求体转换为内部的 port.MutateRequest
-		var goReq port.MutateRequest
-		goReq.BizName = reqBody.BizName
-
-		switch reqBody.Operation {
-		case "create":
-			if reqBody.CreateData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "create操作缺少'create_data'字段"})
-				return
-			}
-			goReq.CreateOp = &port.CreateOperation{
-				TableName: reqBody.CreateData.Table,
-				Data:      reqBody.CreateData.Data,
-			}
-		case "update":
-			if reqBody.UpdateData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "update操作缺少'update_data'字段"})
-				return
-			}
-			goReq.UpdateOp = &port.UpdateOperation{
-				TableName: reqBody.UpdateData.Table,
-				Data:      reqBody.UpdateData.Data,
-				Filters:   reqBody.UpdateData.Filters,
-			}
-		case "delete":
-			if reqBody.DeleteData == nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "delete操作缺少'delete_data'字段"})
-				return
-			}
-			goReq.DeleteOp = &port.DeleteOperation{
-				TableName: reqBody.DeleteData.Table,
-				Filters:   reqBody.DeleteData.Filters,
-			}
-		}
-
-		// 2. 审计日志 (这是一个简化的示例，未来可以更详细)
-		claims := service.ClaimFrom(c.Request)
-		log.Printf("AUDIT: 用户ID '%d' 正在尝试对业务 '%s' 执行 '%s' 操作。", claims.ID, reqBody.BizName, reqBody.Operation)
-
-		// 3. 将请求分发给适配器
-		result, err := dataSource.Mutate(c.Request.Context(), goReq)
-		if err != nil {
-			log.Printf("ERROR: mutateHandlerV1 failed for biz '%s': %v", reqBody.BizName, err)
-			if errors.Is(err, port.ErrPermissionDenied) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "写操作权限不足"})
-				return
-			}
-			// 其他错误处理...
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "执行写操作失败: " + err.Error()})
-			return
-		}
-
-		// 4. 返回成功结果
-		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }

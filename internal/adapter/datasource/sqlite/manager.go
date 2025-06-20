@@ -59,6 +59,30 @@ func NewManager(cfgService port.QueryAdminConfigService) *Manager {
 	}
 }
 
+// Close 安全地关闭由 Manager 管理的所有数据库连接。
+// 这是为了确保在程序退出或测试清理时，文件句柄能被正确释放。
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var firstErr error
+	for bizName, libs := range m.group {
+		for libName, db := range libs {
+			if err := db.Close(); err != nil {
+				log.Printf("ERROR: Closing database %s/%s failed: %v", bizName, libName, err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+	}
+	// 清空内部状态，防止内存泄漏
+	m.group = make(map[string]map[string]*sql.DB)
+	m.dbSchemaCache = make(map[*sql.DB]*dbPhysicalSchemaInfo)
+
+	return firstErr
+}
+
 // Type 实现 port.DataSource.Type 接口，返回适配器类型。
 func (m *Manager) Type() string {
 	return "sqlite_builtin"
