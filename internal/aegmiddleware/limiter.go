@@ -1,13 +1,13 @@
 package aegmiddleware
 
 import (
-	"ArchiveAegis/internal/core/port" // ✅ 依赖倒置：导入port接口包
+	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"bufio"
-	"bytes" // ✅ 新增：用于处理请求体
+	"bytes"
 	"context"
 	"encoding/json"
-	"io" // ✅ 新增：用于处理请求体
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -31,7 +31,6 @@ type limiterEntry struct {
 
 // BusinessRateLimiter 是一个统一的结构，管理所有业务性能相关的速率限制。
 type BusinessRateLimiter struct {
-	// ✅ 修正：依赖于抽象接口，而不是具体实现
 	configService port.QueryAdminConfigService
 
 	globalLimiter *rate.Limiter
@@ -51,7 +50,6 @@ type BusinessRateLimiter struct {
 }
 
 // NewBusinessRateLimiter 创建一个新的、功能完备的业务速率限制器。
-// ✅ 修正：构造函数接收的是 port.QueryAdminConfigService 接口类型
 func NewBusinessRateLimiter(cs port.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
 	brl := &BusinessRateLimiter{
 		configService: cs,
