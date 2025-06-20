@@ -14,19 +14,21 @@ import (
 	"testing"
 )
 
-// ✅ FIX: The mock struct now holds function fields to allow for dynamic behavior in tests.
+// mockAdminConfigService 是一个测试替身，它实现了 port.QueryAdminConfigService 接口
 type mockAdminConfigService struct {
-	// We define function fields that match the interface's method signatures.
-	GetBizQueryConfigFunc func(ctx context.Context, bizName string) (*domain.BizQueryConfig, error)
+	// 定义函数字段，以便在测试中动态替换其行为
+	GetBizQueryConfigFunc           func(ctx context.Context, bizName string) (*domain.BizQueryConfig, error)
+	UpdateBizOverallSettingsFunc    func(ctx context.Context, bizName string, settings domain.BizOverallSettings) error
+	UpdateBizSearchableTablesFunc   func(ctx context.Context, bizName string, tableNames []string) error
+	UpdateTableFieldSettingsFunc    func(ctx context.Context, bizName, tableName string, fields []domain.FieldSetting) error
+	UpdateTableWritePermissionsFunc func(ctx context.Context, bizName, tableName string, perms domain.TableConfig) error
 }
 
-// ✅ FIX: The method now calls the function field if it's set, providing a flexible way to control mock behavior.
+// GetBizQueryConfig 调用对应的函数字段，如果未设置，则返回一个默认的只读配置
 func (m *mockAdminConfigService) GetBizQueryConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
-	// If a custom function is provided for the test, call it.
 	if m.GetBizQueryConfigFunc != nil {
 		return m.GetBizQueryConfigFunc(ctx, bizName)
 	}
-	// Otherwise, return a default configuration suitable for simple read tests.
 	return &domain.BizQueryConfig{
 		BizName:              bizName,
 		IsPubliclySearchable: true,
@@ -44,7 +46,38 @@ func (m *mockAdminConfigService) GetBizQueryConfig(ctx context.Context, bizName 
 	}, nil
 }
 
-// Other interface methods are implemented to satisfy the interface, but are not used in these tests.
+// ✅ FIX: 添加所有在 port.QueryAdminConfigService 接口中新增的方法的桩实现
+
+func (m *mockAdminConfigService) UpdateBizOverallSettings(ctx context.Context, bizName string, settings domain.BizOverallSettings) error {
+	if m.UpdateBizOverallSettingsFunc != nil {
+		return m.UpdateBizOverallSettingsFunc(ctx, bizName, settings)
+	}
+	return nil
+}
+
+func (m *mockAdminConfigService) UpdateBizSearchableTables(ctx context.Context, bizName string, tableNames []string) error {
+	if m.UpdateBizSearchableTablesFunc != nil {
+		return m.UpdateBizSearchableTablesFunc(ctx, bizName, tableNames)
+	}
+	return nil
+}
+
+func (m *mockAdminConfigService) UpdateTableFieldSettings(ctx context.Context, bizName, tableName string, fields []domain.FieldSetting) error {
+	if m.UpdateTableFieldSettingsFunc != nil {
+		return m.UpdateTableFieldSettingsFunc(ctx, bizName, tableName, fields)
+	}
+	return nil
+}
+
+func (m *mockAdminConfigService) UpdateTableWritePermissions(ctx context.Context, bizName, tableName string, perms domain.TableConfig) error {
+	if m.UpdateTableWritePermissionsFunc != nil {
+		return m.UpdateTableWritePermissionsFunc(ctx, bizName, tableName, perms)
+	}
+	return nil
+}
+
+// --- 其他已有的桩实现 ---
+
 func (m *mockAdminConfigService) GetDefaultViewConfig(ctx context.Context, bizName, tableName string) (*domain.ViewConfig, error) {
 	return nil, nil
 }
@@ -56,9 +89,6 @@ func (m *mockAdminConfigService) UpdateAllViewsForBiz(ctx context.Context, bizNa
 }
 func (m *mockAdminConfigService) GetAllConfiguredBizNames(ctx context.Context) ([]string, error) {
 	return nil, nil
-}
-func (m *mockAdminConfigService) UpdateTableWritePermissions(ctx context.Context, bizName, tableName string, perms domain.TableConfig) error {
-	return nil
 }
 func (m *mockAdminConfigService) InvalidateCacheForBiz(bizName string) {}
 func (m *mockAdminConfigService) InvalidateAllCaches()                 {}
@@ -81,7 +111,7 @@ func (m *mockAdminConfigService) UpdateBizRateLimitSettings(ctx context.Context,
 	return nil
 }
 
-// createTestDB is a helper function to create a temporary SQLite database and populate it with data.
+// createTestDB 是一个辅助函数，用于创建一个临时的SQLite数据库并填充数据。
 func createTestDB(t *testing.T, dir, filename string, numRows int) string {
 	t.Helper()
 	path := filepath.Join(dir, filename)
@@ -107,8 +137,6 @@ func createTestDB(t *testing.T, dir, filename string, numRows int) string {
 
 func TestManager_Query_TotalCount(t *testing.T) {
 	ctx := context.Background()
-	// ✅ FIX: We now instantiate the mock without a custom function,
-	// so it will use its default behavior which is suitable for this read test.
 	mockCfgSvc := &mockAdminConfigService{}
 
 	instanceDir := t.TempDir()
@@ -151,12 +179,10 @@ func TestManager_Query_TotalCount(t *testing.T) {
 	}
 }
 
-// TestManager_Mutate_FailFast tests if a write operation fails fast when one of the databases fails.
+// TestManager_Mutate_FailFast 测试写操作在某个库失败时，是否会快速失败并返回特定错误。
 func TestManager_Mutate_FailFast(t *testing.T) {
 	ctx := context.Background()
 
-	// ✅ FIX: We instantiate the mock and assign a specific function to its GetBizQueryConfigFunc field.
-	// This function returns a config that specifically allows write operations for this test.
 	mockCfgSvc := &mockAdminConfigService{
 		GetBizQueryConfigFunc: func(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
 			return &domain.BizQueryConfig{
@@ -165,7 +191,7 @@ func TestManager_Mutate_FailFast(t *testing.T) {
 				Tables: map[string]*domain.TableConfig{
 					"test_data": {
 						TableName:    "test_data",
-						AllowCreate:  true, // Allow creation
+						AllowCreate:  true, // 允许创建
 						IsSearchable: true,
 						Fields:       map[string]domain.FieldSetting{"id": {IsReturnable: true}, "data": {IsReturnable: true}},
 					},
@@ -180,10 +206,10 @@ func TestManager_Mutate_FailFast(t *testing.T) {
 		t.Fatalf("Failed to create biz dir: %v", err)
 	}
 
-	// DB1: Normal table
+	// DB1: 普通表
 	createTestDB(t, bizDir, "db1.db", 0)
 
-	// DB2: Table with a UNIQUE constraint to cause a failure
+	// DB2: 有唯一约束的表，这将导致第二次插入失败
 	db2Path := filepath.Join(bizDir, "db2.db")
 	db2, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_busy_timeout=5000", db2Path))
 	if err != nil {
@@ -205,13 +231,13 @@ func TestManager_Mutate_FailFast(t *testing.T) {
 		t.Fatalf("Manager InitForBiz failed: %v", err)
 	}
 
-	// This mutate operation will succeed on db1 but fail on db2 due to the UNIQUE constraint.
+	// 这个操作在 db1 会成功，但在 db2 会因为违反唯一约束而失败
 	mutateReq := port.MutateRequest{
 		BizName: "fail_fast_biz",
 		CreateOp: &port.CreateOperation{
 			TableName: "test_data",
 			Data: map[string]interface{}{
-				"data": "unique_value", // This value already exists in db2
+				"data": "unique_value", // 这个值在db2中已经存在
 			},
 		},
 	}
