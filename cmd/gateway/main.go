@@ -29,7 +29,7 @@ import (
 )
 
 // version 定义当前程序的版本号
-const version = "v1.0.0-alpha2" // 版本升级，标志着插件系统集成
+const version = "v1.0.0-alpha3" // 版本升级，标志着插件系统集成
 
 // Config 结构体保持不变
 type Config struct {
