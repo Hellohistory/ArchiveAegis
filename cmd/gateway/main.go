@@ -84,10 +84,9 @@ func main() {
 	}
 	log.Println("✅ 服务层: AdminConfigService 初始化完成")
 
-	if err := service.InitUserTable(sysDB); err != nil {
-		log.Fatalf("CRITICAL: 初始化用户表失败: %v", err)
+	if err := service.InitPlatformTables(sysDB); err != nil {
+		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
 	}
-	log.Println("✅ 服务层: AuthService (用户表) 初始化完成")
 
 	dataSourceRegistry := make(map[string]port.DataSource)
 
