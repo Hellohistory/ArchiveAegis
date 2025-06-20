@@ -49,7 +49,6 @@ func (m *Manager) GetSchema(ctx context.Context, req port.SchemaRequest) (*port.
 			continue
 		}
 
-		// ✅ FIX: Changed port.Field_Description to port.FieldDescription
 		var fields []port.FieldDescription
 		for _, fieldSetting := range tableConfig.Fields {
 			fields = append(fields, port.FieldDescription{

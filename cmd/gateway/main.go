@@ -29,7 +29,6 @@ import (
 // 版本升级，标志着动态插件系统的实现
 const version = "v1.0.0-alpha3"
 
-// 新的配置结构体，用 `Plugins` 替代了 `DataSources`
 type Config struct {
 	Server  ServerConfig   `mapstructure:"server"`
 	Plugins []PluginConfig `mapstructure:"plugins"`
@@ -97,14 +96,14 @@ func main() {
 			continue
 		}
 
-		// 步骤 1: 连接到插件
+		// 连接到插件
 		adapter, err := grpc_client.New(pluginCfg.Address)
 		if err != nil {
 			log.Printf("⚠️  无法连接到插件 '%s': %v，已跳过。", pluginCfg.Address, err)
 			continue
 		}
 
-		// 步骤 2: 调用 GetPluginInfo 获取插件的自我描述信息
+		// 调用 GetPluginInfo 获取插件的自我描述信息
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		info, err := adapter.GetPluginInfo(ctx)
 		cancel() // 及时释放上下文资源
@@ -117,7 +116,7 @@ func main() {
 
 		log.Printf("🤝 已成功从 '%s' 获取插件信息: [名称: %s, 版本: %s]", pluginCfg.Address, info.Name, info.Version)
 
-		// 步骤 3: 根据插件信息，将其注册到网关的业务组中
+		// 根据插件信息，将其注册到网关的业务组中
 		if len(info.SupportedBizNames) == 0 {
 			log.Printf("⚠️  插件 '%s' 未声明任何支持的业务组 (supported_biz_names)，已跳过。", info.Name)
 			_ = adapter.Close()
@@ -245,7 +244,7 @@ func initViper() error {
 	if err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			log.Println("警告: 未找到 config.yaml。将创建默认配置文件 config.yaml。")
-			// ✅ 更新默认配置文件以匹配新的结构
+
 			defaultConfig := `
 # ArchiveAegis 平台默认配置文件 (V2 - 动态插件)
 server:
