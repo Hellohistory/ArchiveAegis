@@ -3,7 +3,7 @@ package main
 
 import (
 	"ArchiveAegis/internal/adapter/datasource/grpc_client"
-	"ArchiveAegis/internal/adapter/datasource/sqlite"
+	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/transport/http/router"
@@ -22,19 +22,17 @@ import (
 	"syscall"
 	"time"
 
-	"ArchiveAegis/internal/aegobserve"
-
 	"github.com/spf13/viper"
 	_ "modernc.org/sqlite"
 )
 
-// version 定义当前程序的版本号
-const version = "v1.0.0-alpha3" // 版本升级，标志着插件系统集成
+// 版本升级，标志着动态插件系统的实现
+const version = "v1.0.0-alpha3"
 
-// Config 结构体保持不变
+// 新的配置结构体，用 `Plugins` 替代了 `DataSources`
 type Config struct {
-	Server      ServerConfig       `mapstructure:"server"`
-	DataSources []DataSourceConfig `mapstructure:"datasources"`
+	Server  ServerConfig   `mapstructure:"server"`
+	Plugins []PluginConfig `mapstructure:"plugins"`
 }
 
 type ServerConfig struct {
@@ -42,11 +40,9 @@ type ServerConfig struct {
 	LogLevel string `mapstructure:"log_level"`
 }
 
-type DataSourceConfig struct {
-	Name    string                 `mapstructure:"name"`
-	Type    string                 `mapstructure:"type"`
-	Enabled bool                   `mapstructure:"enabled"`
-	Params  map[string]interface{} `mapstructure:"params"`
+type PluginConfig struct {
+	Address string `mapstructure:"address"`
+	Enabled bool   `mapstructure:"enabled"`
 }
 
 func main() {
@@ -88,56 +84,67 @@ func main() {
 		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
 	}
 
+	// =========================================================================
+	//  数据源初始化: 全新的动态插件发现与注册逻辑
+	// =========================================================================
 	dataSourceRegistry := make(map[string]port.DataSource)
-
 	closableAdapters := make([]io.Closer, 0)
-	log.Println("⚙️ 注册中心: 开始根据 config.yaml 初始化数据源...")
+	log.Println("⚙️ 注册中心: 开始根据 config.yaml 进行动态插件发现...")
 
-	for _, dsConfig := range config.DataSources {
-		if !dsConfig.Enabled {
-			log.Printf("⚪️ 数据源 '%s' 在配置中被禁用，已跳过。", dsConfig.Name)
+	for _, pluginCfg := range config.Plugins {
+		if !pluginCfg.Enabled {
+			log.Printf("⚪️ 插件地址 '%s' 在配置中被禁用，已跳过。", pluginCfg.Address)
 			continue
 		}
 
-		var dsAdapter port.DataSource
-		var initErr error
-
-		switch dsConfig.Type {
-		case "sqlite_builtin":
-			adapter := sqlite.NewManager(adminConfigService)
-			if err := adapter.InitForBiz(context.Background(), instanceDir, dsConfig.Name); err != nil {
-				initErr = fmt.Errorf("为 '%s' 初始化 'sqlite_builtin' 失败: %w", dsConfig.Name, err)
-			}
-			dsAdapter = adapter
-
-		case "sqlite_plugin":
-			address, ok := dsConfig.Params["address"].(string)
-			if !ok {
-				initErr = fmt.Errorf("gRPC插件 '%s' 的配置缺少 'address' 字符串参数", dsConfig.Name)
-			} else {
-				var adapter *grpc_client.ClientAdapter
-				adapter, initErr = grpc_client.New(address, dsConfig.Type)
-				if initErr == nil {
-					dsAdapter = adapter
-					closableAdapters = append(closableAdapters, adapter) // 添加到可关闭列表
-				}
-			}
-
-		default:
-			initErr = fmt.Errorf("未知的数据源类型 '%s' (用于 '%s')", dsConfig.Type, dsConfig.Name)
-		}
-
-		if initErr != nil {
-			log.Printf("⚠️  初始化数据源 '%s' 失败: %v，已跳过。", dsConfig.Name, initErr)
+		// 步骤 1: 连接到插件
+		adapter, err := grpc_client.New(pluginCfg.Address)
+		if err != nil {
+			log.Printf("⚠️  无法连接到插件 '%s': %v，已跳过。", pluginCfg.Address, err)
 			continue
 		}
 
-		dataSourceRegistry[dsConfig.Name] = dsAdapter
-		log.Printf("✅ 数据源 '%s' (类型: %s) 成功注册。", dsConfig.Name, dsConfig.Type)
+		// 步骤 2: 调用 GetPluginInfo 获取插件的自我描述信息
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		info, err := adapter.GetPluginInfo(ctx)
+		cancel() // 及时释放上下文资源
+
+		if err != nil {
+			log.Printf("⚠️  从插件 '%s' 获取信息失败: %v，已跳过。", pluginCfg.Address, err)
+			_ = adapter.Close() // 获取信息失败，关闭连接
+			continue
+		}
+
+		log.Printf("🤝 已成功从 '%s' 获取插件信息: [名称: %s, 版本: %s]", pluginCfg.Address, info.Name, info.Version)
+
+		// 步骤 3: 根据插件信息，将其注册到网关的业务组中
+		if len(info.SupportedBizNames) == 0 {
+			log.Printf("⚠️  插件 '%s' 未声明任何支持的业务组 (supported_biz_names)，已跳过。", info.Name)
+			_ = adapter.Close()
+			continue
+		}
+
+		isRegistered := false
+		for _, bizName := range info.SupportedBizNames {
+			if _, exists := dataSourceRegistry[bizName]; exists {
+				// 防止不同的插件声称处理同一个业务组
+				log.Printf("⚠️  业务组 '%s' 已被其他插件注册，插件 '%s' 的此次声明被忽略。", bizName, info.Name)
+				continue
+			}
+			dataSourceRegistry[bizName] = adapter
+			isRegistered = true
+			log.Printf("✅ 业务组 '%s' 已成功动态注册，由插件 '%s' (地址: %s) 提供服务。", bizName, info.Name, pluginCfg.Address)
+		}
+
+		if isRegistered {
+			closableAdapters = append(closableAdapters, adapter) // 只有成功注册了至少一个业务组的适配器才需要被关闭
+		} else {
+			_ = adapter.Close() // 没有注册任何业务，关闭连接
+		}
 	}
-	log.Println("✅ 注册中心: 所有已启用的数据源均已初始化并填充完成。")
+	log.Println("✅ 注册中心: 动态插件发现与注册完成。")
 
-	// ✅ FINAL-MOD: 在停机时关闭所有可关闭的适配器连接
+	// 在停机时关闭所有可关闭的适配器连接
 	defer func() {
 		log.Println("正在关闭所有gRPC插件适配器连接...")
 		for _, closer := range closableAdapters {
@@ -148,13 +155,12 @@ func main() {
 	}()
 
 	// =========================================================================
-	//  3. 初始化传输层
+	//  初始化传输层 (这部分及之后保持不变)
 	// =========================================================================
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
 		setupToken = genToken()
-		// ✅ FINAL-MOD: 完善安装流程，传递过期时间
 		setupTokenDeadline = time.Now().Add(30 * time.Minute)
 		log.Printf("重要: [SETUP MODE] 系统中无管理员，安装令牌已生成 (30分钟内有效): %s", setupToken)
 	}
@@ -237,27 +243,23 @@ func initViper() error {
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		// 如果错误是“文件未找到”，则创建默认配置文件
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			log.Println("警告: 未找到 config.yaml。将创建默认配置文件 config.yaml。")
+			// ✅ 更新默认配置文件以匹配新的结构
 			defaultConfig := `
-# ArchiveAegis 平台默认配置文件
+# ArchiveAegis 平台默认配置文件 (V2 - 动态插件)
 server:
   port: 10224
   log_level: "info"
 
-datasources:
-  - name: "local_data"
-    type: "sqlite_builtin"
-    enabled: true
-    params:
-      directory: "local_data" # 将会扫描 instance/local_data/ 目录下的 .db 文件
+# 需要连接的插件列表
+# 网关将尝试连接所有已启用的插件，并动态注册它们所声明的业务。
+plugins:
+  - address: "localhost:50051"
+    enabled: true # 设为 true 来启用这个插件
 
-  - name: "my_first_plugin"
-    type: "sqlite_plugin"
-    enabled: false # 默认禁用，请在启动插件后设为 true
-    params:
-      address: "localhost:50051"
+  # - address: "localhost:50052"
+  #   enabled: false
 `
 			configFilePath := "configs/config.yaml"
 			if err := os.MkdirAll("configs", 0755); err != nil {
@@ -266,7 +268,10 @@ datasources:
 			if err := os.WriteFile(configFilePath, []byte(defaultConfig), 0644); err != nil {
 				return fmt.Errorf("创建默认配置文件失败: %w", err)
 			}
-			log.Fatalf("CRITICAL: 默认配置文件已在 '%s' 创建。请根据您的需求修改它，并将其重命名为 'config.yaml' 后，再重新启动程序。", configFilePath)
+			// 修改为警告而非致命错误，以便程序可以继续使用默认值运行
+			log.Printf("警告: 默认配置文件已在 '%s' 创建。请根据需要修改。", configFilePath)
+			// 重新读取刚刚创建的配置文件
+			return viper.ReadInConfig()
 		} else {
 			return fmt.Errorf("读取配置文件时发生错误: %w", err)
 		}

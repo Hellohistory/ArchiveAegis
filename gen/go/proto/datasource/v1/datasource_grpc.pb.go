@@ -4,9 +4,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v6.31.1
-// source: datasource/v1/datasource.proto
+// source: proto/datasource/v1/datasource.proto
 
-package v1
+package datasourcev1
 
 import (
 	context "context"
@@ -21,10 +21,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataSource_Query_FullMethodName       = "/datasource.v1.DataSource/Query"
-	DataSource_Mutate_FullMethodName      = "/datasource.v1.DataSource/Mutate"
-	DataSource_GetSchema_FullMethodName   = "/datasource.v1.DataSource/GetSchema"
-	DataSource_HealthCheck_FullMethodName = "/datasource.v1.DataSource/HealthCheck"
+	DataSource_GetPluginInfo_FullMethodName = "/datasource.v1.DataSource/GetPluginInfo"
+	DataSource_Query_FullMethodName         = "/datasource.v1.DataSource/Query"
+	DataSource_Mutate_FullMethodName        = "/datasource.v1.DataSource/Mutate"
+	DataSource_GetSchema_FullMethodName     = "/datasource.v1.DataSource/GetSchema"
+	DataSource_HealthCheck_FullMethodName   = "/datasource.v1.DataSource/HealthCheck"
 )
 
 // DataSourceClient is the client API for DataSource service.
@@ -33,6 +34,8 @@ const (
 //
 // --- 服务定义 ---
 type DataSourceClient interface {
+	// 用于获取插件自身的信息
+	GetPluginInfo(ctx context.Context, in *GetPluginInfoRequest, opts ...grpc.CallOption) (*GetPluginInfoResponse, error)
 	// Query 对应 "R" (Read)
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResult, error)
 	// Mutate 对应 "C, U, D" (Create, Update, Delete)
@@ -49,6 +52,16 @@ type dataSourceClient struct {
 
 func NewDataSourceClient(cc grpc.ClientConnInterface) DataSourceClient {
 	return &dataSourceClient{cc}
+}
+
+func (c *dataSourceClient) GetPluginInfo(ctx context.Context, in *GetPluginInfoRequest, opts ...grpc.CallOption) (*GetPluginInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPluginInfoResponse)
+	err := c.cc.Invoke(ctx, DataSource_GetPluginInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *dataSourceClient) Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResult, error) {
@@ -97,6 +110,8 @@ func (c *dataSourceClient) HealthCheck(ctx context.Context, in *HealthCheckReque
 //
 // --- 服务定义 ---
 type DataSourceServer interface {
+	// 用于获取插件自身的信息
+	GetPluginInfo(context.Context, *GetPluginInfoRequest) (*GetPluginInfoResponse, error)
 	// Query 对应 "R" (Read)
 	Query(context.Context, *QueryRequest) (*QueryResult, error)
 	// Mutate 对应 "C, U, D" (Create, Update, Delete)
@@ -115,6 +130,9 @@ type DataSourceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataSourceServer struct{}
 
+func (UnimplementedDataSourceServer) GetPluginInfo(context.Context, *GetPluginInfoRequest) (*GetPluginInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPluginInfo not implemented")
+}
 func (UnimplementedDataSourceServer) Query(context.Context, *QueryRequest) (*QueryResult, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Query not implemented")
 }
@@ -146,6 +164,24 @@ func RegisterDataSourceServer(s grpc.ServiceRegistrar, srv DataSourceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&DataSource_ServiceDesc, srv)
+}
+
+func _DataSource_GetPluginInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPluginInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataSourceServer).GetPluginInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataSource_GetPluginInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataSourceServer).GetPluginInfo(ctx, req.(*GetPluginInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _DataSource_Query_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -228,6 +264,10 @@ var DataSource_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*DataSourceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "GetPluginInfo",
+			Handler:    _DataSource_GetPluginInfo_Handler,
+		},
+		{
 			MethodName: "Query",
 			Handler:    _DataSource_Query_Handler,
 		},
@@ -245,5 +285,5 @@ var DataSource_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "datasource/v1/datasource.proto",
+	Metadata: "proto/datasource/v1/datasource.proto",
 }

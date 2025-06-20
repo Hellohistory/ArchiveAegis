@@ -4,9 +4,9 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v6.31.1
-// source: datasource/v1/datasource.proto
+// source: proto/datasource/v1/datasource.proto
 
-package v1
+package datasourcev1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -57,11 +57,11 @@ func (x HealthCheckResponse_ServingStatus) String() string {
 }
 
 func (HealthCheckResponse_ServingStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_datasource_v1_datasource_proto_enumTypes[0].Descriptor()
+	return file_proto_datasource_v1_datasource_proto_enumTypes[0].Descriptor()
 }
 
 func (HealthCheckResponse_ServingStatus) Type() protoreflect.EnumType {
-	return &file_datasource_v1_datasource_proto_enumTypes[0]
+	return &file_proto_datasource_v1_datasource_proto_enumTypes[0]
 }
 
 func (x HealthCheckResponse_ServingStatus) Number() protoreflect.EnumNumber {
@@ -70,7 +70,126 @@ func (x HealthCheckResponse_ServingStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HealthCheckResponse_ServingStatus.Descriptor instead.
 func (HealthCheckResponse_ServingStatus) EnumDescriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{13, 0}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{15, 0}
+}
+
+// GetPluginInfo 定义请求和响应体
+type GetPluginInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPluginInfoRequest) Reset() {
+	*x = GetPluginInfoRequest{}
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPluginInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPluginInfoRequest) ProtoMessage() {}
+
+func (x *GetPluginInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPluginInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetPluginInfoRequest) Descriptor() ([]byte, []int) {
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{0}
+}
+
+type GetPluginInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 插件的唯一名称, e.g., "sqlite-sales-plugin-v1"
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// 插件的版本号, e.g., "1.0.2"
+	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	// 插件处理的数据源类型, e.g., "sqlite", "mysql"
+	Type string `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
+	// 这个插件实例负责处理的所有业务组 (biz_name) 列表
+	// 这是动态注册的关键！
+	SupportedBizNames []string `protobuf:"bytes,4,rep,name=supported_biz_names,json=supportedBizNames,proto3" json:"supported_biz_names,omitempty"`
+	// 插件的详细描述，可以是 Markdown 格式
+	DescriptionMarkdown string `protobuf:"bytes,5,opt,name=description_markdown,json=descriptionMarkdown,proto3" json:"description_markdown,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *GetPluginInfoResponse) Reset() {
+	*x = GetPluginInfoResponse{}
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPluginInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPluginInfoResponse) ProtoMessage() {}
+
+func (x *GetPluginInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPluginInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetPluginInfoResponse) Descriptor() ([]byte, []int) {
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GetPluginInfoResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetPluginInfoResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetPluginInfoResponse) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *GetPluginInfoResponse) GetSupportedBizNames() []string {
+	if x != nil {
+		return x.SupportedBizNames
+	}
+	return nil
+}
+
+func (x *GetPluginInfoResponse) GetDescriptionMarkdown() string {
+	if x != nil {
+		return x.DescriptionMarkdown
+	}
+	return ""
 }
 
 // 查询参数
@@ -86,7 +205,7 @@ type QueryParam struct {
 
 func (x *QueryParam) Reset() {
 	*x = QueryParam{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[0]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -98,7 +217,7 @@ func (x *QueryParam) String() string {
 func (*QueryParam) ProtoMessage() {}
 
 func (x *QueryParam) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[0]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -111,7 +230,7 @@ func (x *QueryParam) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryParam.ProtoReflect.Descriptor instead.
 func (*QueryParam) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{0}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *QueryParam) GetField() string {
@@ -157,7 +276,7 @@ type QueryRequest struct {
 
 func (x *QueryRequest) Reset() {
 	*x = QueryRequest{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[1]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -169,7 +288,7 @@ func (x *QueryRequest) String() string {
 func (*QueryRequest) ProtoMessage() {}
 
 func (x *QueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[1]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -182,7 +301,7 @@ func (x *QueryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
 func (*QueryRequest) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{1}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *QueryRequest) GetBizName() string {
@@ -240,7 +359,7 @@ type QueryResult struct {
 
 func (x *QueryResult) Reset() {
 	*x = QueryResult{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[2]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -252,7 +371,7 @@ func (x *QueryResult) String() string {
 func (*QueryResult) ProtoMessage() {}
 
 func (x *QueryResult) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[2]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -265,7 +384,7 @@ func (x *QueryResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryResult.ProtoReflect.Descriptor instead.
 func (*QueryResult) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{2}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *QueryResult) GetData() *structpb.ListValue {
@@ -305,7 +424,7 @@ type MutateRequest struct {
 
 func (x *MutateRequest) Reset() {
 	*x = MutateRequest{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[3]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +436,7 @@ func (x *MutateRequest) String() string {
 func (*MutateRequest) ProtoMessage() {}
 
 func (x *MutateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[3]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +449,7 @@ func (x *MutateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MutateRequest.ProtoReflect.Descriptor instead.
 func (*MutateRequest) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{3}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MutateRequest) GetBizName() string {
@@ -406,7 +525,7 @@ type CreateOperation struct {
 
 func (x *CreateOperation) Reset() {
 	*x = CreateOperation{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[4]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +537,7 @@ func (x *CreateOperation) String() string {
 func (*CreateOperation) ProtoMessage() {}
 
 func (x *CreateOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[4]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +550,7 @@ func (x *CreateOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOperation.ProtoReflect.Descriptor instead.
 func (*CreateOperation) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{4}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreateOperation) GetTableName() string {
@@ -459,7 +578,7 @@ type UpdateOperation struct {
 
 func (x *UpdateOperation) Reset() {
 	*x = UpdateOperation{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[5]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -471,7 +590,7 @@ func (x *UpdateOperation) String() string {
 func (*UpdateOperation) ProtoMessage() {}
 
 func (x *UpdateOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[5]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -484,7 +603,7 @@ func (x *UpdateOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOperation.ProtoReflect.Descriptor instead.
 func (*UpdateOperation) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{5}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *UpdateOperation) GetTableName() string {
@@ -518,7 +637,7 @@ type DeleteOperation struct {
 
 func (x *DeleteOperation) Reset() {
 	*x = DeleteOperation{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[6]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +649,7 @@ func (x *DeleteOperation) String() string {
 func (*DeleteOperation) ProtoMessage() {}
 
 func (x *DeleteOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[6]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +662,7 @@ func (x *DeleteOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOperation.ProtoReflect.Descriptor instead.
 func (*DeleteOperation) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{6}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DeleteOperation) GetTableName() string {
@@ -571,7 +690,7 @@ type MutateResult struct {
 
 func (x *MutateResult) Reset() {
 	*x = MutateResult{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[7]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +702,7 @@ func (x *MutateResult) String() string {
 func (*MutateResult) ProtoMessage() {}
 
 func (x *MutateResult) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[7]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +715,7 @@ func (x *MutateResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MutateResult.ProtoReflect.Descriptor instead.
 func (*MutateResult) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{7}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *MutateResult) GetSuccess() bool {
@@ -631,7 +750,7 @@ type SchemaRequest struct {
 
 func (x *SchemaRequest) Reset() {
 	*x = SchemaRequest{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[8]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +762,7 @@ func (x *SchemaRequest) String() string {
 func (*SchemaRequest) ProtoMessage() {}
 
 func (x *SchemaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[8]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +775,7 @@ func (x *SchemaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchemaRequest.ProtoReflect.Descriptor instead.
 func (*SchemaRequest) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{8}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SchemaRequest) GetBizName() string {
@@ -687,7 +806,7 @@ type FieldDescription struct {
 
 func (x *FieldDescription) Reset() {
 	*x = FieldDescription{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[9]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -699,7 +818,7 @@ func (x *FieldDescription) String() string {
 func (*FieldDescription) ProtoMessage() {}
 
 func (x *FieldDescription) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[9]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -712,7 +831,7 @@ func (x *FieldDescription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldDescription.ProtoReflect.Descriptor instead.
 func (*FieldDescription) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{9}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FieldDescription) GetName() string {
@@ -766,7 +885,7 @@ type SchemaResult struct {
 
 func (x *SchemaResult) Reset() {
 	*x = SchemaResult{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[10]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +897,7 @@ func (x *SchemaResult) String() string {
 func (*SchemaResult) ProtoMessage() {}
 
 func (x *SchemaResult) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[10]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +910,7 @@ func (x *SchemaResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchemaResult.ProtoReflect.Descriptor instead.
 func (*SchemaResult) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{10}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SchemaResult) GetTables() map[string]*TableSchema {
@@ -810,7 +929,7 @@ type TableSchema struct {
 
 func (x *TableSchema) Reset() {
 	*x = TableSchema{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[11]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +941,7 @@ func (x *TableSchema) String() string {
 func (*TableSchema) ProtoMessage() {}
 
 func (x *TableSchema) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[11]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +954,7 @@ func (x *TableSchema) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TableSchema.ProtoReflect.Descriptor instead.
 func (*TableSchema) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{11}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TableSchema) GetFields() []*FieldDescription {
@@ -854,7 +973,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[12]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +985,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[12]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +998,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{12}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{14}
 }
 
 type HealthCheckResponse struct {
@@ -891,7 +1010,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_datasource_v1_datasource_proto_msgTypes[13]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -903,7 +1022,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_datasource_v1_datasource_proto_msgTypes[13]
+	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -916,7 +1035,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{13}
+	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
@@ -926,11 +1045,18 @@ func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
 	return HealthCheckResponse_UNKNOWN
 }
 
-var File_datasource_v1_datasource_proto protoreflect.FileDescriptor
+var File_proto_datasource_v1_datasource_proto protoreflect.FileDescriptor
 
-const file_datasource_v1_datasource_proto_rawDesc = "" +
+const file_proto_datasource_v1_datasource_proto_rawDesc = "" +
 	"\n" +
-	"\x1edatasource/v1/datasource.proto\x12\rdatasource.v1\x1a\x1cgoogle/protobuf/struct.proto\"d\n" +
+	"$proto/datasource/v1/datasource.proto\x12\rdatasource.v1\x1a\x1cgoogle/protobuf/struct.proto\"\x16\n" +
+	"\x14GetPluginInfoRequest\"\xbc\x01\n" +
+	"\x15GetPluginInfoResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x12\n" +
+	"\x04type\x18\x03 \x01(\tR\x04type\x12.\n" +
+	"\x13supported_biz_names\x18\x04 \x03(\tR\x11supportedBizNames\x121\n" +
+	"\x14description_markdown\x18\x05 \x01(\tR\x13descriptionMarkdown\"d\n" +
 	"\n" +
 	"QueryParam\x12\x14\n" +
 	"\x05field\x18\x01 \x01(\tR\x05field\x12\x14\n" +
@@ -997,83 +1123,88 @@ const file_datasource_v1_datasource_proto_rawDesc = "" +
 	"\rServingStatus\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aSERVING\x10\x01\x12\x0f\n" +
-	"\vNOT_SERVING\x10\x022\xb1\x02\n" +
+	"\vNOT_SERVING\x10\x022\x8d\x03\n" +
 	"\n" +
-	"DataSource\x12@\n" +
+	"DataSource\x12Z\n" +
+	"\rGetPluginInfo\x12#.datasource.v1.GetPluginInfoRequest\x1a$.datasource.v1.GetPluginInfoResponse\x12@\n" +
 	"\x05Query\x12\x1b.datasource.v1.QueryRequest\x1a\x1a.datasource.v1.QueryResult\x12C\n" +
 	"\x06Mutate\x12\x1c.datasource.v1.MutateRequest\x1a\x1b.datasource.v1.MutateResult\x12F\n" +
 	"\tGetSchema\x12\x1c.datasource.v1.SchemaRequest\x1a\x1b.datasource.v1.SchemaResult\x12T\n" +
 	"\vHealthCheck\x12!.datasource.v1.HealthCheckRequest\x1a\".datasource.v1.HealthCheckResponseB#Z!gen/go/datasource/v1;datasourcev1b\x06proto3"
 
 var (
-	file_datasource_v1_datasource_proto_rawDescOnce sync.Once
-	file_datasource_v1_datasource_proto_rawDescData []byte
+	file_proto_datasource_v1_datasource_proto_rawDescOnce sync.Once
+	file_proto_datasource_v1_datasource_proto_rawDescData []byte
 )
 
-func file_datasource_v1_datasource_proto_rawDescGZIP() []byte {
-	file_datasource_v1_datasource_proto_rawDescOnce.Do(func() {
-		file_datasource_v1_datasource_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_datasource_v1_datasource_proto_rawDesc), len(file_datasource_v1_datasource_proto_rawDesc)))
+func file_proto_datasource_v1_datasource_proto_rawDescGZIP() []byte {
+	file_proto_datasource_v1_datasource_proto_rawDescOnce.Do(func() {
+		file_proto_datasource_v1_datasource_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_datasource_v1_datasource_proto_rawDesc), len(file_proto_datasource_v1_datasource_proto_rawDesc)))
 	})
-	return file_datasource_v1_datasource_proto_rawDescData
+	return file_proto_datasource_v1_datasource_proto_rawDescData
 }
 
-var file_datasource_v1_datasource_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
-var file_datasource_v1_datasource_proto_goTypes = []any{
+var file_proto_datasource_v1_datasource_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proto_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_proto_datasource_v1_datasource_proto_goTypes = []any{
 	(HealthCheckResponse_ServingStatus)(0), // 0: datasource.v1.HealthCheckResponse.ServingStatus
-	(*QueryParam)(nil),                     // 1: datasource.v1.QueryParam
-	(*QueryRequest)(nil),                   // 2: datasource.v1.QueryRequest
-	(*QueryResult)(nil),                    // 3: datasource.v1.QueryResult
-	(*MutateRequest)(nil),                  // 4: datasource.v1.MutateRequest
-	(*CreateOperation)(nil),                // 5: datasource.v1.CreateOperation
-	(*UpdateOperation)(nil),                // 6: datasource.v1.UpdateOperation
-	(*DeleteOperation)(nil),                // 7: datasource.v1.DeleteOperation
-	(*MutateResult)(nil),                   // 8: datasource.v1.MutateResult
-	(*SchemaRequest)(nil),                  // 9: datasource.v1.SchemaRequest
-	(*FieldDescription)(nil),               // 10: datasource.v1.FieldDescription
-	(*SchemaResult)(nil),                   // 11: datasource.v1.SchemaResult
-	(*TableSchema)(nil),                    // 12: datasource.v1.TableSchema
-	(*HealthCheckRequest)(nil),             // 13: datasource.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),            // 14: datasource.v1.HealthCheckResponse
-	nil,                                    // 15: datasource.v1.SchemaResult.TablesEntry
-	(*structpb.ListValue)(nil),             // 16: google.protobuf.ListValue
-	(*structpb.Struct)(nil),                // 17: google.protobuf.Struct
+	(*GetPluginInfoRequest)(nil),           // 1: datasource.v1.GetPluginInfoRequest
+	(*GetPluginInfoResponse)(nil),          // 2: datasource.v1.GetPluginInfoResponse
+	(*QueryParam)(nil),                     // 3: datasource.v1.QueryParam
+	(*QueryRequest)(nil),                   // 4: datasource.v1.QueryRequest
+	(*QueryResult)(nil),                    // 5: datasource.v1.QueryResult
+	(*MutateRequest)(nil),                  // 6: datasource.v1.MutateRequest
+	(*CreateOperation)(nil),                // 7: datasource.v1.CreateOperation
+	(*UpdateOperation)(nil),                // 8: datasource.v1.UpdateOperation
+	(*DeleteOperation)(nil),                // 9: datasource.v1.DeleteOperation
+	(*MutateResult)(nil),                   // 10: datasource.v1.MutateResult
+	(*SchemaRequest)(nil),                  // 11: datasource.v1.SchemaRequest
+	(*FieldDescription)(nil),               // 12: datasource.v1.FieldDescription
+	(*SchemaResult)(nil),                   // 13: datasource.v1.SchemaResult
+	(*TableSchema)(nil),                    // 14: datasource.v1.TableSchema
+	(*HealthCheckRequest)(nil),             // 15: datasource.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),            // 16: datasource.v1.HealthCheckResponse
+	nil,                                    // 17: datasource.v1.SchemaResult.TablesEntry
+	(*structpb.ListValue)(nil),             // 18: google.protobuf.ListValue
+	(*structpb.Struct)(nil),                // 19: google.protobuf.Struct
 }
-var file_datasource_v1_datasource_proto_depIdxs = []int32{
-	1,  // 0: datasource.v1.QueryRequest.query_params:type_name -> datasource.v1.QueryParam
-	16, // 1: datasource.v1.QueryResult.data:type_name -> google.protobuf.ListValue
-	5,  // 2: datasource.v1.MutateRequest.create_op:type_name -> datasource.v1.CreateOperation
-	6,  // 3: datasource.v1.MutateRequest.update_op:type_name -> datasource.v1.UpdateOperation
-	7,  // 4: datasource.v1.MutateRequest.delete_op:type_name -> datasource.v1.DeleteOperation
-	17, // 5: datasource.v1.CreateOperation.data:type_name -> google.protobuf.Struct
-	17, // 6: datasource.v1.UpdateOperation.data:type_name -> google.protobuf.Struct
-	1,  // 7: datasource.v1.UpdateOperation.filters:type_name -> datasource.v1.QueryParam
-	1,  // 8: datasource.v1.DeleteOperation.filters:type_name -> datasource.v1.QueryParam
-	15, // 9: datasource.v1.SchemaResult.tables:type_name -> datasource.v1.SchemaResult.TablesEntry
-	10, // 10: datasource.v1.TableSchema.fields:type_name -> datasource.v1.FieldDescription
+var file_proto_datasource_v1_datasource_proto_depIdxs = []int32{
+	3,  // 0: datasource.v1.QueryRequest.query_params:type_name -> datasource.v1.QueryParam
+	18, // 1: datasource.v1.QueryResult.data:type_name -> google.protobuf.ListValue
+	7,  // 2: datasource.v1.MutateRequest.create_op:type_name -> datasource.v1.CreateOperation
+	8,  // 3: datasource.v1.MutateRequest.update_op:type_name -> datasource.v1.UpdateOperation
+	9,  // 4: datasource.v1.MutateRequest.delete_op:type_name -> datasource.v1.DeleteOperation
+	19, // 5: datasource.v1.CreateOperation.data:type_name -> google.protobuf.Struct
+	19, // 6: datasource.v1.UpdateOperation.data:type_name -> google.protobuf.Struct
+	3,  // 7: datasource.v1.UpdateOperation.filters:type_name -> datasource.v1.QueryParam
+	3,  // 8: datasource.v1.DeleteOperation.filters:type_name -> datasource.v1.QueryParam
+	17, // 9: datasource.v1.SchemaResult.tables:type_name -> datasource.v1.SchemaResult.TablesEntry
+	12, // 10: datasource.v1.TableSchema.fields:type_name -> datasource.v1.FieldDescription
 	0,  // 11: datasource.v1.HealthCheckResponse.status:type_name -> datasource.v1.HealthCheckResponse.ServingStatus
-	12, // 12: datasource.v1.SchemaResult.TablesEntry.value:type_name -> datasource.v1.TableSchema
-	2,  // 13: datasource.v1.DataSource.Query:input_type -> datasource.v1.QueryRequest
-	4,  // 14: datasource.v1.DataSource.Mutate:input_type -> datasource.v1.MutateRequest
-	9,  // 15: datasource.v1.DataSource.GetSchema:input_type -> datasource.v1.SchemaRequest
-	13, // 16: datasource.v1.DataSource.HealthCheck:input_type -> datasource.v1.HealthCheckRequest
-	3,  // 17: datasource.v1.DataSource.Query:output_type -> datasource.v1.QueryResult
-	8,  // 18: datasource.v1.DataSource.Mutate:output_type -> datasource.v1.MutateResult
-	11, // 19: datasource.v1.DataSource.GetSchema:output_type -> datasource.v1.SchemaResult
-	14, // 20: datasource.v1.DataSource.HealthCheck:output_type -> datasource.v1.HealthCheckResponse
-	17, // [17:21] is the sub-list for method output_type
-	13, // [13:17] is the sub-list for method input_type
+	14, // 12: datasource.v1.SchemaResult.TablesEntry.value:type_name -> datasource.v1.TableSchema
+	1,  // 13: datasource.v1.DataSource.GetPluginInfo:input_type -> datasource.v1.GetPluginInfoRequest
+	4,  // 14: datasource.v1.DataSource.Query:input_type -> datasource.v1.QueryRequest
+	6,  // 15: datasource.v1.DataSource.Mutate:input_type -> datasource.v1.MutateRequest
+	11, // 16: datasource.v1.DataSource.GetSchema:input_type -> datasource.v1.SchemaRequest
+	15, // 17: datasource.v1.DataSource.HealthCheck:input_type -> datasource.v1.HealthCheckRequest
+	2,  // 18: datasource.v1.DataSource.GetPluginInfo:output_type -> datasource.v1.GetPluginInfoResponse
+	5,  // 19: datasource.v1.DataSource.Query:output_type -> datasource.v1.QueryResult
+	10, // 20: datasource.v1.DataSource.Mutate:output_type -> datasource.v1.MutateResult
+	13, // 21: datasource.v1.DataSource.GetSchema:output_type -> datasource.v1.SchemaResult
+	16, // 22: datasource.v1.DataSource.HealthCheck:output_type -> datasource.v1.HealthCheckResponse
+	18, // [18:23] is the sub-list for method output_type
+	13, // [13:18] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
 }
 
-func init() { file_datasource_v1_datasource_proto_init() }
-func file_datasource_v1_datasource_proto_init() {
-	if File_datasource_v1_datasource_proto != nil {
+func init() { file_proto_datasource_v1_datasource_proto_init() }
+func file_proto_datasource_v1_datasource_proto_init() {
+	if File_proto_datasource_v1_datasource_proto != nil {
 		return
 	}
-	file_datasource_v1_datasource_proto_msgTypes[3].OneofWrappers = []any{
+	file_proto_datasource_v1_datasource_proto_msgTypes[5].OneofWrappers = []any{
 		(*MutateRequest_CreateOp)(nil),
 		(*MutateRequest_UpdateOp)(nil),
 		(*MutateRequest_DeleteOp)(nil),
@@ -1082,18 +1213,18 @@ func file_datasource_v1_datasource_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_datasource_v1_datasource_proto_rawDesc), len(file_datasource_v1_datasource_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_datasource_v1_datasource_proto_rawDesc), len(file_proto_datasource_v1_datasource_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   15,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_datasource_v1_datasource_proto_goTypes,
-		DependencyIndexes: file_datasource_v1_datasource_proto_depIdxs,
-		EnumInfos:         file_datasource_v1_datasource_proto_enumTypes,
-		MessageInfos:      file_datasource_v1_datasource_proto_msgTypes,
+		GoTypes:           file_proto_datasource_v1_datasource_proto_goTypes,
+		DependencyIndexes: file_proto_datasource_v1_datasource_proto_depIdxs,
+		EnumInfos:         file_proto_datasource_v1_datasource_proto_enumTypes,
+		MessageInfos:      file_proto_datasource_v1_datasource_proto_msgTypes,
 	}.Build()
-	File_datasource_v1_datasource_proto = out.File
-	file_datasource_v1_datasource_proto_goTypes = nil
-	file_datasource_v1_datasource_proto_depIdxs = nil
+	File_proto_datasource_v1_datasource_proto = out.File
+	file_proto_datasource_v1_datasource_proto_goTypes = nil
+	file_proto_datasource_v1_datasource_proto_depIdxs = nil
 }

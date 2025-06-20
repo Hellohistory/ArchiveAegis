@@ -1,8 +1,8 @@
-// Package grpc_client file: internal/adapter/datasource/grpc_client/client.go
+// file: internal/adapter/datasource/grpc_client/client.go
 package grpc_client
 
 import (
-	datasourcev1 "ArchiveAegis/gen/go/datasource/v1"
+	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
 	"context"
 	"fmt"
@@ -21,11 +21,11 @@ var _ port.DataSource = (*ClientAdapter)(nil)
 type ClientAdapter struct {
 	client datasourcev1.DataSourceClient
 	conn   *grpc.ClientConn
-	typ    string
 }
 
 // New 创建一个新的gRPC客户端适配器实例。
-func New(pluginAddress string, pluginType string) (*ClientAdapter, error) {
+// 函数签名已简化，不再需要 pluginType 参数。
+func New(pluginAddress string) (*ClientAdapter, error) {
 	// 创建一个不安全的gRPC连接（本地开发用），未来可增加TLS
 	conn, err := grpc.NewClient(pluginAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -33,16 +33,20 @@ func New(pluginAddress string, pluginType string) (*ClientAdapter, error) {
 	}
 
 	client := datasourcev1.NewDataSourceClient(conn)
-	log.Printf("✅ 已成功连接到gRPC插件: %s (类型: %s)", pluginAddress, pluginType)
-
+	// 连接成功日志移到网关的动态注册逻辑中，以便显示更丰富的信息
 	return &ClientAdapter{
 		client: client,
 		conn:   conn,
-		typ:    pluginType,
 	}, nil
 }
 
-// Query 方法的完整实现
+// GetPluginInfo 方法，用于调用插件的自我介绍接口
+func (a *ClientAdapter) GetPluginInfo(ctx context.Context) (*datasourcev1.GetPluginInfoResponse, error) {
+	log.Printf("gRPC适配器: 正在向插件发送 GetPluginInfo 请求...")
+	return a.client.GetPluginInfo(ctx, &datasourcev1.GetPluginInfoRequest{})
+}
+
+// Query 方法的实现保持不变
 func (a *ClientAdapter) Query(ctx context.Context, req port.QueryRequest) (*port.QueryResult, error) {
 	log.Printf("gRPC适配器: 正在将Query请求转发到插件 (biz: %s)...", req.BizName)
 
@@ -75,7 +79,6 @@ func (a *ClientAdapter) Query(ctx context.Context, req port.QueryRequest) (*port
 	// 将 gRPC 的 grpcRes (*datasourcev1.QueryResult) 转换为 Go 的 *port.QueryResult
 	goData := make([]map[string]any, 0)
 	if grpcRes.Data != nil {
-		// structpb.ListValue 的 AsSlice() 方法可以方便地将其转换为 []any
 		sliceData := grpcRes.Data.AsSlice()
 		for _, item := range sliceData {
 			if mapItem, ok := item.(map[string]any); ok {
@@ -93,11 +96,10 @@ func (a *ClientAdapter) Query(ctx context.Context, req port.QueryRequest) (*port
 	return goResult, nil
 }
 
-// Mutate 方法的完整实现
+// Mutate 方法的实现保持不变
 func (a *ClientAdapter) Mutate(ctx context.Context, req port.MutateRequest) (*port.MutateResult, error) {
 	log.Printf("gRPC适配器: 正在将Mutate请求转发到插件 (biz: %s)...", req.BizName)
 
-	// 将 Go 的 port.MutateRequest 转换为 gRPC 的 *datasourcev1.MutateRequest
 	grpcReq := &datasourcev1.MutateRequest{BizName: req.BizName}
 	switch {
 	case req.CreateOp != nil:
@@ -142,13 +144,11 @@ func (a *ClientAdapter) Mutate(ctx context.Context, req port.MutateRequest) (*po
 		return nil, fmt.Errorf("无效的Mutate请求：缺少具体操作 (Create/Update/Delete)")
 	}
 
-	// 发起RPC调用
 	grpcRes, err := a.client.Mutate(ctx, grpcReq)
 	if err != nil {
 		return nil, fmt.Errorf("gRPC Mutate调用失败: %w", err)
 	}
 
-	// 将 gRPC 响应转换为 Go 结构体 (直接映射)
 	return &port.MutateResult{
 		Success:      grpcRes.GetSuccess(),
 		RowsAffected: grpcRes.GetRowsAffected(),
@@ -156,7 +156,7 @@ func (a *ClientAdapter) Mutate(ctx context.Context, req port.MutateRequest) (*po
 	}, nil
 }
 
-// GetSchema 方法的完整实现
+// GetSchema 方法的实现保持不变
 func (a *ClientAdapter) GetSchema(ctx context.Context, req port.SchemaRequest) (*port.SchemaResult, error) {
 	log.Printf("gRPC适配器: 正在将GetSchema请求转发到插件 (biz: %s)...", req.BizName)
 
@@ -189,7 +189,7 @@ func (a *ClientAdapter) GetSchema(ctx context.Context, req port.SchemaRequest) (
 	return &port.SchemaResult{Tables: goTables}, nil
 }
 
-// HealthCheck 方法的完整实现
+// HealthCheck 方法的实现保持不变
 func (a *ClientAdapter) HealthCheck(ctx context.Context) error {
 	log.Printf("gRPC适配器: 正在将HealthCheck请求转发到插件...")
 
@@ -210,7 +210,7 @@ func (a *ClientAdapter) Close() error {
 	return a.conn.Close()
 }
 
-// Type 返回适配器类型
+// Type 返回适配器的类型标识符, 这里返回一个通用值，因为具体类型由插件决定
 func (a *ClientAdapter) Type() string {
-	return a.typ
+	return "grpc_plugin"
 }
