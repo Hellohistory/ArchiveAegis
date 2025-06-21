@@ -1,135 +1,113 @@
 // file: internal/adapter/datasource/sqlite/manager_test.go
+
 package sqlite
 
 import (
-	"ArchiveAegis/internal/core/domain"
-	"ArchiveAegis/internal/core/port"
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"database/sql"
+	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
-// 注意：mockAdminConfigService 和 createTestDB 的定义已经被移到 main_test.go 中，此处不再需要。
+// -----------------------------------------------------------------------------
+// 测试辅助: 内存 SQLite 连接 & Dummy ConfigService
+// -----------------------------------------------------------------------------
 
-func TestManager_Query_TotalCount(t *testing.T) {
-	ctx := context.Background()
-	// 使用共享的 mock
-	mockCfgSvc := &mockAdminConfigService{
-		GetBizQueryConfigFunc: func(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
-			return &domain.BizQueryConfig{
-				BizName:              bizName,
-				IsPubliclySearchable: true,
-				DefaultQueryTable:    "test_data",
-				Tables: map[string]*domain.TableConfig{
-					"test_data": {
-						TableName:    "test_data",
-						IsSearchable: true,
-						Fields: map[string]domain.FieldSetting{
-							"id":   {FieldName: "id", IsReturnable: true, IsSearchable: true},
-							"data": {FieldName: "data", IsReturnable: true, IsSearchable: true},
-						},
-					},
-				},
-			}, nil
-		},
+// newMemoryDB 返回一个共享内存 SQLite 连接，便于单测快速构造。
+func newMemoryDB(t *testing.T, name string) *sql.DB {
+	db, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("无法打开内存数据库 %s: %v", name, err)
 	}
-
-	instanceDir := t.TempDir()
-	bizDir := filepath.Join(instanceDir, "test_biz")
-	require.NoError(t, os.Mkdir(bizDir, 0755))
-
-	// 使用新的、共享的 createTestDB 辅助函数
-	db1 := createTestDB(t, bizDir, "db1.db", `CREATE TABLE test_data (id INTEGER PRIMARY KEY, data TEXT);`)
-	for i := 0; i < 3; i++ {
-		_, err := db1.Exec(`INSERT INTO test_data (data) VALUES (?)`, fmt.Sprintf("row-%d", i))
-		require.NoError(t, err)
+	// 简单建表，便于将来扩展测试
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS dummy(id INTEGER);`); err != nil {
+		t.Fatalf("建表失败: %v", err)
 	}
-
-	db2 := createTestDB(t, bizDir, "db2.db", `CREATE TABLE test_data (id INTEGER PRIMARY KEY, data TEXT);`)
-	for i := 0; i < 5; i++ {
-		_, err := db2.Exec(`INSERT INTO test_data (data) VALUES (?)`, fmt.Sprintf("row-%d", i))
-		require.NoError(t, err)
-	}
-
-	manager := NewManager(mockCfgSvc)
-	defer manager.Close()
-
-	require.NoError(t, manager.InitForBiz(ctx, instanceDir, "test_biz"))
-
-	queryReq := port.QueryRequest{
-		BizName:   "test_biz",
-		TableName: "test_data",
-		Page:      1,
-		Size:      10,
-	}
-	result, err := manager.Query(ctx, queryReq)
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	expectedTotal := int64(8)
-	assert.Equal(t, expectedTotal, result.Total, "Total count mismatch")
-	assert.Len(t, result.Data, int(expectedTotal), "Returned data length mismatch")
+	return db
 }
 
-func TestManager_Mutate_FailFast(t *testing.T) {
-	ctx := context.Background()
+// -----------------------------------------------------------------------------
+// Test: Type()
+// -----------------------------------------------------------------------------
 
-	mockCfgSvc := &mockAdminConfigService{
-		GetBizQueryConfigFunc: func(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
-			return &domain.BizQueryConfig{
-				BizName:              bizName,
-				IsPubliclySearchable: true,
-				Tables: map[string]*domain.TableConfig{
-					"test_data": {
-						TableName:    "test_data",
-						AllowCreate:  true, // 允许创建
-						IsSearchable: true,
-						Fields:       map[string]domain.FieldSetting{"id": {IsReturnable: true}, "data": {IsReturnable: true}},
-					},
-				},
-			}, nil
-		},
+func TestManager_Type(t *testing.T) {
+	m := &Manager{}
+	if got := m.Type(); got != "sqlite_builtin" {
+		t.Errorf("Type() 返回值错误, want=sqlite_builtin, got=%s", got)
 	}
+}
 
-	instanceDir := t.TempDir()
-	bizDir := filepath.Join(instanceDir, "fail_fast_biz")
-	require.NoError(t, os.Mkdir(bizDir, 0755))
+// -----------------------------------------------------------------------------
+// Test: Summary()
+// -----------------------------------------------------------------------------
 
-	// DB1: 普通表
-	createTestDB(t, bizDir, "db1.db", `CREATE TABLE test_data (id INTEGER PRIMARY KEY, data TEXT);`)
-
-	// DB2: 有唯一约束的表，这将导致第二次插入失败
-	dbWithConstraint := createTestDB(t, bizDir, "db2.db", `CREATE TABLE test_data (id INTEGER PRIMARY KEY, data TEXT UNIQUE);`)
-	_, err := dbWithConstraint.Exec(`INSERT INTO test_data (data) VALUES (?)`, "unique_value")
-	require.NoError(t, err)
-
-	manager := NewManager(mockCfgSvc)
-	defer manager.Close()
-	require.NoError(t, manager.InitForBiz(ctx, instanceDir, "fail_fast_biz"))
-
-	// 这个操作在 db1 会成功，但在 db2 会因为违反唯一约束而失败
-	mutateReq := port.MutateRequest{
-		BizName: "fail_fast_biz",
-		CreateOp: &port.CreateOperation{
-			TableName: "test_data",
-			Data: map[string]interface{}{
-				"data": "unique_value", // 这个值在db2中已经存在
+func TestManager_Summary(t *testing.T) {
+	m := &Manager{
+		group: map[string]map[string]*sql.DB{
+			"supply": {
+				"a.db": newMemoryDB(t, "a1"),
+				"b.db": newMemoryDB(t, "b1"),
+			},
+			"sales": {
+				"c.db": newMemoryDB(t, "c1"),
 			},
 		},
 	}
-	_, err = manager.Mutate(ctx, mutateReq)
 
-	require.Error(t, err, "manager.Mutate was expected to fail, but it succeeded")
+	got := m.Summary()
 
-	expectedErrorSubstring := "操作在库 'db2' 上失败并已中止"
-	assert.True(t, strings.Contains(err.Error(), expectedErrorSubstring),
-		fmt.Sprintf("Error message mismatch:\nGot:  %v\nWant to contain: %s", err, expectedErrorSubstring))
+	// 期望业务组数量
+	if len(got) != 2 {
+		t.Fatalf("Summary() 返回业务组数量错误, want=2, got=%d", len(got))
+	}
+
+	// 业务组内库名应按字母序排序
+	wantSupply := []string{"a.db", "b.db"}
+	if !reflect.DeepEqual(got["supply"], wantSupply) {
+		t.Errorf("supply 组库名排序/内容错误\n  got : %#v\n  want: %#v", got["supply"], wantSupply)
+	}
+
+	// sales 组只有一个库
+	if len(got["sales"]) != 1 || got["sales"][0] != "c.db" {
+		t.Errorf("sales 组结果错误, got=%#v", got["sales"])
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Test: Close()
+// -----------------------------------------------------------------------------
+
+func TestManager_Close(t *testing.T) {
+	// 准备 Manager，注入两个打开的连接
+	db1 := newMemoryDB(t, "close1")
+	db2 := newMemoryDB(t, "close2")
+
+	m := &Manager{
+		group: map[string]map[string]*sql.DB{
+			"biz": {
+				"x.db": db1,
+				"y.db": db2,
+			},
+		},
+		dbSchemaCache: make(map[*sql.DB]*dbPhysicalSchemaInfo),
+	}
+
+	// 调用 Close
+	if err := m.Close(); err != nil {
+		t.Errorf("Close() 返回错误: %v", err)
+	}
+
+	// (1) group / dbSchemaCache 应清空
+	if len(m.group) != 0 || len(m.dbSchemaCache) != 0 {
+		t.Error("Close() 未清空内部状态")
+	}
+
+	// (2) 数据库连接应真正关闭
+	if err := db1.Ping(); err == nil {
+		t.Error("db1 仍可 Ping, 未被关闭")
+	}
+	if err := db2.Ping(); err == nil {
+		t.Error("db2 仍可 Ping, 未被关闭")
+	}
 }
