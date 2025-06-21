@@ -170,19 +170,39 @@ func initGlobalSettingsTable(db *sql.DB) error {
 	return nil
 }
 
-// initPluginManagementTable 创建用于存储已安装插件状态的表。
+// initPluginManagementTable 创建用于存储插件状态和实例配置的表。
 func initPluginManagementTable(db *sql.DB) error {
-	query := `
+	// 已安装插件表
+	queryInstalled := `
     CREATE TABLE IF NOT EXISTS installed_plugins (
-        plugin_id TEXT PRIMARY KEY,
-        installed_version TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        version TEXT NOT NULL,
         install_path TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'STOPPED', -- 状态可以是: STOPPED, RUNNING, ERROR
         installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_started_at DATETIME
+        PRIMARY KEY (plugin_id, version)
     );`
-	if _, err := db.Exec(query); err != nil {
+	if _, err := db.Exec(queryInstalled); err != nil {
 		return fmt.Errorf("创建 'installed_plugins' 表失败: %w", err)
 	}
+
+	// ✅ NEW: 新增插件实例配置表
+	queryInstances := `
+	CREATE TABLE IF NOT EXISTS plugin_instances (
+		instance_id TEXT PRIMARY KEY,
+		display_name TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		version TEXT NOT NULL,
+		biz_name TEXT NOT NULL UNIQUE, -- 一个实例只服务一个业务组，且业务组不能重复
+		port INTEGER NOT NULL UNIQUE,    -- 每个实例拥有独立的端口号
+		status TEXT NOT NULL DEFAULT 'STOPPED', -- 状态: STOPPED, RUNNING, ERROR
+		enabled BOOLEAN NOT NULL DEFAULT TRUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_started_at DATETIME,
+		FOREIGN KEY (plugin_id, version) REFERENCES installed_plugins(plugin_id, version)
+	);`
+	if _, err := db.Exec(queryInstances); err != nil {
+		return fmt.Errorf("创建 'plugin_instances' 表失败: %w", err)
+	}
+
 	return nil
 }

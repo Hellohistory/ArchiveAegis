@@ -6,6 +6,30 @@ import (
 	"time"
 )
 
+// InstalledPlugin 代表一个在本地已安装的插件及其当前状态。
+type InstalledPlugin struct {
+	PluginID         string       `json:"plugin_id"`
+	InstalledVersion string       `json:"installed_version"`
+	InstallPath      string       `json:"install_path"`
+	Status           string       `json:"status"`
+	InstalledAt      time.Time    `json:"installed_at"`
+	LastStartedAt    sql.NullTime `json:"last_started_at"`
+}
+
+// PluginInstance 代表一个具体的、带有独立配置的插件运行实例。
+type PluginInstance struct {
+	InstanceID    string       `json:"instance_id"`
+	DisplayName   string       `json:"display_name"`
+	PluginID      string       `json:"plugin_id"`
+	Version       string       `json:"version"`
+	BizName       string       `json:"biz_name"`
+	Port          int          `json:"port"`
+	Status        string       `json:"status"`
+	Enabled       bool         `json:"enabled"`
+	CreatedAt     time.Time    `json:"created_at"`
+	LastStartedAt sql.NullTime `json:"last_started_at"`
+}
+
 // Repository 代表一个插件仓库的元数据
 type Repository struct {
 	Name        string           `json:"repository_name"`
@@ -21,7 +45,7 @@ type PluginManifest struct {
 	Description       string          `json:"description"`
 	Author            string          `json:"author"`
 	Tags              []string        `json:"tags"`
-	SupportedBizNames []string        `json:"supported_biz_names"` // ✅ FIX: 在这里添加支持的业务组列表
+	SupportedBizNames []string        `json:"supported_biz_names"`
 	Versions          []PluginVersion `json:"versions"`
 }
 
@@ -45,14 +69,4 @@ type Source struct {
 type Execution struct {
 	Entrypoint string `json:"entrypoint"` // 可执行文件的相对路径
 	Args       string `json:"args"`       // 启动参数模板
-}
-
-// InstalledPlugin 代表一个在本地已安装的插件及其当前状态。
-type InstalledPlugin struct {
-	PluginID         string       `json:"plugin_id"`
-	InstalledVersion string       `json:"installed_version"`
-	InstallPath      string       `json:"install_path"`
-	Status           string       `json:"status"` // e.g., "STOPPED", "RUNNING", "ERROR"
-	InstalledAt      time.Time    `json:"installed_at"`
-	LastStartedAt    sql.NullTime `json:"last_started_at"`
 }

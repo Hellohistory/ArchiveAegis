@@ -29,11 +29,9 @@ type Dependencies struct {
 	SetupTokenDeadline time.Time
 }
 
-// New 创建并配置一个全新的、基于 Gin 的 HTTP 路由器 (V1 版本)
+// New 创建并配置一个全新的、基于 Gin 的 HTTP 路由器
 func New(deps Dependencies) http.Handler {
 	router := gin.Default()
-
-	// --- 配置全局中间件 ---
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -43,14 +41,12 @@ func New(deps Dependencies) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-
-	// 2. 应用统一错误处理中间件，它将捕获后续所有路由产生的错误
 	router.Use(middleware.ErrorHandlingMiddleware())
 
 	authService := service.NewAuthenticator(deps.AuthDB)
 	v1 := router.Group("/api/v1")
 	{
-		// --- 系统/认证平面 (System/Auth Plane) ---
+		// --- 系统/认证平面 ---
 		authGroup := v1.Group("/auth")
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
@@ -61,7 +57,7 @@ func New(deps Dependencies) http.Handler {
 			systemGroup.GET("/status", statusHandler(deps.AuthDB))
 		}
 
-		// --- 元数据/发现平面 (Metadata/Discovery Plane) ---
+		// --- 元数据/发现平面 ---
 		metaGroup := v1.Group("/meta")
 		metaGroup.Use(authMiddleware(authService))
 		{
@@ -70,7 +66,7 @@ func New(deps Dependencies) http.Handler {
 			metaGroup.GET("/presentations", presentationsHandlerV1(deps.AdminConfigService))
 		}
 
-		// --- 数据平面 (Data Plane) ---
+		// --- 数据平面 ---
 		dataGroup := v1.Group("/data")
 		dataGroup.Use(authMiddleware(authService))
 		{
@@ -78,43 +74,47 @@ func New(deps Dependencies) http.Handler {
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
 		}
 
-		// --- 控制平面 (Control Plane) ---
+		// --- 控制平面 ---
 		adminGroup := v1.Group("/admin")
 		adminGroup.Use(authMiddleware(authService), requireAdmin())
 		{
-			adminGroup.GET("/resources/datasources/configured-names", adminGetConfiguredBizNamesHandler(deps.AdminConfigService))
 
+			// (1) 插件生命周期管理 API
 			pluginAdminGroup := adminGroup.Group("/plugins")
 			{
 				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
-				pluginAdminGroup.POST("/:pluginID/versions/:version/install", installPluginHandler(deps.PluginManager))
-
-				pluginAdminGroup.GET("/installed", listInstalledPluginsHandler(deps.PluginManager))
-				pluginAdminGroup.POST("/:pluginID/start", startPluginHandler(deps.PluginManager))
-				pluginAdminGroup.POST("/:pluginID/stop", stopPluginHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/install", installPluginHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/instances", createInstanceHandler(deps.PluginManager))
+				pluginAdminGroup.GET("/instances", listInstancesHandler(deps.PluginManager))
+				pluginAdminGroup.DELETE("/instances/:instance_id", deleteInstanceHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/instances/:instance_id/start", startInstanceHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/instances/:instance_id/stop", stopInstanceHandler(deps.PluginManager))
 			}
 
-			securityGroup := adminGroup.Group("/security")
+			// (2) 业务逻辑配置 API
+			bizConfigGroup := adminGroup.Group("/biz-config")
 			{
-				securityGroup.GET("/rate-limiting/global", adminGetIPLimitSettingsHandler(deps.AdminConfigService))
-				securityGroup.PUT("/rate-limiting/global", adminUpdateIPLimitSettingsHandler(deps.AdminConfigService))
-			}
+				bizConfigGroup.GET("/", adminGetConfiguredBizNamesHandler(deps.AdminConfigService)) // 路径调整为 /admin/biz-config/
+				bizConfigGroup.GET("/:bizName", getBizConfigHandler(deps.AdminConfigService))
+				bizConfigGroup.PUT("/:bizName/settings", updateBizOverallSettingsHandler(deps.AdminConfigService))
+				bizConfigGroup.PUT("/:bizName/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService))
+				bizConfigGroup.GET("/:bizName/rate-limit", adminGetBizRateLimitHandler(deps.AdminConfigService))
+				bizConfigGroup.PUT("/:bizName/rate-limit", adminUpdateBizRateLimitHandler(deps.AdminConfigService))
+				bizConfigGroup.GET("/:bizName/views", adminGetBizViewsHandler(deps.AdminConfigService))
+				bizConfigGroup.PUT("/:bizName/views", adminUpdateBizViewsHandler(deps.AdminConfigService))
 
-			bizConfigGroup := adminGroup.Group("/resources/datasources/:bizName")
-			{
-				bizConfigGroup.GET("/", getBizConfigHandler(deps.AdminConfigService))
-				bizConfigGroup.PUT("/settings", updateBizOverallSettingsHandler(deps.AdminConfigService))
-				bizConfigGroup.PUT("/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService))
-				bizConfigGroup.GET("/rate-limit", adminGetBizRateLimitHandler(deps.AdminConfigService))
-				bizConfigGroup.PUT("/rate-limit", adminUpdateBizRateLimitHandler(deps.AdminConfigService))
-				bizConfigGroup.GET("/views", adminGetBizViewsHandler(deps.AdminConfigService))
-				bizConfigGroup.PUT("/views", adminUpdateBizViewsHandler(deps.AdminConfigService))
-
-				tableGroup := bizConfigGroup.Group("/tables/:tableName")
+				tableGroup := bizConfigGroup.Group("/:bizName/tables/:tableName")
 				{
 					tableGroup.PUT("/fields", adminUpdateTableFieldSettingsHandler(deps.AdminConfigService))
 					tableGroup.PUT("/permissions", adminUpdateTablePermissionsHandler(deps.AdminConfigService))
 				}
+			}
+
+			// (3) 全局安全配置 API
+			securityGroup := adminGroup.Group("/security")
+			{
+				securityGroup.GET("/rate-limiting/global", adminGetIPLimitSettingsHandler(deps.AdminConfigService))
+				securityGroup.PUT("/rate-limiting/global", adminUpdateIPLimitSettingsHandler(deps.AdminConfigService))
 			}
 		}
 	}
@@ -123,10 +123,10 @@ func New(deps Dependencies) http.Handler {
 }
 
 // =============================================================================
-//  Gin 中间件 (Middleware)
+//
+//	Gin 中间件 (Middleware)
+//
 // =============================================================================
-
-// authMiddleware 是一个将 service.Authenticator 集成到 gin 流程的中间件
 func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,13 +139,10 @@ func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 		}
 	}
 }
-
-// requireAdmin 是一个确保只有管理员角色才能访问的中间件
 func requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := service.ClaimFrom(c.Request)
 		if claims == nil {
-			// 对于认证和授权中间件，我们直接返回响应，因为错误处理中间件可能在此之前运行
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "需要认证"})
 			return
 		}
@@ -656,78 +653,107 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 // listAvailablePluginsHandler 返回所有可供安装的插件列表。
 func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 直接从插件管理器获取已聚合和排序的插件目录
 		availablePlugins := pluginManager.GetAvailablePlugins()
-
-		// 如果目录为空，也返回一个空数组而不是 null，这对前端更友好
 		if availablePlugins == nil {
 			availablePlugins = make([]domain.PluginManifest, 0)
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"data": availablePlugins,
-		})
+		c.JSON(http.StatusOK, gin.H{"data": availablePlugins})
 	}
 }
 
-// installPluginHandler 处理安装特定版本插件的请求
+// installPluginHandler 处理安装特定版本插件的请求。这是一个简化的接口。
 func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	type installPayload struct {
+		PluginID string `json:"plugin_id" binding:"required"`
+		Version  string `json:"version" binding:"required"`
+	}
 	return func(c *gin.Context) {
-		pluginID := c.Param("pluginID")
-		version := c.Param("version")
-
-		if pluginID == "" || version == "" {
-			_ = c.Error(errors.New("插件ID和版本号不能为空"))
+		var payload installPayload
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			_ = c.Error(err)
 			return
 		}
-
-		// Install 方法是阻塞的，它会执行下载、解压等操作
-		if err := pluginManager.Install(pluginID, version); err != nil {
-			_ = c.Error(fmt.Errorf("插件 '%s' v%s 安装失败: %w", pluginID, version, err))
+		if err := pluginManager.Install(payload.PluginID, payload.Version); err != nil {
+			_ = c.Error(fmt.Errorf("插件 '%s' v%s 安装失败: %w", payload.PluginID, payload.Version, err))
 			return
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"message": fmt.Sprintf("插件 '%s' v%s 已成功提交安装任务。", pluginID, version),
-		})
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件 '%s' v%s 已成功提交安装任务。", payload.PluginID, payload.Version)})
 	}
 }
 
-// listInstalledPluginsHandler 返回所有已安装的插件列表及其状态
-func listInstalledPluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+// listInstancesHandler 返回所有已配置的插件实例列表。
+func listInstancesHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		installed, err := pluginManager.ListInstalled()
+		instances, err := pluginManager.ListInstances()
 		if err != nil {
 			_ = c.Error(err)
 			return
 		}
-		if installed == nil {
-			installed = make([]domain.InstalledPlugin, 0)
+		if instances == nil {
+			instances = make([]domain.PluginInstance, 0)
 		}
-		c.JSON(http.StatusOK, gin.H{"data": installed})
+		c.JSON(http.StatusOK, gin.H{"data": instances})
 	}
 }
 
-// startPluginHandler 启动一个已安装的插件
-func startPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+// deleteInstanceHandler 删除一个插件实例的配置。
+func deleteInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		pluginID := c.Param("pluginID")
-		if err := pluginManager.Start(pluginID); err != nil {
-			_ = c.Error(fmt.Errorf("启动插件 '%s' 失败: %w", pluginID, err))
+		instanceID := c.Param("instance_id")
+		if err := pluginManager.DeleteInstance(instanceID); err != nil {
+			_ = c.Error(err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件 '%s' 已成功提交启动任务。", pluginID)})
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功删除。", instanceID)})
 	}
 }
 
-// stopPluginHandler 停止一个正在运行的插件
-func stopPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+// startInstanceHandler 启动一个已配置的插件实例。
+func startInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		pluginID := c.Param("pluginID")
-		if err := pluginManager.Stop(pluginID); err != nil {
-			_ = c.Error(fmt.Errorf("停止插件 '%s' 失败: %w", pluginID, err))
+		instanceID := c.Param("instance_id")
+		if err := pluginManager.Start(instanceID); err != nil {
+			_ = c.Error(fmt.Errorf("启动插件实例 '%s' 失败: %w", instanceID, err))
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件 '%s' 已成功停止。", pluginID)})
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功提交启动任务。", instanceID)})
+	}
+}
+
+// stopInstanceHandler 停止一个正在运行的插件实例。
+func stopInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		instanceID := c.Param("instance_id")
+		if err := pluginManager.Stop(instanceID); err != nil {
+			_ = c.Error(fmt.Errorf("停止插件实例 '%s' 失败: %w", instanceID, err))
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功停止。", instanceID)})
+	}
+}
+
+// createInstanceHandler 创建一个新的插件实例配置。
+func createInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	type createPayload struct {
+		DisplayName string `json:"display_name" binding:"required"`
+		PluginID    string `json:"plugin_id" binding:"required"`
+		Version     string `json:"version" binding:"required"`
+		BizName     string `json:"biz_name" binding:"required"`
+	}
+	return func(c *gin.Context) {
+		var payload createPayload
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		instanceID, err := pluginManager.CreateInstance(payload.DisplayName, payload.PluginID, payload.Version, payload.BizName)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{
+			"message":     "插件实例创建成功",
+			"instance_id": instanceID,
+		})
 	}
 }
