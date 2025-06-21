@@ -1,4 +1,4 @@
-// file: internal/adapter/datasource/grpc_client/client.go
+// Package grpc_client file: internal/adapter/datasource/grpc_client/client.go
 package grpc_client
 
 import (

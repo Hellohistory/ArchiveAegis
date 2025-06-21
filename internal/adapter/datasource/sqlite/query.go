@@ -31,7 +31,7 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 
 	type parsedArgs struct {
 		tableName      string
-		queryParams    []queryParam // ✅ 使用包内私有的 queryParam
+		queryParams    []queryParam
 		fieldsToReturn []string
 		page           int
 		size           int
@@ -56,7 +56,7 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 				return nil, fmt.Errorf("无效请求: filters 数组的第 %d 个元素不是一个有效的JSON对象", i)
 			}
 
-			param := queryParam{} // ✅ 使用包内私有的 queryParam
+			param := queryParam{}
 			if param.Field, ok = filterMap["field"].(string); !ok || param.Field == "" {
 				return nil, fmt.Errorf("无效请求: filter 对象缺少或 'field' 字段类型不正确")
 			}
@@ -89,7 +89,6 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 }
 
 // queryInternal 是查询逻辑的内部核心实现。
-// 它的函数签名被修改，以直接接收解析和验证过的参数，职责更单一。
 func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct {
 	tableName      string
 	queryParams    []queryParam
@@ -213,7 +212,6 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 					return dataCtx.Err()
 				}
 
-				// ✅ 修正点 2: 使用 args 中的变量，而不是不存在的 req
 				sqlQuery, queryArgs, errBuild := buildQuerySQL(targetTableName, selectFieldsForSQL, validatedQueryParams, args.page, args.size)
 				if errBuild != nil {
 					slog.Error("[DBManager Query] 构建SQL失败，已跳过此库", "error", errBuild)
@@ -222,7 +220,6 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 
 				rows, errExec := currentDBConn.QueryContext(dataCtx, sqlQuery, queryArgs...)
 				if errExec != nil {
-					// ✅ 修正点 2: 使用 bizName 变量
 					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", bizName, currentLibName, targetTableName, errExec)
 				}
 				defer rows.Close()
@@ -236,7 +233,6 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 						scanDestPtrs[i] = &scanDest[i]
 					}
 					if errScan := rows.Scan(scanDestPtrs...); errScan != nil {
-						// ✅ 修正点 2: 使用 bizName 变量
 						slog.Warn("[DBManager Query] 扫描库行数据失败，跳过此行", "biz", bizName, "lib", currentLibName, "error", errScan)
 						continue
 					}
@@ -252,7 +248,6 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 					libResults = append(libResults, rowData)
 				}
 				if errRows := rows.Err(); errRows != nil {
-					// ✅ 修正点 2: 使用 bizName 变量
 					return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据时发生错误: %w", bizName, currentLibName, targetTableName, errRows)
 				}
 				if len(libResults) > 0 {

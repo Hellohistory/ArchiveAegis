@@ -14,7 +14,7 @@ import (
 func buildQuerySQL(
 	tableName string,
 	selectDBFields []string,
-	queryParams []queryParam, // ✅ 已修正
+	queryParams []queryParam,
 	page int,
 	size int,
 ) (string, []any, error) {
@@ -49,7 +49,7 @@ func buildQuerySQL(
 }
 
 // buildCountSQL 用于构建计算总数的SQL查询
-func buildCountSQL(tableName string, queryParams []queryParam) (string, []any, error) { // ✅ 已修正
+func buildCountSQL(tableName string, queryParams []queryParam) (string, []any, error) {
 	if tableName == "" {
 		return "", nil, errors.New("表名不能为空 (buildCountSQL)")
 	}
@@ -88,7 +88,7 @@ func buildInsertSQL(tableName string, data map[string]interface{}) (string, []in
 }
 
 // buildUpdateSQL 安全地构建 UPDATE 语句
-func buildUpdateSQL(tableName string, data map[string]interface{}, filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
+func buildUpdateSQL(tableName string, data map[string]interface{}, filters []queryParam) (string, []interface{}, error) {
 	if len(data) == 0 {
 		return "", nil, errors.New("UPDATE 操作需要提供更新数据")
 	}
@@ -113,7 +113,7 @@ func buildUpdateSQL(tableName string, data map[string]interface{}, filters []que
 }
 
 // buildDeleteSQL 安全地构建 DELETE 语句
-func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
+func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface{}, error) {
 	whereClause, whereArgs, err := buildWhereClause(filters)
 	if err != nil {
 		return "", nil, err
@@ -126,7 +126,7 @@ func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface
 }
 
 // buildWhereClause 是一个用于构建 WHERE 子句的通用辅助函数
-func buildWhereClause(filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
+func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 	if len(filters) == 0 {
 		return "", make([]interface{}, 0), nil
 	}

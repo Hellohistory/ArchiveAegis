@@ -1,4 +1,4 @@
-// file: internal/adapter/datasource/sqlite/mutate.go
+// Package sqlite file: internal/adapter/datasource/sqlite/mutate.go
 package sqlite
 
 import (
@@ -11,7 +11,7 @@ import (
 
 // Mutate 实现 port.DataSource 接口，处理通用的 CUD (Create, Update, Delete) 操作。
 func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.MutateResult, error) {
-	// 1. --- 获取业务和权限配置 ---
+	// --- 获取业务和权限配置 ---
 	bizAdminConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
 	if err != nil {
 		return nil, fmt.Errorf("业务 '%s' 查询配置不可用: %w", req.BizName, err)
@@ -20,7 +20,7 @@ func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.Mut
 		return nil, port.ErrBizNotFound
 	}
 
-	// 2. --- 严格地从通用的 Payload Map 中解析字段 ---
+	// --- 严格地从通用的 Payload Map 中解析字段 ---
 	payload := req.Payload
 	tableName, ok := payload["table_name"].(string)
 	if !ok || tableName == "" {
@@ -36,7 +36,7 @@ func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.Mut
 	var sqlStmt string
 	var args []interface{}
 
-	// 3. --- 根据 operation 字符串决定执行何种操作 ---
+	// --- 根据 operation 字符串决定执行何种操作 ---
 	switch req.Operation {
 	case "create":
 		opAllowed = tableConfig.AllowCreate
@@ -83,7 +83,7 @@ func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.Mut
 		return nil, fmt.Errorf("构建写操作SQL失败: %w", err)
 	}
 
-	// 4. --- 在所有相关数据库上顺序执行写操作 (快速失败) ---
+	// --- 在所有相关数据库上顺序执行写操作 (快速失败) ---
 	m.mu.RLock()
 	dbInstances, bizExists := m.group[req.BizName]
 	m.mu.RUnlock()
@@ -115,8 +115,8 @@ func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.Mut
 }
 
 // parseFiltersFromPayload 专门用于从 payload 中解析 filters
-func parseFiltersFromPayload(payload map[string]interface{}) ([]queryParam, error) { // ✅ 使用包内私有的 queryParam
-	var filters []queryParam // ✅ 使用包内私有的 queryParam
+func parseFiltersFromPayload(payload map[string]interface{}) ([]queryParam, error) {
+	var filters []queryParam
 
 	rawFilters, ok := payload["filters"].([]interface{})
 	if !ok {
@@ -129,7 +129,7 @@ func parseFiltersFromPayload(payload map[string]interface{}) ([]queryParam, erro
 			return nil, fmt.Errorf("无效请求: filters 数组的第 %d 个元素不是一个有效的JSON对象", i)
 		}
 
-		param := queryParam{} // ✅ 使用包内私有的 queryParam
+		param := queryParam{}
 		if param.Field, ok = filterMap["field"].(string); !ok || param.Field == "" {
 			return nil, fmt.Errorf("无效请求: filter 对象缺少或 'field' 字段类型不正确")
 		}
