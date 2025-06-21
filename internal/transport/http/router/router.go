@@ -12,7 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"time"
@@ -38,11 +38,8 @@ func New(deps Dependencies) http.Handler {
 	router := gin.Default()
 
 	// --- 全局中间件注册 ---
-	// Prometheus 中间件：放在最顶层以捕获所有请求
 	router.Use(aegobserve.PrometheusMiddleware())
-	// Gzip 压缩
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
-	// CORS 跨域配置
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -51,7 +48,6 @@ func New(deps Dependencies) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	// 4. 统一的错误处理中间件，放在最后，可以捕获所有处理器返回的错误
 	router.Use(middleware.ErrorHandlingMiddleware())
 
 	authService := service.NewAuthenticator(deps.AuthDB)
@@ -60,7 +56,6 @@ func New(deps Dependencies) http.Handler {
 	{
 		// --- 系统/认证平面 ---
 		authGroup := v1.Group("/auth")
-		// 应用轻量级的速率限制中间件链
 		authGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
@@ -94,7 +89,6 @@ func New(deps Dependencies) http.Handler {
 		adminGroup := v1.Group("/admin")
 		adminGroup.Use(authMiddleware(authService), requireAdmin(), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
-			// 将 Prometheus 指标端点安全地置于管理员路由下
 			adminGroup.GET("/metrics", gin.WrapH(aegobserve.Handler()))
 
 			pluginAdminGroup := adminGroup.Group("/plugins")
@@ -141,17 +135,13 @@ func New(deps Dependencies) http.Handler {
 // Gin 中间件 (Middleware)
 // =============================================================================
 
-// WrapNetHTTP 接受一个函数，该函数接收 http.Handler 并返回 http.Handler（这是标准中间件的签名），
-// 然后将其转换为一个 gin.HandlerFunc。
+// WrapNetHTTP 是一个更简洁、惯用的方式来包装 net/http 中间件给 Gin 使用
 func WrapNetHTTP(middleware func(http.Handler) http.Handler) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 创建一个 handler，它的唯一作用就是调用 Gin 的下一个处理器
 		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c.Next()
 		})
-		// 将 nextHandler 传入标准中间件，得到一个新的 handler
 		handlerToExec := middleware(nextHandler)
-		// 执行这个包装后的 handler
 		handlerToExec.ServeHTTP(c.Writer, c.Request)
 	}
 }
@@ -159,7 +149,7 @@ func WrapNetHTTP(middleware func(http.Handler) http.Handler) gin.HandlerFunc {
 func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c.Request = r // 确保对 request 的修改能传递回 Gin
+			c.Request = r
 			c.Next()
 		}))
 		handler.ServeHTTP(c.Writer, c.Request)
@@ -178,6 +168,96 @@ func requireAdmin() gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// =============================================================================
+//  API 处理器 (Handlers)
+// =============================================================================
+
+// --- V1 数据平面处理器 (已更新以适配新协议) ---
+
+// queryHandlerV1 现在处理通用的查询请求
+func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+	// 请求体现在直接对应我们核心接口中的 port.QueryRequest
+	type RequestBody struct {
+		BizName string                 `json:"biz_name" binding:"required"`
+		Query   map[string]interface{} `json:"query" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		dataSource, exists := registry[reqBody.BizName]
+		if !exists {
+			_ = c.Error(port.ErrBizNotFound)
+			return
+		}
+
+		// 直接构建通用的 port.QueryRequest
+		queryReq := port.QueryRequest{
+			BizName: reqBody.BizName,
+			Query:   reqBody.Query,
+		}
+
+		result, err := dataSource.Query(c.Request.Context(), queryReq)
+		if err != nil {
+			slog.Error("queryHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
+			_ = c.Error(err)
+			return
+		}
+		// 直接返回插件处理后的通用结果对象
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+// mutateHandlerV1 现在处理通用的写操作请求
+func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+	// 请求体现在直接对应我们核心接口中的 port.MutateRequest
+	type RequestBody struct {
+		BizName   string                 `json:"biz_name" binding:"required"`
+		Operation string                 `json:"operation" binding:"required"`
+		Payload   map[string]interface{} `json:"payload" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		dataSource, exists := registry[reqBody.BizName]
+		if !exists {
+			_ = c.Error(port.ErrBizNotFound)
+			return
+		}
+
+		slog.Info(
+			"审计日志: 收到 Mutate 请求",
+			"user_id", service.ClaimFrom(c.Request).ID,
+			"biz_name", reqBody.BizName,
+			"operation", reqBody.Operation,
+		)
+
+		// 直接构建通用的 port.MutateRequest
+		mutateReq := port.MutateRequest{
+			BizName:   reqBody.BizName,
+			Operation: reqBody.Operation,
+			Payload:   reqBody.Payload,
+		}
+
+		result, err := dataSource.Mutate(c.Request.Context(), mutateReq)
+		if err != nil {
+			slog.Error("mutateHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
 	}
 }
 
@@ -238,147 +318,6 @@ func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.Hand
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": viewConfig})
-	}
-}
-
-// --- V1 数据平面处理器 ---
-
-// queryHandlerV1 处理统一的数据查询请求
-func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	type QueryPayload struct {
-		Table          string            `json:"table"`
-		FieldsToReturn []string          `json:"fields_to_return"`
-		Filters        []port.QueryParam `json:"filters"`
-		Page           int               `json:"page"`
-		Size           int               `json:"size"`
-	}
-	type RequestBody struct {
-		BizName string       `json:"biz_name" binding:"required"`
-		Query   QueryPayload `json:"query" binding:"required"`
-	}
-
-	return func(c *gin.Context) {
-		var reqBody RequestBody
-		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			_ = c.Error(err)
-			return
-		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
-			return
-		}
-
-		if reqBody.Query.Page <= 0 {
-			reqBody.Query.Page = 1
-		}
-		if reqBody.Query.Size <= 0 {
-			reqBody.Query.Size = 50
-		}
-		if reqBody.Query.Size > 2000 {
-			reqBody.Query.Size = 2000
-		}
-
-		queryReq := port.QueryRequest{
-			BizName:        reqBody.BizName,
-			TableName:      reqBody.Query.Table,
-			QueryParams:    reqBody.Query.Filters,
-			Page:           reqBody.Query.Page,
-			Size:           reqBody.Query.Size,
-			FieldsToReturn: reqBody.Query.FieldsToReturn,
-		}
-
-		result, err := dataSource.Query(c.Request.Context(), queryReq)
-		if err != nil {
-			log.Printf("ERROR: queryHandlerV1 query failed for biz '%s': %v", reqBody.BizName, err)
-			_ = c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"data": result.Data, "total": result.Total})
-	}
-}
-
-// mutateHandlerV1 处理统一的数据写入（增删改）请求
-func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	type CreatePayload struct {
-		Table string                 `json:"table" binding:"required"`
-		Data  map[string]interface{} `json:"data" binding:"required"`
-	}
-	type UpdatePayload struct {
-		Table   string                 `json:"table" binding:"required"`
-		Data    map[string]interface{} `json:"data" binding:"required"`
-		Filters []port.QueryParam      `json:"filters" binding:"required"`
-	}
-	type DeletePayload struct {
-		Table   string            `json:"table" binding:"required"`
-		Filters []port.QueryParam `json:"filters" binding:"required"`
-	}
-	type RequestBody struct {
-		BizName    string         `json:"biz_name" binding:"required"`
-		Operation  string         `json:"operation" binding:"required,oneof=create update delete"`
-		CreateData *CreatePayload `json:"create_data,omitempty"`
-		UpdateData *UpdatePayload `json:"update_data,omitempty"`
-		DeleteData *DeletePayload `json:"delete_data,omitempty"`
-	}
-
-	return func(c *gin.Context) {
-		var reqBody RequestBody
-		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			_ = c.Error(err)
-			return
-		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
-			return
-		}
-
-		var goReq port.MutateRequest
-		goReq.BizName = reqBody.BizName
-
-		switch reqBody.Operation {
-		case "create":
-			if reqBody.CreateData == nil {
-				_ = c.Error(errors.New("create操作缺少'create_data'字段"))
-				return
-			}
-			goReq.CreateOp = &port.CreateOperation{
-				TableName: reqBody.CreateData.Table,
-				Data:      reqBody.CreateData.Data,
-			}
-		case "update":
-			if reqBody.UpdateData == nil {
-				_ = c.Error(errors.New("update操作缺少'update_data'字段"))
-				return
-			}
-			goReq.UpdateOp = &port.UpdateOperation{
-				TableName: reqBody.UpdateData.Table,
-				Data:      reqBody.UpdateData.Data,
-				Filters:   reqBody.UpdateData.Filters,
-			}
-		case "delete":
-			if reqBody.DeleteData == nil {
-				_ = c.Error(errors.New("delete操作缺少'delete_data'字段"))
-				return
-			}
-			goReq.DeleteOp = &port.DeleteOperation{
-				TableName: reqBody.DeleteData.Table,
-				Filters:   reqBody.DeleteData.Filters,
-			}
-		}
-
-		claims := service.ClaimFrom(c.Request)
-		log.Printf("审计日志: 用户ID '%d' 正在尝试对业务 '%s' 执行 '%s' 操作。", claims.ID, reqBody.BizName, reqBody.Operation)
-
-		result, err := dataSource.Mutate(c.Request.Context(), goReq)
-		if err != nil {
-			log.Printf("ERROR: mutateHandlerV1 failed for biz '%s': %v", reqBody.BizName, err)
-			_ = c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
 
