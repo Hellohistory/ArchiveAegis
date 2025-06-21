@@ -34,7 +34,7 @@ jobs:
       - name: Install Protobuf Compiler
         uses: arduino/setup-protoc@v2
         with:
-          version: '25.3'
+          version: '31.1'
 
       - name: Install Go Protobuf Plugins
         run: |
