@@ -1,5 +1,5 @@
-// Package service internal/service/rate_limit_config.go
-package service
+// Package admin_config internal/service/admin_config/rate_limit_config.go
+package admin_config
 
 import (
 	"context"

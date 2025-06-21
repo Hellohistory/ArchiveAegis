@@ -1,5 +1,5 @@
-// Package service internal/service/table_config_write.go
-package service
+// Package admin_config internal/service/admin_config/table_config_write.go
+package admin_config
 
 import (
 	"context"

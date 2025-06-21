@@ -1,5 +1,5 @@
-// Package service internal/service/view_config.go
-package service
+// Package admin_config internal/service/admin_config/view_config.go
+package admin_config
 
 import (
 	"context"
