@@ -27,8 +27,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// 版本升级，标志着插件管理器架构的集成
-const version = "v1.0.0-alpha4"
+// 版本定义
+const version = "v1.0.0-alpha5"
 
 // PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
 type PluginManagementConfig struct {
