@@ -88,6 +88,10 @@ func New(deps Dependencies) http.Handler {
 			{
 				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
 				pluginAdminGroup.POST("/:pluginID/versions/:version/install", installPluginHandler(deps.PluginManager))
+
+				pluginAdminGroup.GET("/installed", listInstalledPluginsHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/:pluginID/start", startPluginHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/:pluginID/stop", stopPluginHandler(deps.PluginManager))
 			}
 
 			securityGroup := adminGroup.Group("/security")
@@ -686,5 +690,44 @@ func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 		c.JSON(http.StatusOK, gin.H{
 			"message": fmt.Sprintf("插件 '%s' v%s 已成功提交安装任务。", pluginID, version),
 		})
+	}
+}
+
+// listInstalledPluginsHandler 返回所有已安装的插件列表及其状态
+func listInstalledPluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		installed, err := pluginManager.ListInstalled()
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		if installed == nil {
+			installed = make([]domain.InstalledPlugin, 0)
+		}
+		c.JSON(http.StatusOK, gin.H{"data": installed})
+	}
+}
+
+// startPluginHandler 启动一个已安装的插件
+func startPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pluginID := c.Param("pluginID")
+		if err := pluginManager.Start(pluginID); err != nil {
+			_ = c.Error(fmt.Errorf("启动插件 '%s' 失败: %w", pluginID, err))
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件 '%s' 已成功提交启动任务。", pluginID)})
+	}
+}
+
+// stopPluginHandler 停止一个正在运行的插件
+func stopPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pluginID := c.Param("pluginID")
+		if err := pluginManager.Stop(pluginID); err != nil {
+			_ = c.Error(fmt.Errorf("停止插件 '%s' 失败: %w", pluginID, err))
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件 '%s' 已成功停止。", pluginID)})
 	}
 }

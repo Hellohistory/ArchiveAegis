@@ -1,7 +1,10 @@
 // Package domain file: internal/core/domain/plugin_models.go
 package domain
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 // Repository 代表一个插件仓库的元数据
 type Repository struct {
@@ -13,12 +16,13 @@ type Repository struct {
 
 // PluginManifest 代表单个插件的完整描述信息
 type PluginManifest struct {
-	ID          string          `json:"id"`          // 插件的全局唯一ID, e.g., "io.archiveaegis.sqlite"
-	Name        string          `json:"name"`        // 人类可读的名称
-	Description string          `json:"description"` // 简短描述
-	Author      string          `json:"author"`      // 作者
-	Tags        []string        `json:"tags"`        // 标签，用于分类和搜索
-	Versions    []PluginVersion `json:"versions"`    // 该插件的所有可用版本
+	ID                string          `json:"id"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description"`
+	Author            string          `json:"author"`
+	Tags              []string        `json:"tags"`
+	SupportedBizNames []string        `json:"supported_biz_names"` // ✅ FIX: 在这里添加支持的业务组列表
+	Versions          []PluginVersion `json:"versions"`
 }
 
 // PluginVersion 代表插件的一个特定版本
@@ -41,4 +45,14 @@ type Source struct {
 type Execution struct {
 	Entrypoint string `json:"entrypoint"` // 可执行文件的相对路径
 	Args       string `json:"args"`       // 启动参数模板
+}
+
+// InstalledPlugin 代表一个在本地已安装的插件及其当前状态。
+type InstalledPlugin struct {
+	PluginID         string       `json:"plugin_id"`
+	InstalledVersion string       `json:"installed_version"`
+	InstallPath      string       `json:"install_path"`
+	Status           string       `json:"status"` // e.g., "STOPPED", "RUNNING", "ERROR"
+	InstalledAt      time.Time    `json:"installed_at"`
+	LastStartedAt    sql.NullTime `json:"last_started_at"`
 }

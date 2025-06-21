@@ -9,6 +9,7 @@
       "description": "用于连接和查询本地 SQLite 数据库文件。",
       "author": "Local Dev",
       "tags": ["database", "sqlite", "testing"],
+      "supported_biz_names": ["sales_data"],
       "versions": [
         {
           "version_string": "1.0.0",
@@ -16,12 +17,12 @@
           "changelog": "- 用于本地开发的初始版本。",
           "min_gateway_version": "v1.1.0",
           "source": {
-            "url": "file:///E:/Code/Go/ArchiveAegis/AegisBuild/plugins/sqlite_plugin.exe",
+            "url": "file:///E:/Code/Go/ArchiveAegis/AegisBuild/plugins/sqlite_plugin_windows_amd64.zip",
             "checksum": ""
           },
           "execution": {
             "entrypoint": "sqlite_plugin.exe",
-            "args": "-name='我的本地插件' -biz='local_sales' -port=50051"
+            "args": "-name='我的本地插件' -biz='<biz_name>' -port=<port>"
           }
         }
       ]

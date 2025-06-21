@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -25,9 +26,7 @@ import (
 )
 
 // 版本升级，标志着插件管理器架构的集成
-const version = "v1.1.0"
-
-// ✅ FIX: 将所有与 config.yaml 解析相关的结构体都定义在 main 包内。
+const version = "v1.0.0-alpha3"
 
 // PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
 type PluginManagementConfig struct {
@@ -90,7 +89,10 @@ func main() {
 	}
 
 	// 4. 初始化插件管理器服务
-	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory)
+	dataSourceRegistry := make(map[string]port.DataSource)
+	closableAdapters := make([]io.Closer, 0)
+	// ✅ FIX: 将 closableAdapters 的地址 &closableAdapters 传入，以匹配 *[]io.Closer 类型
+	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
@@ -111,13 +113,9 @@ func main() {
 		}
 	}()
 
-	// 5. 初始化数据源注册中心 (未来将由 PluginManager 动态管理)
-	// 当前版本，此注册中心是空的，等待用户通过API安装和启动插件
-	dataSourceRegistry := make(map[string]port.DataSource)
+	// 5. 初始化数据源注册中心 (由 PluginManager 动态管理)
+	// ✅ FIX: 移除重复的变量声明
 	log.Println("ℹ️  数据源注册中心已初始化，将由插件管理器在运行时动态填充。")
-
-	// ✅ FIX: 移除不再使用的 closableAdapters 变量
-	// 由于插件是动态启动/停止的，连接的生命周期将由 PluginManager 负责。
 
 	// 6. 初始化 HTTP 传输层
 	var setupToken string
