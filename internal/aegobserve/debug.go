@@ -1,17 +1,23 @@
-// Package aegobserve 启用 pprof 调试
+// Package aegobserve file: internal/aegobserve/debug.go
 package aegobserve
 
 import (
-	"log"
+	"log/slog" // 使用新的 logger
 	"net/http"
 	_ "net/http/pprof" // 自动注册 pprof
 )
 
-// EnablePprof 在 :6060 暴露 /debug/pprof
-func EnablePprof() {
+// EnablePprof 在指定地址上暴露 /debug/pprof 端点。
+// 例如 addr 可以是 "localhost:6060" 或 ":6060"
+func EnablePprof(addr string) {
+	if addr == "" {
+		slog.Info("pprof endpoint is disabled because address is empty")
+		return
+	}
 	go func() {
-		if err := http.ListenAndServe("0.0.0.0:6060", nil); err != nil {
-			log.Printf("pprof 启动失败: %v", err)
+		slog.Info("Starting pprof endpoint", "address", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			slog.Error("Failed to start pprof endpoint", "error", err)
 		}
 	}()
 }
