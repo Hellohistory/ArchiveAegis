@@ -1,0 +1,69 @@
+# .github/workflows/proto-check.yml
+name: Build & Check Proto
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Download Go module dependencies
+        run: go mod download
+
+      - name: Install Task (cross-platform task runner)
+        uses: arduino/setup-task@v2
+
+      - name: Install Protobuf Compiler
+        uses: arduino/setup-protoc@v2
+        with:
+          version: '25.3'
+
+      - name: Install Go Protobuf Plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "${HOME}/go/bin" >> $GITHUB_PATH
+
+      - name: Generate Protobuf Files
+        run: task gen
+
+      - name: Find changed test files
+        id: changed_test_files
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            **/*_test.go
+
+      - name: Run tests only on changed packages
+        if: steps.changed_test_files.outputs.any_changed == 'true'
+        run: |
+          PKGS_TO_TEST=$(echo "${{ steps.changed_test_files.outputs.all_changed_files }}" | xargs -n1 dirname | sort -u)
+          echo "Found changes in the following test files:"
+          echo "${{ steps.changed_test_files.outputs.all_changed_files }}"
+          echo "=================================================="
+          echo "Running tests for the following packages:"
+          echo "$PKGS_TO_TEST"
+          go test -v -race $PKGS_TO_TEST
+
+      - name: Check for Uncommitted Generated Files
+        run: |
+          git diff --exit-code || (echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。" && exit 1)
+
+      - name: All checks passed
+        run: echo "✅🎉 CI 流程全部成功！所有检查均已通过。"
