@@ -80,12 +80,10 @@ func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher)
 		}
 	}
 
-	// We only care about .db files for hot-reloading
 	if !strings.HasSuffix(strings.ToLower(cleanPath), ".db") {
 		return
 	}
 
-	// Debounce the event to handle rapid changes gracefully
 	m.eventTimersMu.Lock()
 	defer m.eventTimersMu.Unlock()
 	if timer, exists := m.eventTimers[cleanPath]; exists {
@@ -105,13 +103,10 @@ func (m *Manager) processDebouncedEvent(path string) {
 	ctxBg := context.Background()
 	needsSchemaRefresh := false
 
-	// If file no longer exists, it was removed or renamed.
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		m.closeDB(path)
 		needsSchemaRefresh = true
 	} else {
-		// File exists, so it was created or modified.
-		// We perform a close & open to ensure we have the latest version.
 		m.closeDB(path)
 		if errOpen := m.openDB(ctxBg, path); errOpen != nil {
 			log.Printf("错误: [DBManager Debounced Event] 热加载数据库 '%s' 失败: %v", path, errOpen)

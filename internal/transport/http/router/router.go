@@ -23,6 +23,7 @@ import (
 type Dependencies struct {
 	Registry           map[string]port.DataSource
 	AdminConfigService port.QueryAdminConfigService
+	PluginManager      *service.PluginManager
 	AuthDB             *sql.DB
 	SetupToken         string
 	SetupTokenDeadline time.Time
@@ -82,6 +83,12 @@ func New(deps Dependencies) http.Handler {
 		adminGroup.Use(authMiddleware(authService), requireAdmin())
 		{
 			adminGroup.GET("/resources/datasources/configured-names", adminGetConfiguredBizNamesHandler(deps.AdminConfigService))
+
+			pluginAdminGroup := adminGroup.Group("/plugins")
+			{
+				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
+				pluginAdminGroup.POST("/:pluginID/versions/:version/install", installPluginHandler(deps.PluginManager))
+			}
 
 			securityGroup := adminGroup.Group("/security")
 			{
@@ -639,5 +646,45 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "表的写权限已成功更新。"})
+	}
+}
+
+// listAvailablePluginsHandler 返回所有可供安装的插件列表。
+func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 直接从插件管理器获取已聚合和排序的插件目录
+		availablePlugins := pluginManager.GetAvailablePlugins()
+
+		// 如果目录为空，也返回一个空数组而不是 null，这对前端更友好
+		if availablePlugins == nil {
+			availablePlugins = make([]domain.PluginManifest, 0)
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": availablePlugins,
+		})
+	}
+}
+
+// installPluginHandler 处理安装特定版本插件的请求
+func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		pluginID := c.Param("pluginID")
+		version := c.Param("version")
+
+		if pluginID == "" || version == "" {
+			_ = c.Error(errors.New("插件ID和版本号不能为空"))
+			return
+		}
+
+		// Install 方法是阻塞的，它会执行下载、解压等操作
+		if err := pluginManager.Install(pluginID, version); err != nil {
+			_ = c.Error(fmt.Errorf("插件 '%s' v%s 安装失败: %w", pluginID, version, err))
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message": fmt.Sprintf("插件 '%s' v%s 已成功提交安装任务。", pluginID, version),
+		})
 	}
 }

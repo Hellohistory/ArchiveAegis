@@ -2,7 +2,6 @@
 package main
 
 import (
-	"ArchiveAegis/internal/adapter/datasource/grpc_client"
 	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
@@ -13,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -26,27 +24,33 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// 版本升级，标志着动态插件系统的实现
-const version = "v1.0.0-alpha3"
+// 版本升级，标志着插件管理器架构的集成
+const version = "v1.1.0"
 
-type Config struct {
-	Server  ServerConfig   `mapstructure:"server"`
-	Plugins []PluginConfig `mapstructure:"plugins"`
+// ✅ FIX: 将所有与 config.yaml 解析相关的结构体都定义在 main 包内。
+
+// PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
+type PluginManagementConfig struct {
+	InstallDirectory string                     `mapstructure:"install_directory"`
+	Repositories     []service.RepositoryConfig `mapstructure:"repositories"`
 }
 
+// ServerConfig 对应 config.yaml 中的 `server` 部分
 type ServerConfig struct {
 	Port     int    `mapstructure:"port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 
-type PluginConfig struct {
-	Address string `mapstructure:"address"`
-	Enabled bool   `mapstructure:"enabled"`
+// Config 是整个 config.yaml 的顶层结构体
+type Config struct {
+	Server           ServerConfig           `mapstructure:"server"`
+	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"`
 }
 
 func main() {
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 
+	// 1. 初始化 Viper，用于加载 config.yaml
 	if err := initViper(); err != nil {
 		log.Fatalf("CRITICAL: 初始化配置失败: %v", err)
 	}
@@ -57,6 +61,7 @@ func main() {
 	}
 	log.Println("✅ 配置: config.yaml 加载并解析成功。")
 
+	// 2. 初始化系统数据库 (auth.db)
 	instanceDir := "instance"
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
@@ -73,6 +78,7 @@ func main() {
 		}
 	}()
 
+	// 3. 初始化核心服务
 	adminConfigService, err := service.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
@@ -83,79 +89,37 @@ func main() {
 		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
 	}
 
-	// =========================================================================
-	//  数据源初始化: 全新的动态插件发现与注册逻辑
-	// =========================================================================
-	dataSourceRegistry := make(map[string]port.DataSource)
-	closableAdapters := make([]io.Closer, 0)
-	log.Println("⚙️ 注册中心: 开始根据 config.yaml 进行动态插件发现...")
-
-	for _, pluginCfg := range config.Plugins {
-		if !pluginCfg.Enabled {
-			log.Printf("⚪️ 插件地址 '%s' 在配置中被禁用，已跳过。", pluginCfg.Address)
-			continue
-		}
-
-		// 连接到插件
-		adapter, err := grpc_client.New(pluginCfg.Address)
-		if err != nil {
-			log.Printf("⚠️  无法连接到插件 '%s': %v，已跳过。", pluginCfg.Address, err)
-			continue
-		}
-
-		// 调用 GetPluginInfo 获取插件的自我描述信息
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		info, err := adapter.GetPluginInfo(ctx)
-		cancel() // 及时释放上下文资源
-
-		if err != nil {
-			log.Printf("⚠️  从插件 '%s' 获取信息失败: %v，已跳过。", pluginCfg.Address, err)
-			_ = adapter.Close() // 获取信息失败，关闭连接
-			continue
-		}
-
-		log.Printf("🤝 已成功从 '%s' 获取插件信息: [名称: %s, 版本: %s]", pluginCfg.Address, info.Name, info.Version)
-
-		// 根据插件信息，将其注册到网关的业务组中
-		if len(info.SupportedBizNames) == 0 {
-			log.Printf("⚠️  插件 '%s' 未声明任何支持的业务组 (supported_biz_names)，已跳过。", info.Name)
-			_ = adapter.Close()
-			continue
-		}
-
-		isRegistered := false
-		for _, bizName := range info.SupportedBizNames {
-			if _, exists := dataSourceRegistry[bizName]; exists {
-				// 防止不同的插件声称处理同一个业务组
-				log.Printf("⚠️  业务组 '%s' 已被其他插件注册，插件 '%s' 的此次声明被忽略。", bizName, info.Name)
-				continue
-			}
-			dataSourceRegistry[bizName] = adapter
-			isRegistered = true
-			log.Printf("✅ 业务组 '%s' 已成功动态注册，由插件 '%s' (地址: %s) 提供服务。", bizName, info.Name, pluginCfg.Address)
-		}
-
-		if isRegistered {
-			closableAdapters = append(closableAdapters, adapter) // 只有成功注册了至少一个业务组的适配器才需要被关闭
-		} else {
-			_ = adapter.Close() // 没有注册任何业务，关闭连接
-		}
+	// 4. 初始化插件管理器服务
+	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory)
+	if err != nil {
+		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
-	log.Println("✅ 注册中心: 动态插件发现与注册完成。")
+	log.Println("✅ 服务层: PluginManager 初始化完成")
 
-	// 在停机时关闭所有可关闭的适配器连接
-	defer func() {
-		log.Println("正在关闭所有gRPC插件适配器连接...")
-		for _, closer := range closableAdapters {
-			if err := closer.Close(); err != nil {
-				log.Printf("ERROR: 关闭适配器连接时发生错误: %v", err)
+	// 启动时立即刷新一次仓库，建立初始插件目录
+	pluginManager.RefreshRepositories()
+
+	// 启动一个后台 goroutine，定期（例如每小时）刷新插件仓库
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				pluginManager.RefreshRepositories()
 			}
 		}
 	}()
 
-	// =========================================================================
-	//  初始化传输层 (这部分及之后保持不变)
-	// =========================================================================
+	// 5. 初始化数据源注册中心 (未来将由 PluginManager 动态管理)
+	// 当前版本，此注册中心是空的，等待用户通过API安装和启动插件
+	dataSourceRegistry := make(map[string]port.DataSource)
+	log.Println("ℹ️  数据源注册中心已初始化，将由插件管理器在运行时动态填充。")
+
+	// ✅ FIX: 移除不再使用的 closableAdapters 变量
+	// 由于插件是动态启动/停止的，连接的生命周期将由 PluginManager 负责。
+
+	// 6. 初始化 HTTP 传输层
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
@@ -164,10 +128,12 @@ func main() {
 		log.Printf("重要: [SETUP MODE] 系统中无管理员，安装令牌已生成 (30分钟内有效): %s", setupToken)
 	}
 
+	// 将所有依赖注入到路由器
 	httpRouter := router.New(
 		router.Dependencies{
 			Registry:           dataSourceRegistry,
 			AdminConfigService: adminConfigService,
+			PluginManager:      pluginManager, // 注入插件管理器
 			AuthDB:             sysDB,
 			SetupToken:         setupToken,
 			SetupTokenDeadline: setupTokenDeadline,
@@ -181,6 +147,7 @@ func main() {
 		Handler: httpRouter,
 	}
 
+	// 7. 启动服务器并处理优雅停机
 	go func() {
 		log.Printf("🚀 ArchiveAegis 内核启动成功，开始在 %s 上监听 HTTP 请求...", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -192,13 +159,11 @@ func main() {
 	aegobserve.Register()
 	log.Println("✅ 监控: pprof, metrics 已启用。")
 
-	// 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("👋 收到停机信号，准备优雅关闭...")
 
-	// 创建一个有超时的上下文
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -244,21 +209,28 @@ func initViper() error {
 	if err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			log.Println("警告: 未找到 config.yaml。将创建默认配置文件 config.yaml。")
-
+			// 更新默认配置文件以匹配新的结构
 			defaultConfig := `
-# ArchiveAegis 平台默认配置文件 (V2 - 动态插件)
+# ArchiveAegis 平台默认配置文件 (V3 - 插件仓库模式)
 server:
   port: 10224
   log_level: "info"
 
-# 需要连接的插件列表
-# 网关将尝试连接所有已启用的插件，并动态注册它们所声明的业务。
-plugins:
-  - address: "localhost:50051"
-    enabled: true # 设为 true 来启用这个插件
-
-  # - address: "localhost:50052"
-  #   enabled: false
+# 插件管理配置
+plugin_management:
+  # 插件将被下载和安装到这个目录
+  install_directory: "./instance/plugins"
+  
+  # 插件仓库列表
+  repositories:
+    - name: "本地测试仓库"
+      # 指向我们之前创建的本地清单文件，注意 file:// 协议头
+      url: "file://./configs/local_repository.json"
+      enabled: true
+      
+    - name: "ArchiveAegis 官方仓库 (示例)"
+      url: "https://plugins.archiveaegis.io/repository.json"
+      enabled: false # 默认禁用，因为地址是虚构的
 `
 			configFilePath := "configs/config.yaml"
 			if err := os.MkdirAll("configs", 0755); err != nil {
@@ -267,7 +239,6 @@ plugins:
 			if err := os.WriteFile(configFilePath, []byte(defaultConfig), 0644); err != nil {
 				return fmt.Errorf("创建默认配置文件失败: %w", err)
 			}
-			// 修改为警告而非致命错误，以便程序可以继续使用默认值运行
 			log.Printf("警告: 默认配置文件已在 '%s' 创建。请根据需要修改。", configFilePath)
 			// 重新读取刚刚创建的配置文件
 			return viper.ReadInConfig()

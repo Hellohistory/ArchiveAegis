@@ -8,26 +8,23 @@ import (
 )
 
 // InitPlatformTables 负责在系统启动时，检查并创建/更新所有平台级的系统管理表。
-// 这是确保无论auth.db是否存在，系统都能正常运行的关键。
 func InitPlatformTables(db *sql.DB) error {
-	// 初始化用户表
 	if err := initUserTable(db); err != nil {
 		return fmt.Errorf("初始化用户表失败: %w", err)
 	}
-
-	// 初始化权限配置相关的表 (并为写操作增加权限字段)
 	if err := initPermissionTables(db); err != nil {
 		return fmt.Errorf("初始化权限表失败: %w", err)
 	}
-
-	// 初始化操作日志表 (用于回滚)
 	if err := initOperationLogTable(db); err != nil {
 		return fmt.Errorf("初始化操作日志表失败: %w", err)
 	}
-
-	// 初始化全局设置表
 	if err := initGlobalSettingsTable(db); err != nil {
 		return fmt.Errorf("初始化全局设置表失败: %w", err)
+	}
+
+	// ✅ NEW: 调用新函数来初始化插件管理相关的表
+	if err := initPluginManagementTable(db); err != nil {
+		return fmt.Errorf("初始化插件管理表失败: %w", err)
 	}
 
 	log.Println("✅ 数据库: 所有系统表结构初始化/检查完成。")
@@ -170,5 +167,22 @@ func initGlobalSettingsTable(db *sql.DB) error {
 		return fmt.Errorf("创建 'biz_ratelimit_settings' 表失败: %w", err)
 	}
 
+	return nil
+}
+
+// initPluginManagementTable 创建用于存储已安装插件状态的表。
+func initPluginManagementTable(db *sql.DB) error {
+	query := `
+    CREATE TABLE IF NOT EXISTS installed_plugins (
+        plugin_id TEXT PRIMARY KEY,
+        installed_version TEXT NOT NULL,
+        install_path TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'STOPPED', -- 状态可以是: STOPPED, RUNNING, ERROR
+        installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_started_at DATETIME
+    );`
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("创建 'installed_plugins' 表失败: %w", err)
+	}
 	return nil
 }

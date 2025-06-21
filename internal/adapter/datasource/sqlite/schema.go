@@ -1,4 +1,4 @@
-// file: internal/adapter/datasource/sqlite/schema.go
+// Package sqlite file: internal/adapter/datasource/sqlite/schema.go
 package sqlite
 
 import (
