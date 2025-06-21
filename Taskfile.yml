@@ -7,7 +7,7 @@ vars:
 tasks:
   gen:
     desc: 生成 Go + gRPC 代码到 {{.OUT_DIR}}/proto 目录
-    deps: [mkdir]
+    deps: [mkdir] # 依赖可以保留，确保根目录存在
     cmds:
       - cmd: |
           protoc --proto_path={{.PROTO_ROOT}} \
@@ -16,17 +16,15 @@ tasks:
                  {{.PROTO_ROOT}}/datasource/v1/datasource.proto
 
   mkdir:
-    desc: 创建输出目录（兼容多平台）
+    desc: 确保根输出目录存在
     cmds:
-      # Linux / macOS 下用 mkdir -p
-      - cmd: mkdir -p {{.OUT_DIR}}/proto/datasource/v1
+      - cmd: mkdir -p {{.OUT_DIR}}
         platforms: [linux, darwin]
 
-      # Windows 下显式调用 PowerShell 来创建目录
       - cmd: >
           powershell -NoProfile -Command
-          "if (-not (Test-Path '{{.OUT_DIR}}\proto\datasource\v1')) {
-             New-Item -ItemType Directory -Path '{{.OUT_DIR}}\proto\datasource\v1' -Force | Out-Null
+          "if (-not (Test-Path '{{.OUT_DIR}}')) {
+             New-Item -ItemType Directory -Path '{{.OUT_DIR}}' -Force | Out-Null
            }"
         platforms: [windows]
 
