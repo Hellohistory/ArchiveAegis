@@ -1,4 +1,5 @@
 // Package aegconfig 负责集中式配置加载
+// internal/aegconfig/config.go
 package aegconfig
 
 import (

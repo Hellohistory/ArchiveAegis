@@ -1,4 +1,4 @@
-// file: internal/service/db_init.go
+// Package service file: internal/service/db_init.go
 package service
 
 import (

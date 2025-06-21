@@ -1,4 +1,4 @@
-// file: internal/core/domain/plugin_models.go
+// Package domain file: internal/core/domain/plugin_models.go
 package domain
 
 import (

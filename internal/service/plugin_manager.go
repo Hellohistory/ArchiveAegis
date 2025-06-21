@@ -210,13 +210,13 @@ func (pm *PluginManager) CreateInstance(displayName, pluginID, version, bizName 
 	if count > 0 {
 		return "", fmt.Errorf("业务组名称 (biz_name) '%s' 已被其他插件实例占用", bizName)
 	}
-	freePort, err := findFreePort()
+	Port, err := findFreePort()
 	if err != nil {
 		return "", fmt.Errorf("寻找可用端口失败: %w", err)
 	}
 	instanceID := uuid.New().String()
-	query := `INSERT INTO plugin_instances (instance_id, display_name, plugin_id, version, biz_name, freePort) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = pm.db.Exec(query, instanceID, displayName, pluginID, version, bizName, freePort)
+	query := `INSERT INTO plugin_instances (instance_id, display_name, plugin_id, version, biz_name, Port) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err = pm.db.Exec(query, instanceID, displayName, pluginID, version, bizName, Port)
 	if err != nil {
 		return "", fmt.Errorf("创建插件实例配置失败: %w", err)
 	}
