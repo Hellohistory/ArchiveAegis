@@ -1,4 +1,4 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/mutate.go
+// file: internal/adapter/datasource/sqlite/mutate.go
 package sqlite
 
 import (
@@ -114,15 +114,13 @@ func (m *Manager) Mutate(ctx context.Context, req port.MutateRequest) (*port.Mut
 	}, nil
 }
 
-// ✅ NEW: 新增一个辅助函数，专门用于从 payload 中解析 filters，使代码更清晰
-func parseFiltersFromPayload(payload map[string]interface{}) ([]port.QueryParam, error) {
-	var filters []port.QueryParam
+// parseFiltersFromPayload 专门用于从 payload 中解析 filters
+func parseFiltersFromPayload(payload map[string]interface{}) ([]queryParam, error) { // ✅ 使用包内私有的 queryParam
+	var filters []queryParam // ✅ 使用包内私有的 queryParam
 
 	rawFilters, ok := payload["filters"].([]interface{})
 	if !ok {
-		// 对于 update 和 delete，没有 filters 是危险的，可以根据业务需求决定是否报错
-		// 在 buildDeleteSQL 中已经有保护，这里可以允许为空
-		return filters, nil
+		return filters, nil // 允许 filters 为空
 	}
 
 	for i, f := range rawFilters {
@@ -131,12 +129,16 @@ func parseFiltersFromPayload(payload map[string]interface{}) ([]port.QueryParam,
 			return nil, fmt.Errorf("无效请求: filters 数组的第 %d 个元素不是一个有效的JSON对象", i)
 		}
 
-		param := port.QueryParam{}
+		param := queryParam{} // ✅ 使用包内私有的 queryParam
 		if param.Field, ok = filterMap["field"].(string); !ok || param.Field == "" {
 			return nil, fmt.Errorf("无效请求: filter 对象缺少或 'field' 字段类型不正确")
 		}
+
 		// value 可以是任何类型，我们统一按字符串处理
-		param.Value = fmt.Sprintf("%v", filterMap["value"])
+		if val, exists := filterMap["value"]; exists {
+			param.Value = fmt.Sprintf("%v", val)
+		}
+
 		param.Logic, _ = filterMap["logic"].(string)
 		param.Fuzzy, _ = filterMap["fuzzy"].(bool)
 		filters = append(filters, param)
