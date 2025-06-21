@@ -31,9 +31,13 @@ jobs:
       - name: Install Task (cross-platform task runner)
         uses: arduino/setup-task@v2
 
-      - name: Install Protobuf + Plugins
+      - name: Install Protobuf Compiler
+        uses: arduino/setup-protoc@v2
+        with:
+          version: '25.3'
+
+      - name: Install Go Protobuf Plugins
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
           go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
           echo "${HOME}/go/bin" >> $GITHUB_PATH
