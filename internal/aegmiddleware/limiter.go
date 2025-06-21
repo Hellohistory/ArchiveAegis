@@ -205,7 +205,7 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 	})
 }
 
-// PerBiz ✅ 修正: PerBiz 中间件现在可以处理 V1 API 的 POST JSON 请求体
+// PerBiz 中间件现在可以处理 V1 API 的 POST JSON 请求体
 func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var bizName string

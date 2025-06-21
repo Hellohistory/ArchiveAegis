@@ -2,6 +2,7 @@
 package main
 
 import (
+	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
@@ -49,18 +50,21 @@ type Config struct {
 func main() {
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 
-	// 1. 初始化 Viper，用于加载 config.yaml
+	// =========================================================================
+	//  1. 初始化配置
+	// =========================================================================
 	if err := initViper(); err != nil {
 		log.Fatalf("CRITICAL: 初始化配置失败: %v", err)
 	}
-
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
 		log.Fatalf("CRITICAL: 解析配置到结构体失败: %v", err)
 	}
 	log.Println("✅ 配置: config.yaml 加载并解析成功。")
 
-	// 2. 初始化系统数据库 (auth.db)
+	// =========================================================================
+	//  2. 初始化数据库和核心服务
+	// =========================================================================
 	instanceDir := "instance"
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
@@ -77,31 +81,31 @@ func main() {
 		}
 	}()
 
-	// 3. 初始化核心服务
+	if err := service.InitPlatformTables(sysDB); err != nil {
+		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
+	}
+
 	adminConfigService, err := service.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
 	}
 	log.Println("✅ 服务层: AdminConfigService 初始化完成")
 
-	if err := service.InitPlatformTables(sysDB); err != nil {
-		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
-	}
-
-	// 4. 初始化插件管理器服务
 	dataSourceRegistry := make(map[string]port.DataSource)
 	closableAdapters := make([]io.Closer, 0)
-	// ✅ FIX: 将 closableAdapters 的地址 &closableAdapters 传入，以匹配 *[]io.Closer 类型
 	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
 	log.Println("✅ 服务层: PluginManager 初始化完成")
 
-	// 启动时立即刷新一次仓库，建立初始插件目录
-	pluginManager.RefreshRepositories()
+	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
+	log.Println("✅ 服务层: BusinessRateLimiter 初始化完成")
 
-	// 启动一个后台 goroutine，定期（例如每小时）刷新插件仓库
+	// =========================================================================
+	//  3. 启动后台任务
+	// =========================================================================
+	pluginManager.RefreshRepositories() // 启动时立即刷新一次仓库
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
@@ -112,12 +116,11 @@ func main() {
 			}
 		}
 	}()
+	log.Println("✅ 后台任务: 插件仓库定期刷新已启动。")
 
-	// 5. 初始化数据源注册中心 (由 PluginManager 动态管理)
-	// ✅ FIX: 移除重复的变量声明
-	log.Println("ℹ️  数据源注册中心已初始化，将由插件管理器在运行时动态填充。")
-
-	// 6. 初始化 HTTP 传输层
+	// =========================================================================
+	//  4. 初始化并启动 HTTP 服务
+	// =========================================================================
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
@@ -126,12 +129,12 @@ func main() {
 		log.Printf("重要: [SETUP MODE] 系统中无管理员，安装令牌已生成 (30分钟内有效): %s", setupToken)
 	}
 
-	// 将所有依赖注入到路由器
 	httpRouter := router.New(
 		router.Dependencies{
 			Registry:           dataSourceRegistry,
 			AdminConfigService: adminConfigService,
-			PluginManager:      pluginManager, // 注入插件管理器
+			PluginManager:      pluginManager,
+			RateLimiter:        rateLimiter,
 			AuthDB:             sysDB,
 			SetupToken:         setupToken,
 			SetupTokenDeadline: setupTokenDeadline,
@@ -145,7 +148,6 @@ func main() {
 		Handler: httpRouter,
 	}
 
-	// 7. 启动服务器并处理优雅停机
 	go func() {
 		log.Printf("🚀 ArchiveAegis 内核启动成功，开始在 %s 上监听 HTTP 请求...", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -157,6 +159,9 @@ func main() {
 	aegobserve.Register()
 	log.Println("✅ 监控: pprof, metrics 已启用。")
 
+	// =========================================================================
+	//  5. 优雅停机处理
+	// =========================================================================
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

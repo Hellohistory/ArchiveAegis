@@ -185,7 +185,6 @@ func initPluginManagementTable(db *sql.DB) error {
 		return fmt.Errorf("创建 'installed_plugins' 表失败: %w", err)
 	}
 
-	// ✅ NEW: 新增插件实例配置表
 	queryInstances := `
 	CREATE TABLE IF NOT EXISTS plugin_instances (
 		instance_id TEXT PRIMARY KEY,

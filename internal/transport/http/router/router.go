@@ -2,6 +2,7 @@
 package router
 
 import (
+	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
@@ -24,6 +25,7 @@ type Dependencies struct {
 	Registry           map[string]port.DataSource
 	AdminConfigService port.QueryAdminConfigService
 	PluginManager      *service.PluginManager
+	RateLimiter        *aegmiddleware.BusinessRateLimiter
 	AuthDB             *sql.DB
 	SetupToken         string
 	SetupTokenDeadline time.Time
@@ -43,23 +45,37 @@ func New(deps Dependencies) http.Handler {
 	}))
 	router.Use(middleware.ErrorHandlingMiddleware())
 
+	// 将 http.Handler 转换为 gin.HandlerFunc 的辅助函数
+	wrap := func(h http.Handler) gin.HandlerFunc {
+		return gin.WrapH(h)
+	}
+
 	authService := service.NewAuthenticator(deps.AuthDB)
 	v1 := router.Group("/api/v1")
 	{
 		// --- 系统/认证平面 ---
+
 		authGroup := v1.Group("/auth")
+		// 为整个 /auth 组应用轻量级限制 (全局+IP)
+		authGroup.Use(wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
 		{
+			// 现在直接注册处理器即可，它会自动被上面的 Use 中间件保护
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
 		}
+
 		systemGroup := v1.Group("/system")
+		// 为整个 /system 组应用轻量级限制
+		systemGroup.Use(wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
-			systemGroup.GET("/status", statusHandler(deps.AuthDB))
+			// status 接口比较轻量，可以放在组外，不受限制
+			// 如果也想限制它，只需将下面的这行也移入上面的 { ... } 中即可
 		}
+		v1.GET("/system/status", statusHandler(deps.AuthDB)) // 不受速率限制
 
 		// --- 元数据/发现平面 ---
 		metaGroup := v1.Group("/meta")
-		metaGroup.Use(authMiddleware(authService))
+		metaGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
 			metaGroup.GET("/schema/:bizName", schemaHandlerV1(deps.Registry))
@@ -68,7 +84,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 数据平面 ---
 		dataGroup := v1.Group("/data")
-		dataGroup.Use(authMiddleware(authService))
+		dataGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.FullBusinessChain(http.DefaultServeMux)))
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
@@ -76,10 +92,9 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 控制平面 ---
 		adminGroup := v1.Group("/admin")
-		adminGroup.Use(authMiddleware(authService), requireAdmin())
+		adminGroup.Use(authMiddleware(authService), requireAdmin(), wrap(deps.RateLimiter.FullBusinessChain(http.DefaultServeMux)))
 		{
-
-			// (1) 插件生命周期管理 API
+			// (所有 admin 子路由定义不变, 它们会自动被 Use 的中间件保护)
 			pluginAdminGroup := adminGroup.Group("/plugins")
 			{
 				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
@@ -91,10 +106,9 @@ func New(deps Dependencies) http.Handler {
 				pluginAdminGroup.POST("/instances/:instance_id/stop", stopInstanceHandler(deps.PluginManager))
 			}
 
-			// (2) 业务逻辑配置 API
 			bizConfigGroup := adminGroup.Group("/biz-config")
 			{
-				bizConfigGroup.GET("/", adminGetConfiguredBizNamesHandler(deps.AdminConfigService)) // 路径调整为 /admin/biz-config/
+				bizConfigGroup.GET("/", adminGetConfiguredBizNamesHandler(deps.AdminConfigService))
 				bizConfigGroup.GET("/:bizName", getBizConfigHandler(deps.AdminConfigService))
 				bizConfigGroup.PUT("/:bizName/settings", updateBizOverallSettingsHandler(deps.AdminConfigService))
 				bizConfigGroup.PUT("/:bizName/tables", adminUpdateBizSearchableTablesHandler(deps.AdminConfigService))
@@ -110,7 +124,6 @@ func New(deps Dependencies) http.Handler {
 				}
 			}
 
-			// (3) 全局安全配置 API
 			securityGroup := adminGroup.Group("/security")
 			{
 				securityGroup.GET("/rate-limiting/global", adminGetIPLimitSettingsHandler(deps.AdminConfigService))
