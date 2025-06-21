@@ -62,7 +62,6 @@ func CreateAdmin(db *sql.DB, user, pass string) error {
 	return nil
 }
 
-// CheckUser 校验用户名密码
 func CheckUser(db *sql.DB, user, pass string) (id int64, role string, ok bool) {
 	var hash string
 	err := db.QueryRow(`SELECT id, password_hash, role FROM _user WHERE username = ?`, user).
@@ -139,29 +138,35 @@ func ParseToken(tokenString string) (*Claim, error) {
 
 /* ---------- Context 助手函数 ---------- */
 
-type ctxKey int
+// CtxKey 是用于 context 的 key 的类型，定义为 string 以避免跨包使用时的冲突。
+// 将其导出（首字母大写），以便其他包（如测试包）可以安全地使用它。
+type CtxKey string
 
-const claimKey ctxKey = 0
+// ClaimKey 是用于在 context 中存储和检索用户 Claim 的唯一键，将其导出为常量，确保整个应用程序都使用同一个键。
+const ClaimKey CtxKey = "ArchiveAegis_Hellohistory"
 
+// contextWithClaim 是一个内部辅助函数，用于将 Claim 添加到 context 中。
+// 它现在使用导出的 ClaimKey。
 func contextWithClaim(ctx context.Context, c *Claim) context.Context {
-	return context.WithValue(ctx, claimKey, c)
+	return context.WithValue(ctx, ClaimKey, c)
 }
 
+// ClaimFrom 从请求的 context 中提取用户 Claim，它现在也使用导出的 ClaimKey。
 func ClaimFrom(r *http.Request) *Claim {
-	val := r.Context().Value(claimKey)
+	val := r.Context().Value(ClaimKey)
 	if val == nil {
 		return nil
 	}
 	claims, ok := val.(*Claim)
 	if !ok {
-		log.Printf("警告: context 中 claimKey 的值类型不是 *Claim: %T", val)
+		log.Printf("警告: context 中 ClaimKey 的值类型不是 *Claim: %T", val)
 		return nil
 	}
 	return claims
 }
 
 /* =============================================================================
-   HTTP 层: Authenticator 结构体与中间件（未来可移至 middleware 包）
+   HTTP 层: Authenticator 结构体与中间件
 ============================================================================= */
 
 // Authenticator 是 HTTP 中间件用的结构，持有 DB
@@ -177,7 +182,8 @@ func NewAuthenticator(db *sql.DB) *Authenticator {
 	return &Authenticator{DB: db}
 }
 
-// Middleware 是 JWT 中间件：验证 Token 并注入 Claim
+// Middleware 是 JWT 中间件：验证 Token 并注入 Claim。
+// 它现在通过调用 contextWithClaim 来使用正确的、导出的 context key。
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -188,8 +194,10 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				claims, err := ParseToken(tokenString)
 
 				if err == nil && claims != nil {
+					// 确认用户仍然存在于数据库中
 					_, _, userExists := GetUserById(a.DB, claims.ID)
 					if userExists {
+						// 使用辅助函数将 claim 注入 context
 						r = r.WithContext(contextWithClaim(r.Context(), claims))
 					} else {
 						log.Printf("认证中间件: 用户 ID %d 不存在，拒绝请求. 路径: %s, IP: %s", claims.ID, r.URL.Path, r.RemoteAddr)

@@ -93,9 +93,7 @@ var testHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 })
 
 func addClaimToContext(r *http.Request, claim *service.Claim) *http.Request {
-	type ctxKey int
-	const claimKey ctxKey = 0
-	ctx := context.WithValue(r.Context(), claimKey, claim)
+	ctx := context.WithValue(r.Context(), service.ClaimKey, claim)
 	return r.WithContext(ctx)
 }
 
@@ -174,14 +172,10 @@ func TestBusinessRateLimiter_PerIP(t *testing.T) {
 }
 
 func TestBusinessRateLimiter_PerUser(t *testing.T) {
-	// 共享的模拟用户
 	claimUser1 := &service.Claim{ID: 1, Role: "user"}
 	claimUser2 := &service.Claim{ID: 2, Role: "user"}
 
 	t.Run("should use default limit for user without specific settings", func(t *testing.T) {
-		// ================================================================
-		// 关键修正: 在每个子测试内部创建独立的、干净的测试环境
-		// ================================================================
 		mockService := &mockAdminConfigService{}
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
@@ -198,9 +192,6 @@ func TestBusinessRateLimiter_PerUser(t *testing.T) {
 	})
 
 	t.Run("should use specific limit for user with settings", func(t *testing.T) {
-		// ================================================================
-		// 关键修正: 在每个子测试内部创建独立的、干净的测试环境
-		// ================================================================
 		mockService := &mockAdminConfigService{}
 		mockService.GetUserLimitSettingsFunc = func(ctx context.Context, userID int64) (*domain.UserLimitSetting, error) {
 			if userID == 2 {
@@ -211,7 +202,6 @@ func TestBusinessRateLimiter_PerUser(t *testing.T) {
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
 
-		// 第一个请求
 		req1 := httptest.NewRequest("GET", "/", nil)
 		req1 = addClaimToContext(req1, claimUser2)
 		rr1 := httptest.NewRecorder()
@@ -220,7 +210,6 @@ func TestBusinessRateLimiter_PerUser(t *testing.T) {
 			t.Fatal("First request for user 2 should be allowed")
 		}
 
-		// 第二个请求
 		req2 := httptest.NewRequest("GET", "/", nil)
 		req2 = addClaimToContext(req2, claimUser2)
 		rr2 := httptest.NewRecorder()
@@ -231,9 +220,6 @@ func TestBusinessRateLimiter_PerUser(t *testing.T) {
 	})
 
 	t.Run("should not limit unauthenticated users", func(t *testing.T) {
-		// ================================================================
-		// 关键修正: 在每个子测试内部创建独立的、干净的测试环境
-		// ================================================================
 		mockService := &mockAdminConfigService{}
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
