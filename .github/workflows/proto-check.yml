@@ -52,6 +52,7 @@ jobs:
 
       - name: Run tests only on changed packages
         if: steps.changed_test_files.outputs.any_changed == 'true'
+        working-directory: .
         run: |
           PKGS_TO_TEST=$(echo "${{ steps.changed_test_files.outputs.all_changed_files }}" | xargs -n1 dirname | sort -u)
           echo "Found changes in the following test files:"
