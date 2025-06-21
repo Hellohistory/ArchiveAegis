@@ -1,8 +1,7 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/helpers.go
+// file: internal/adapter/datasource/sqlite/helpers.go
 package sqlite
 
 import (
-	"ArchiveAegis/internal/core/port"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -15,7 +14,7 @@ import (
 func buildQuerySQL(
 	tableName string,
 	selectDBFields []string,
-	queryParams []port.QueryParam,
+	queryParams []queryParam, // ✅ 已修正
 	page int,
 	size int,
 ) (string, []any, error) {
@@ -50,7 +49,7 @@ func buildQuerySQL(
 }
 
 // buildCountSQL 用于构建计算总数的SQL查询
-func buildCountSQL(tableName string, queryParams []port.QueryParam) (string, []any, error) {
+func buildCountSQL(tableName string, queryParams []queryParam) (string, []any, error) { // ✅ 已修正
 	if tableName == "" {
 		return "", nil, errors.New("表名不能为空 (buildCountSQL)")
 	}
@@ -89,7 +88,7 @@ func buildInsertSQL(tableName string, data map[string]interface{}) (string, []in
 }
 
 // buildUpdateSQL 安全地构建 UPDATE 语句
-func buildUpdateSQL(tableName string, data map[string]interface{}, filters []port.QueryParam) (string, []interface{}, error) {
+func buildUpdateSQL(tableName string, data map[string]interface{}, filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
 	if len(data) == 0 {
 		return "", nil, errors.New("UPDATE 操作需要提供更新数据")
 	}
@@ -114,7 +113,7 @@ func buildUpdateSQL(tableName string, data map[string]interface{}, filters []por
 }
 
 // buildDeleteSQL 安全地构建 DELETE 语句
-func buildDeleteSQL(tableName string, filters []port.QueryParam) (string, []interface{}, error) {
+func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
 	whereClause, whereArgs, err := buildWhereClause(filters)
 	if err != nil {
 		return "", nil, err
@@ -127,7 +126,7 @@ func buildDeleteSQL(tableName string, filters []port.QueryParam) (string, []inte
 }
 
 // buildWhereClause 是一个用于构建 WHERE 子句的通用辅助函数
-func buildWhereClause(filters []port.QueryParam) (string, []interface{}, error) {
+func buildWhereClause(filters []queryParam) (string, []interface{}, error) { // ✅ 已修正
 	if len(filters) == 0 {
 		return "", make([]interface{}, 0), nil
 	}

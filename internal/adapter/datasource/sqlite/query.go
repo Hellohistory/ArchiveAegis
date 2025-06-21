@@ -13,28 +13,33 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type queryParam struct {
+	Field string
+	Value string
+	Logic string
+	Fuzzy bool
+}
+
 // Query 是适配新协议的公开方法。
 // 它的职责是：解析和校验通用的查询请求，然后调用内部核心逻辑，最后将结果包装成通用格式返回。
 func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.QueryResult, error) {
-	// 1. --- 从通用 Query Map 中严格解析出我们需要的字段 ---
 	queryMap := req.Query
 	tableName, ok := queryMap["table"].(string)
 	if !ok || tableName == "" {
 		return nil, fmt.Errorf("无效请求: query 体必须包含一个有效的 'table' 字符串字段")
 	}
 
-	// 定义一个结构体来传递解析后的参数，比传递多个独立变量更清晰
 	type parsedArgs struct {
 		tableName      string
-		queryParams    []port.QueryParam
+		queryParams    []queryParam // ✅ 使用包内私有的 queryParam
 		fieldsToReturn []string
 		page           int
 		size           int
 	}
 	args := parsedArgs{
 		tableName: tableName,
-		page:      1,  // 默认值
-		size:      50, // 默认值
+		page:      1,
+		size:      50,
 	}
 
 	if pageF, ok := queryMap["page"].(float64); ok {
@@ -51,16 +56,13 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 				return nil, fmt.Errorf("无效请求: filters 数组的第 %d 个元素不是一个有效的JSON对象", i)
 			}
 
-			param := port.QueryParam{}
-			// ✅ 修正点 1: 增加严格的类型校验
-			if param.Field, ok = filterMap["field"].(string); !ok {
+			param := queryParam{} // ✅ 使用包内私有的 queryParam
+			if param.Field, ok = filterMap["field"].(string); !ok || param.Field == "" {
 				return nil, fmt.Errorf("无效请求: filter 对象缺少或 'field' 字段类型不正确")
 			}
-			if param.Value, ok = filterMap["value"].(string); !ok {
-				return nil, fmt.Errorf("无效请求: filter 对象缺少或 'value' 字段类型不正确")
-			}
-			param.Logic, _ = filterMap["logic"].(string) // logic 是可选的，可以忽略
-			param.Fuzzy, _ = filterMap["fuzzy"].(bool)   // fuzzy 是可选的，可以忽略
+			param.Value = fmt.Sprintf("%v", filterMap["value"])
+			param.Logic, _ = filterMap["logic"].(string)
+			param.Fuzzy, _ = filterMap["fuzzy"].(bool)
 			args.queryParams = append(args.queryParams, param)
 		}
 	}
@@ -71,15 +73,12 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 			}
 		}
 	}
-	// --- 解析结束 ---
 
-	// 2. --- 调用内部核心实现 ---
 	results, total, err := m.queryInternal(ctx, req.BizName, args)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. --- 将结果包装成通用的 map ---
 	return &port.QueryResult{
 		Data: map[string]interface{}{
 			"items": results,
@@ -93,7 +92,7 @@ func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.Query
 // 它的函数签名被修改，以直接接收解析和验证过的参数，职责更单一。
 func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct {
 	tableName      string
-	queryParams    []port.QueryParam
+	queryParams    []queryParam
 	fieldsToReturn []string
 	page           int
 	size           int
@@ -125,7 +124,7 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 		return nil, 0, port.ErrPermissionDenied
 	}
 
-	validatedQueryParams := make([]port.QueryParam, 0, len(args.queryParams))
+	validatedQueryParams := make([]queryParam, 0, len(args.queryParams))
 	for _, p := range args.queryParams {
 		fieldSetting, fieldExists := tableAdminConfig.Fields[p.Field]
 		if !fieldExists || !fieldSetting.IsSearchable {
