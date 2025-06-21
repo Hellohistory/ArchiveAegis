@@ -1,4 +1,4 @@
-// file: internal/service/plugin_manager.go
+// Package service file: internal/service/plugin_manager.go
 package service
 
 import (
@@ -224,30 +224,61 @@ func (pm *PluginManager) CreateInstance(displayName, pluginID, version, bizName 
 	return instanceID, nil
 }
 
-// ListInstances 从数据库查询所有已配置的插件实例列表。
+// ListInstances 从数据库查询所有已配置的插件实例列表，并校准状态
 func (pm *PluginManager) ListInstances() ([]domain.PluginInstance, error) {
-	rows, err := pm.db.Query("SELECT instance_id, display_name, plugin_id, version, biz_name, port, status, enabled, created_at, last_started_at FROM plugin_instances")
+	query := `SELECT instance_id, display_name, plugin_id, version, biz_name, port, status, enabled, created_at, last_started_at 
+              FROM plugin_instances`
+	rows, err := pm.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("查询插件实例列表失败: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("⚠️ [PluginManager] 关闭插件实例 rows 失败: %v", err)
+		}
+	}()
+
 	var instances []domain.PluginInstance
+
 	for rows.Next() {
 		var p domain.PluginInstance
-		if err := rows.Scan(&p.InstanceID, &p.DisplayName, &p.PluginID, &p.Version, &p.BizName, &p.Port, &p.Status, &p.Enabled, &p.CreatedAt, &p.LastStartedAt); err != nil {
-			log.Printf("⚠️ [PluginManager] 扫描插件实例行失败: %v", err)
+		if err := rows.Scan(
+			&p.InstanceID,
+			&p.DisplayName,
+			&p.PluginID,
+			&p.Version,
+			&p.BizName,
+			&p.Port,
+			&p.Status,
+			&p.Enabled,
+			&p.CreatedAt,
+			&p.LastStartedAt,
+		); err != nil {
+			log.Printf("⚠️ [PluginManager] 扫描插件实例行失败，已跳过: %v", err)
 			continue
 		}
+
 		pm.runningPluginsMu.Lock()
 		if _, isRunning := pm.runningPlugins[p.InstanceID]; isRunning {
 			p.Status = "RUNNING"
 		} else if p.Status == "RUNNING" {
 			p.Status = "STOPPED"
-			_, _ = pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", p.InstanceID)
+			_, err := pm.db.Exec(`UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?`, p.InstanceID)
+			if err != nil {
+				log.Printf("⚠️ [PluginManager] 插件实例状态修正失败 (实例: %s): %v", p.InstanceID, err)
+			} else {
+				log.Printf("🔄 [PluginManager] 插件实例 '%s' 状态已从 RUNNING 修正为 STOPPED", p.InstanceID)
+			}
 		}
 		pm.runningPluginsMu.Unlock()
+
 		instances = append(instances, p)
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历插件实例结果时出错: %w", err)
+	}
+
 	return instances, nil
 }
 
@@ -457,13 +488,28 @@ func (pm *PluginManager) performDownload(sourceURL, destPath string) error {
 	return nil
 }
 
+// fetchRepository 从远程插件仓库源中读取原始内容
 func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 	reader, err := pm.getSourceReader(repoURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("获取仓库源失败 (URL: %s): %w", repoURL, err)
 	}
-	defer reader.Close()
-	return io.ReadAll(reader)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			log.Printf("警告: 关闭仓库读取流失败 (URL: %s): %v", repoURL, err)
+		}
+	}()
+
+	// 可选防御：限制最大读取量（防止 OOM）
+	const maxRepoSize = 10 << 20 // 10MB
+	limited := io.LimitReader(reader, maxRepoSize)
+
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("读取仓库内容失败 (URL: %s): %w", repoURL, err)
+	}
+
+	return data, nil
 }
 
 func (pm *PluginManager) verifyChecksum(filePath, expectedChecksum string) error {
