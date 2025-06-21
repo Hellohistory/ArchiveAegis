@@ -121,11 +121,15 @@ func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest)
 
 // HealthCheck 的完整实现
 func (s *server) HealthCheck(ctx context.Context, req *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
+	// 调用底层 manager 的 HealthCheck 方法
 	err := s.manager.HealthCheck(ctx)
 	if err != nil {
+		// 如果 ping 数据库失败，就报告不健康
 		log.Printf("插件健康检查失败: %v", err)
 		return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_NOT_SERVING}, nil
 	}
+
+	// 一切正常，报告健康
 	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
 }
 
