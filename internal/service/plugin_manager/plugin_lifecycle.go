@@ -4,6 +4,7 @@ package plugin_manager
 import (
 	"ArchiveAegis/internal/adapter/datasource/grpc_client"
 	"ArchiveAegis/internal/core/domain"
+	"ArchiveAegis/internal/core/port"
 	"context"
 	"fmt"
 	"log"
@@ -211,6 +212,75 @@ func (pm *PluginManager) Stop(instanceID string) error {
 	log.Printf("👋 [PluginManager] 插件实例 '%s' 已停止。", instanceID)
 	_, err := pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", instanceID)
 	return err
+}
+
+// StartHealthChecks 用于启动后台健康检查任务
+func (pm *PluginManager) StartHealthChecks(interval time.Duration) {
+	log.Printf("✅ [PluginManager] 健康检查服务已启动，巡检周期: %v", interval)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			pm.performAllHealthChecks()
+		}
+	}()
+}
+
+// performAllHealthChecks 执行一轮完整的健康检查
+func (pm *PluginManager) performAllHealthChecks() {
+	pm.registryMu.RLock()
+	if len(pm.dataSourceRegistry) == 0 {
+		pm.registryMu.RUnlock()
+		return // 没有正在运行的插件，直接返回
+	}
+
+	// 创建一个当前注册表的快照进行检查，避免长时间锁定
+	registrySnapshot := make(map[string]port.DataSource)
+	for bizName, ds := range pm.dataSourceRegistry {
+		registrySnapshot[bizName] = ds
+	}
+	pm.registryMu.RUnlock()
+
+	log.Printf("🩺 [PluginManager] 开始对 %d 个正在运行的插件实例进行健康巡检...", len(registrySnapshot))
+
+	for bizName, dataSource := range registrySnapshot {
+		go pm.checkPluginHealth(bizName, dataSource) // 并发检查每个插件
+	}
+}
+
+// checkPluginHealth 负责检查单个插件的健康状况并处理结果
+func (pm *PluginManager) checkPluginHealth(bizName string, ds port.DataSource) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // 设置5秒超时
+	defer cancel()
+
+	if err := ds.HealthCheck(ctx); err != nil {
+		// 健康检查失败！
+		log.Printf("🚨 [PluginManager] 检测到插件实例 (业务: %s) 健康检查失败: %v", bizName, err)
+
+		pm.registryMu.RLock()
+		instanceID, ok := pm.bizToInstanceID[bizName]
+		pm.registryMu.RUnlock()
+
+		if !ok {
+			log.Printf("⚠️ [PluginManager] 无法找到业务 '%s' 对应的实例ID，无法处理不健康的插件。", bizName)
+			return
+		}
+
+		// 将数据库中的状态更新为 ERROR
+		_, dbErr := pm.db.Exec("UPDATE plugin_instances SET status = 'ERROR' WHERE instance_id = ?", instanceID)
+		if dbErr != nil {
+			log.Printf("⚠️ [PluginManager] 更新不健康插件 '%s' 状态到 ERROR 失败: %v", instanceID, dbErr)
+		}
+
+		// 采取断然措施：直接停止并清理这个有问题的插件进程
+		log.Printf("- [PluginManager] 正在停止不健康的插件实例 '%s'...", instanceID)
+		if stopErr := pm.Stop(instanceID); stopErr != nil {
+			log.Printf("⚠️ [PluginManager] 停止不健康插件 '%s' 时发生错误: %v", instanceID, stopErr)
+		}
+	}
 }
 
 // registerAndMonitorPlugin 连接到新启动的插件，将其注册到网关，并监控其生命周期。

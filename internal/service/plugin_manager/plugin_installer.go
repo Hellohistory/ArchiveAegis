@@ -33,6 +33,24 @@ func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的版本 '%s' 未找到", pluginID, version)
 	}
+	// =============  识别并处理系统功能插件  =============
+	// 我们通过检查一个特殊的 "type" 字段或约定的ID前缀来识别它
+	var manifestType string
+	if len(manifest.Tags) > 0 { // 假设我们用 tag 来区分，或者你可以直接在 domain.PluginManifest 加一个 Type 字段
+		// 为了简单，我们暂时用 tag 判断。更好的方式是在 domain.PluginManifest 加 Type 字段。
+		for _, tag := range manifest.Tags {
+			if tag == "SYSTEM_FEATURE" { // 假设我们在 local_repository.json 的 tags 里加了 "SYSTEM_FEATURE"
+				manifestType = "SYSTEM_FEATURE"
+				break
+			}
+		}
+	}
+
+	if manifestType == "SYSTEM_FEATURE" {
+		// 这不是一个真正的插件，而是一个系统功能开关
+		log.Printf("⚙️ [PluginManager] 正在启用系统功能 '%s'...", pluginID)
+		return pm.enableSystemFeature(pluginID, true)
+	}
 
 	log.Printf("⚙️ [PluginManager] 开始安装插件 '%s' v%s...", pluginID, version)
 
@@ -182,4 +200,24 @@ func fallbackMode(m os.FileMode) os.FileMode {
 		return 0644
 	}
 	return m
+}
+
+// 一个辅助函数来更新数据库
+func (pm *PluginManager) enableSystemFeature(featureID string, enabled bool) error {
+	query := `UPDATE system_features SET enabled = ? WHERE feature_id = ?`
+	res, err := pm.db.Exec(query, enabled, featureID)
+	if err != nil {
+		return fmt.Errorf("更新系统功能 '%s' 状态失败: %w", featureID, err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		// 如果 UPDATE 没影响任何行，说明可能需要 INSERT
+		insertQuery := `INSERT INTO system_features (feature_id, enabled) VALUES (?, ?)`
+		_, err = pm.db.Exec(insertQuery, featureID, enabled)
+		if err != nil {
+			return fmt.Errorf("插入系统功能 '%s' 状态失败: %w", featureID, err)
+		}
+	}
+	log.Printf("✅ [PluginManager] 系统功能 '%s' 状态已设置为: %t", featureID, enabled)
+	return nil
 }

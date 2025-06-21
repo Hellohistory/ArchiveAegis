@@ -1,4 +1,5 @@
 // file: cmd/gateway/main.go
+
 package main
 
 import (
@@ -15,8 +16,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/spf13/viper"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,50 +28,60 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/viper"
 	_ "modernc.org/sqlite"
 )
 
-// 版本定义
 const version = "v1.0.0-alpha5"
 
-// PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
 type PluginManagementConfig struct {
 	InstallDirectory string                            `mapstructure:"install_directory"`
 	Repositories     []plugin_manager.RepositoryConfig `mapstructure:"repositories"`
 }
 
-// ServerConfig 对应 config.yaml 中的 `server` 部分
 type ServerConfig struct {
 	Port     int    `mapstructure:"port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 
-// Config 是整个 config.yaml 的顶层结构体
 type Config struct {
 	Server           ServerConfig           `mapstructure:"server"`
 	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"`
 }
 
+func loadEnabledFeatures(db *sql.DB) (map[string]bool, error) {
+	rows, err := db.Query("SELECT feature_id FROM system_features WHERE enabled = TRUE")
+	if err != nil {
+		return nil, fmt.Errorf("查询启用的系统功能列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	features := make(map[string]bool)
+	for rows.Next() {
+		var featureID string
+		if err := rows.Scan(&featureID); err != nil {
+			// 在关键初始化阶段，使用标准log
+			log.Printf("⚠️ 扫描启用的功能ID失败: %v", err)
+			continue
+		}
+		features[featureID] = true
+	}
+	return features, rows.Err()
+}
+
 func main() {
+	// 在日志系统完全初始化前，使用标准 log
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 
-	// 1. 初始化配置和路径
-	// 让程序自我感知，确定项目根目录
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Fatalf("CRITICAL: 无法获取可执行文件路径: %v", err)
 	}
-	// 假设可执行文件在 .../AegisBuild/ 目录下，项目根目录是其上一级
 	rootDir := filepath.Dir(filepath.Dir(exePath))
-	log.Printf("ℹ️  检测到项目根目录: %s", rootDir)
 
-	// 指定配置文件的绝对路径
 	configFilePath := filepath.Join(rootDir, "configs", "config.yaml")
 	viper.SetConfigFile(configFilePath)
 
 	if err := viper.ReadInConfig(); err != nil {
-		// 此处不再自动创建，要求部署时必须提供配置文件
 		log.Fatalf("CRITICAL: 读取配置文件 '%s' 失败: %v", configFilePath, err)
 	}
 
@@ -76,22 +89,8 @@ func main() {
 	if err := viper.Unmarshal(&config); err != nil {
 		log.Fatalf("CRITICAL: 解析配置到结构体失败: %v", err)
 	}
-	log.Println("✅ 配置: config.yaml 加载并解析成功。")
 
-	// 将所有配置文件中的相对路径转换为绝对路径
-	config.PluginManagement.InstallDirectory = filepath.Join(rootDir, config.PluginManagement.InstallDirectory)
-	log.Printf("   -> 插件安装目录绝对路径: %s", config.PluginManagement.InstallDirectory)
-
-	for i, repo := range config.PluginManagement.Repositories {
-		if !strings.Contains(repo.URL, "://") {
-			absPath := filepath.Join(rootDir, repo.URL)
-			config.PluginManagement.Repositories[i].URL = "file://" + filepath.ToSlash(absPath)
-			log.Printf("   -> 仓库 '%s' 的URL已转换为: %s", repo.Name, config.PluginManagement.Repositories[i].URL)
-		}
-	}
-
-	// 2. 初始化系统数据库 (auth.db)
-	instanceDir := filepath.Join(rootDir, "instance") // 使用根目录下的 instance
+	instanceDir := filepath.Join(rootDir, "instance")
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
 	}
@@ -101,68 +100,94 @@ func main() {
 		log.Fatalf("CRITICAL: 初始化认证数据库失败: %v", err)
 	}
 	defer func() {
-		log.Println("正在关闭系统数据库连接...")
+		slog.Info("正在关闭系统数据库连接...")
 		if err := sysDB.Close(); err != nil {
-			log.Printf("ERROR: 关闭系统数据库时发生错误: %v", err)
+			slog.Error("关闭系统数据库时发生错误", "error", err)
 		}
 	}()
 
+	// 确保表结构存在
 	if err := service.InitPlatformTables(sysDB); err != nil {
 		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
 	}
 
+	// 加载功能开关
+	enabledFeatures, err := loadEnabledFeatures(sysDB)
+	if err != nil {
+		log.Fatalf("CRITICAL: 加载系统功能开关失败: %v", err)
+	}
+
+	// 根据开关决定日志和 pprof 的初始化
+	if enabledFeatures["io.archiveaegis.system.observability"] {
+		aegobserve.InitLogger(config.Server.LogLevel) // 使用 slog
+	} else {
+		log.Println("ℹ️  高级可观测性功能未启用，使用标准日志。")
+	}
+
+	slog.Info("ArchiveAegis Universal Kernel starting up", "version", version)
+	slog.Info("检测到项目根目录", "path", rootDir)
+	slog.Info("配置加载并解析成功", "path", configFilePath)
+
+	config.PluginManagement.InstallDirectory = filepath.Join(rootDir, config.PluginManagement.InstallDirectory)
+	slog.Info("插件安装目录绝对路径", "path", config.PluginManagement.InstallDirectory)
+
+	for i, repo := range config.PluginManagement.Repositories {
+		if !strings.Contains(repo.URL, "://") {
+			absPath := filepath.Join(rootDir, repo.URL)
+			config.PluginManagement.Repositories[i].URL = "file://" + filepath.ToSlash(absPath)
+			slog.Info("仓库URL已转换为绝对路径", "repo", repo.Name, "url", config.PluginManagement.Repositories[i].URL)
+		}
+	}
+
 	adminConfigService, err := admin_config.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
-		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
+		slog.Error("初始化 AdminConfigService 失败", "error", err)
+		os.Exit(1)
 	}
-	log.Println("✅ 服务层: AdminConfigService 初始化完成")
+	slog.Info("服务层: AdminConfigService 初始化完成")
 
 	dataSourceRegistry := make(map[string]port.DataSource)
 	closableAdapters := make([]io.Closer, 0)
-	pluginManager, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
+	pm, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
 	if err != nil {
-		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
+		slog.Error("初始化 PluginManager 失败", "error", err)
+		os.Exit(1)
 	}
-	log.Println("✅ 服务层: PluginManager 初始化完成")
+	slog.Info("服务层: PluginManager 初始化完成")
 
 	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
-	log.Println("✅ 服务层: BusinessRateLimiter 初始化完成")
+	slog.Info("服务层: BusinessRateLimiter 初始化完成")
 
-	// 3. 启动后台任务
-	pluginManager.RefreshRepositories()
+	pm.RefreshRepositories()
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				pluginManager.RefreshRepositories()
-			}
+		for range ticker.C {
+			pm.RefreshRepositories()
 		}
 	}()
-	log.Println("✅ 后台任务: 插件仓库定期刷新已启动。")
+	slog.Info("后台任务: 插件仓库定期刷新已启动。")
 
-	// 4. 初始化并启动 HTTP 服务
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
 		setupToken = genToken()
 		setupTokenDeadline = time.Now().Add(30 * time.Minute)
-		log.Printf("重要: [SETUP MODE] 系统中无管理员，安装令牌已生成 (30分钟内有效): %s", setupToken)
+		slog.Warn("系统中无管理员，安装令牌已生成 (30分钟内有效)", "setup_token", setupToken)
 	}
 
 	httpRouter := router.New(
 		router.Dependencies{
 			Registry:           dataSourceRegistry,
 			AdminConfigService: adminConfigService,
-			PluginManager:      pluginManager,
+			PluginManager:      pm,
 			RateLimiter:        rateLimiter,
 			AuthDB:             sysDB,
 			SetupToken:         setupToken,
 			SetupTokenDeadline: setupTokenDeadline,
 		},
 	)
-	log.Println("✅ 传输层: HTTP 路由器创建完成。")
+	slog.Info("传输层: HTTP 路由器创建完成。")
 
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 	server := &http.Server{
@@ -171,31 +196,35 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("🚀 ArchiveAegis 内核启动成功，开始在 %s 上监听 HTTP 请求...", addr)
+		slog.Info("ArchiveAegis 内核启动成功，开始监听HTTP请求...", "address", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("CRITICAL: HTTP服务启动失败: %v", err)
+			slog.Error("HTTP服务启动失败", "error", err)
+			os.Exit(1)
 		}
 	}()
 
-	aegobserve.EnablePprof()
+	// 按需启用 pprof 并注册 prometheus metrics
+	if enabledFeatures["io.archiveaegis.system.observability"] {
+		aegobserve.EnablePprof("0.0.0.0:6060")
+	}
 	aegobserve.Register()
-	log.Println("✅ 监控: pprof, metrics 已启用。")
+	slog.Info("监控: metrics 已注册。")
 
-	// 5. 优雅停机处理
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("👋 收到停机信号，准备优雅关闭...")
+	slog.Info("收到停机信号，准备优雅关闭...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("CRITICAL: HTTP服务优雅关闭失败: %v", err)
+		slog.Error("HTTP服务优雅关闭失败", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("✅ HTTP服务已成功关闭。")
-	log.Println("程序即将退出。")
+	slog.Info("HTTP服务已成功关闭。")
+	slog.Info("程序即将退出。")
 }
 
 // initAuthDB 封装了认证数据库的初始化逻辑
