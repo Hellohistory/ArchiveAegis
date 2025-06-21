@@ -11,12 +11,15 @@ import (
 	_ "embed"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	_ "modernc.org/sqlite"
 )
@@ -36,63 +39,81 @@ type server struct {
 
 // GetPluginInfo 方法实现
 func (s *server) GetPluginInfo(ctx context.Context, req *datasourcev1.GetPluginInfoRequest) (*datasourcev1.GetPluginInfoResponse, error) {
-	log.Println("插件收到 GetPluginInfo 请求")
+	slog.Info("插件收到 GetPluginInfo 请求")
 	return &datasourcev1.GetPluginInfoResponse{
 		Name:                s.pluginName,
 		Version:             pluginVersion,
 		Type:                "sqlite_plugin",
-		SupportedBizNames:   []string{s.bizName}, // 告知网关它能处理哪个业务
+		SupportedBizNames:   []string{s.bizName},
 		DescriptionMarkdown: pluginDescription,
 	}, nil
 }
 
-// Query 将gRPC请求转换为内部调用，再将结果转换为gRPC响应
+// Query 方法现在处理通用的 gRPC 请求
 func (s *server) Query(ctx context.Context, req *datasourcev1.QueryRequest) (*datasourcev1.QueryResult, error) {
-	log.Printf("插件收到Query请求: biz=%s, table=%s", req.BizName, req.TableName)
+	queryStruct := req.GetQuery()
+	if queryStruct == nil {
+		return nil, status.Error(codes.InvalidArgument, "查询体 (query) 不能为空")
+	}
 
+	// 直接将收到的通用查询对象传递给核心 port.QueryRequest
 	goReq := port.QueryRequest{
-		BizName:        req.BizName,
-		TableName:      req.TableName,
-		Page:           int(req.Page),
-		Size:           int(req.Size),
-		FieldsToReturn: req.FieldsToReturn,
-	}
-	for _, p := range req.QueryParams {
-		goReq.QueryParams = append(goReq.QueryParams, port.QueryParam{
-			Field: p.Field,
-			Value: p.Value,
-			Logic: p.Logic,
-			Fuzzy: p.Fuzzy,
-		})
+		BizName: req.BizName,
+		Query:   queryStruct.AsMap(),
 	}
 
+	slog.Info("插件收到 Query 请求", "biz", req.BizName)
 	result, err := s.manager.Query(ctx, goReq)
 	if err != nil {
-		return nil, err
+		slog.Error("插件执行 Query 失败", "error", err)
+		return nil, status.Errorf(codes.Internal, "查询数据失败: %v", err)
 	}
 
-	// 转换Go结果到gRPC响应
-	anySlice := make([]any, len(result.Data))
-	for i, v := range result.Data {
-		anySlice[i] = v
-	}
-	listValue, err := structpb.NewList(anySlice)
+	// 将 manager 返回的通用 map 结果包装成 gRPC 的 Struct
+	resultData, err := structpb.NewStruct(result.Data)
 	if err != nil {
-		return nil, fmt.Errorf("转换查询结果为ListValue失败: %w", err)
+		slog.Error("转换查询结果为 structpb.Struct 失败", "error", err)
+		return nil, status.Errorf(codes.Internal, "序列化查询结果失败: %v", err)
 	}
 
-	grpcResult := &datasourcev1.QueryResult{
-		Data:   listValue,
-		Total:  result.Total,
-		Source: s.manager.Type(),
-	}
-
-	return grpcResult, nil
+	return &datasourcev1.QueryResult{
+		Data:   resultData,
+		Source: result.Source,
+	}, nil
 }
 
-// GetSchema 的完整实现
+// Mutate 方法现在处理通用的 gRPC 请求
+func (s *server) Mutate(ctx context.Context, req *datasourcev1.MutateRequest) (*datasourcev1.MutateResult, error) {
+	slog.Info("插件收到 Mutate 请求", "biz", req.BizName, "operation", req.Operation)
+
+	// 直接将收到的通用载荷对象传递给核心 port.MutateRequest
+	goReq := port.MutateRequest{
+		BizName:   req.BizName,
+		Operation: req.Operation,
+		Payload:   req.GetPayload().AsMap(),
+	}
+
+	goResult, err := s.manager.Mutate(ctx, goReq)
+	if err != nil {
+		slog.Error("插件执行 Mutate 失败", "error", err)
+		return nil, status.Errorf(codes.Internal, "写操作失败: %v", err)
+	}
+
+	// 将 manager 返回的通用 map 结果包装成 gRPC 的 Struct
+	resultData, err := structpb.NewStruct(goResult.Data)
+	if err != nil {
+		slog.Error("转换 Mutate 结果为 structpb.Struct 失败", "error", err)
+		return nil, status.Errorf(codes.Internal, "序列化写操作结果失败: %v", err)
+	}
+
+	return &datasourcev1.MutateResult{
+		Data:   resultData,
+		Source: goResult.Source,
+	}, nil
+}
+
 func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest) (*datasourcev1.SchemaResult, error) {
-	log.Printf("插件收到GetSchema请求: biz=%s", req.BizName)
+	slog.Info("插件收到 GetSchema 请求", "biz", req.BizName)
 	goReq := port.SchemaRequest{BizName: req.BizName, TableName: req.TableName}
 
 	result, err := s.manager.GetSchema(ctx, goReq)
@@ -119,72 +140,18 @@ func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest)
 	return &datasourcev1.SchemaResult{Tables: grpcTables}, nil
 }
 
-// HealthCheck 的完整实现
 func (s *server) HealthCheck(ctx context.Context, req *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
-	// 调用底层 manager 的 HealthCheck 方法
 	err := s.manager.HealthCheck(ctx)
 	if err != nil {
-		// 如果 ping 数据库失败，就报告不健康
-		log.Printf("插件健康检查失败: %v", err)
+		slog.Warn("插件健康检查失败", "error", err)
 		return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_NOT_SERVING}, nil
 	}
-
-	// 一切正常，报告健康
 	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
 }
 
-// Mutate 方法的完整实现
-func (s *server) Mutate(ctx context.Context, req *datasourcev1.MutateRequest) (*datasourcev1.MutateResult, error) {
-	log.Printf("插件收到Mutate请求: biz=%s", req.BizName)
-
-	goReq := port.MutateRequest{
-		BizName: req.BizName,
-	}
-
-	switch op := req.Operation.(type) {
-	case *datasourcev1.MutateRequest_CreateOp:
-		goReq.CreateOp = &port.CreateOperation{
-			TableName: op.CreateOp.TableName,
-			Data:      op.CreateOp.Data.AsMap(),
-		}
-	case *datasourcev1.MutateRequest_UpdateOp:
-		filters := make([]port.QueryParam, len(op.UpdateOp.Filters))
-		for i, f := range op.UpdateOp.Filters {
-			filters[i] = port.QueryParam{Field: f.Field, Value: f.Value, Logic: f.Logic, Fuzzy: f.Fuzzy}
-		}
-		goReq.UpdateOp = &port.UpdateOperation{
-			TableName: op.UpdateOp.TableName,
-			Data:      op.UpdateOp.Data.AsMap(),
-			Filters:   filters,
-		}
-	case *datasourcev1.MutateRequest_DeleteOp:
-		filters := make([]port.QueryParam, len(op.DeleteOp.Filters))
-		for i, f := range op.DeleteOp.Filters {
-			filters[i] = port.QueryParam{Field: f.Field, Value: f.Value, Logic: f.Logic, Fuzzy: f.Fuzzy}
-		}
-		goReq.DeleteOp = &port.DeleteOperation{
-			TableName: op.DeleteOp.TableName,
-			Filters:   filters,
-		}
-	default:
-		return nil, fmt.Errorf("收到了无效的Mutate操作类型")
-	}
-
-	goResult, err := s.manager.Mutate(ctx, goReq)
-	if err != nil {
-		return nil, err
-	}
-
-	grpcResult := &datasourcev1.MutateResult{
-		Success:      goResult.Success,
-		RowsAffected: goResult.RowsAffected,
-		Message:      goResult.Message,
-	}
-
-	return grpcResult, nil
-}
-
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
+
 	portFlag := flag.Int("port", 50051, "服务监听端口")
 	bizNameFlag := flag.String("biz", "", "此插件管理的业务组名称 (必须)")
 	pluginNameFlag := flag.String("name", "unnamed-sqlite-plugin", "此插件实例的唯一名称")
@@ -192,35 +159,39 @@ func main() {
 	flag.Parse()
 
 	if *bizNameFlag == "" {
-		log.Fatal("必须通过 -biz 参数指定插件管理的业务组名称")
+		slog.Error("启动失败：必须通过 -biz 参数指定插件管理的业务组名称")
+		os.Exit(1)
 	}
+	slog.Info("🔌 插件启动中...", "name", *pluginNameFlag, "version", pluginVersion, "biz", *bizNameFlag, "port", *portFlag)
 
-	log.Println("🔌 插件开始初始化依赖...")
+	slog.Info("正在初始化依赖...")
 	authDbPath := filepath.Join(*instanceDir, "auth.db")
 	pluginSysDB, err := initAuthDB(authDbPath)
 	if err != nil {
-		log.Fatalf("插件无法初始化认证数据库连接: %v", err)
+		slog.Error("插件无法初始化认证数据库连接", "error", err)
+		os.Exit(1)
 	}
 	defer pluginSysDB.Close()
-	log.Println("🔌 插件成功连接到 auth.db")
+	slog.Info("成功连接到 auth.db")
 
 	adminConfigService, err := admin_config.NewAdminConfigServiceImpl(pluginSysDB, 100, 1*time.Minute)
 	if err != nil {
-		log.Fatalf("插件无法创建AdminConfigService: %v", err)
+		slog.Error("插件无法创建 AdminConfigService", "error", err)
+		os.Exit(1)
 	}
-	log.Println("🔌 插件成功创建 AdminConfigService")
+	slog.Info("成功创建 AdminConfigService")
 
 	sqliteManager := sqlite.NewManager(adminConfigService)
 	if err := sqliteManager.InitForBiz(context.Background(), *instanceDir, *bizNameFlag); err != nil {
-
-		log.Fatalf("插件初始化业务 '%s' 失败: %v", *bizNameFlag, err)
+		slog.Error("插件初始化业务失败", "biz", *bizNameFlag, "error", err)
+		os.Exit(1)
 	}
-
-	log.Printf("🔌 插件成功初始化业务数据: %s", *bizNameFlag)
+	slog.Info("成功初始化业务数据", "biz", *bizNameFlag)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *portFlag))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		slog.Error("gRPC 服务监听端口失败", "port", *portFlag, "error", err)
+		os.Exit(1)
 	}
 
 	grpcServer := grpc.NewServer()
@@ -230,9 +201,10 @@ func main() {
 		bizName:    *bizNameFlag,
 	})
 
-	log.Printf("✅ SQLite插件启动成功, 正在监听端口: %d, 管理业务组: %s", *portFlag, *bizNameFlag)
+	slog.Info("✅ SQLite插件启动成功，开始提供服务...")
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		slog.Error("gRPC 服务启动失败", "error", err)
+		os.Exit(1)
 	}
 }
 
