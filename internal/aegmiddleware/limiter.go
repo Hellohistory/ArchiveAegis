@@ -292,17 +292,6 @@ type IPRateLimiter struct {
 	burst    int
 }
 
-// NewIPRateLimiter 创建一个新的IP速率限制器
-func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
-	limiter := &IPRateLimiter{
-		limiters: make(map[string]*limiterEntry),
-		rate:     r,
-		burst:    b,
-	}
-	go limiter.cleanupDaemon()
-	return limiter
-}
-
 // getClientIP 从请求中获取客户端IP地址，考虑代理情况
 func getClientIP(r *http.Request) string {
 	ip := r.Header.Get("X-Forwarded-For")
@@ -368,15 +357,6 @@ type LoginFailureLock struct {
 	failureCache    *cache.Cache
 	maxFailures     int
 	lockoutDuration time.Duration
-}
-
-// NewLoginFailureLock 创建一个新的登录失败锁定器
-func NewLoginFailureLock(maxFailures int, lockoutDuration time.Duration) *LoginFailureLock {
-	return &LoginFailureLock{
-		failureCache:    cache.New(5*time.Minute, 10*time.Minute),
-		maxFailures:     maxFailures,
-		lockoutDuration: lockoutDuration,
-	}
 }
 
 // statusRecorder 是一个健壮的 http.ResponseWriter 包装器
