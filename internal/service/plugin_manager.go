@@ -5,6 +5,7 @@ import (
 	"ArchiveAegis/internal/adapter/datasource/grpc_client"
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/internal/downloader"
 	"archive/zip"
 	"context"
 	"crypto/sha256"
@@ -33,11 +34,12 @@ import (
 // PluginManager 负责管理插件的目录、安装和生命周期
 type PluginManager struct {
 	db                 *sql.DB
-	repositories       []RepositoryConfig
+	rootDir            string
 	installDir         string
+	repositories       []RepositoryConfig
 	catalog            map[string]domain.PluginManifest
 	catalogMu          sync.RWMutex
-	httpClient         *http.Client
+	downloaders        []downloader.Downloader // ✅ FIX: 添加 downloaders 字段
 	runningPlugins     map[string]*exec.Cmd
 	dataSourceRegistry map[string]port.DataSource
 	closableAdapters   *[]io.Closer
@@ -54,7 +56,7 @@ type RepositoryConfig struct {
 }
 
 // NewPluginManager 创建一个新的插件管理器实例
-func NewPluginManager(db *sql.DB, repos []RepositoryConfig, installDir string, registry map[string]port.DataSource, closers *[]io.Closer) (*PluginManager, error) {
+func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.DataSource, closers *[]io.Closer) (*PluginManager, error) {
 	if db == nil {
 		return nil, errors.New("PluginManager 需要一个有效的数据库连接")
 	}
@@ -64,12 +66,22 @@ func NewPluginManager(db *sql.DB, repos []RepositoryConfig, installDir string, r
 	if err := os.MkdirAll(installDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建插件安装目录 '%s' 失败: %w", installDir, err)
 	}
+
+	// ✅ FIX: 在这里初始化所有支持的下载器
+	supportedDownloaders := []downloader.Downloader{
+		&downloader.HTTPDownloader{
+			Client: &http.Client{Timeout: 60 * time.Second},
+		},
+		&downloader.FileDownloader{},
+	}
+
 	return &PluginManager{
 		db:                 db,
-		repositories:       repos,
+		rootDir:            rootDir,
 		installDir:         installDir,
+		repositories:       repos,
 		catalog:            make(map[string]domain.PluginManifest),
-		httpClient:         &http.Client{Timeout: 30 * time.Second},
+		downloaders:        supportedDownloaders, // ✅ FIX: 注入下载器
 		runningPlugins:     make(map[string]*exec.Cmd),
 		dataSourceRegistry: registry,
 		closableAdapters:   closers,
@@ -81,7 +93,6 @@ func NewPluginManager(db *sql.DB, repos []RepositoryConfig, installDir string, r
 func (pm *PluginManager) RefreshRepositories() {
 	log.Println("🔄 [PluginManager] 开始刷新所有插件仓库...")
 	newCatalog := make(map[string]domain.PluginManifest)
-
 	for _, repoCfg := range pm.repositories {
 		if !repoCfg.Enabled {
 			log.Printf("⚪️ [PluginManager] 仓库 '%s' 已被禁用，跳过。", repoCfg.Name)
@@ -99,15 +110,10 @@ func (pm *PluginManager) RefreshRepositories() {
 			continue
 		}
 		for _, plugin := range repo.Plugins {
-			if _, exists := newCatalog[plugin.ID]; exists {
-				log.Printf("⚠️ [PluginManager] 发现重复的插件ID '%s'，来自仓库 '%s' 的版本将被忽略。", plugin.ID, repoCfg.Name)
-				continue
-			}
 			newCatalog[plugin.ID] = plugin
 		}
 		log.Printf("✅ [PluginManager] 成功处理仓库 '%s'，发现 %d 个插件。", repo.Name, len(repo.Plugins))
 	}
-
 	pm.catalogMu.Lock()
 	pm.catalog = newCatalog
 	pm.catalogMu.Unlock()
@@ -136,7 +142,6 @@ func (pm *PluginManager) Install(pluginID, version string) error {
 	if !exists {
 		return fmt.Errorf("插件 '%s' 不在可用的插件目录中", pluginID)
 	}
-
 	var targetVersion *domain.PluginVersion
 	for i := range manifest.Versions {
 		if manifest.Versions[i].VersionString == version {
@@ -147,21 +152,17 @@ func (pm *PluginManager) Install(pluginID, version string) error {
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的版本 '%s' 未找到", pluginID, version)
 	}
-
 	log.Printf("⚙️ [PluginManager] 开始安装插件 '%s' v%s...", pluginID, version)
-
 	downloadPath := filepath.Join(pm.installDir, fmt.Sprintf("%s-%s.zip", pluginID, version))
-	if err := pm.downloadFile(targetVersion.Source.URL, downloadPath); err != nil {
+	if err := pm.performDownload(targetVersion.Source.URL, downloadPath); err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}
 	defer os.Remove(downloadPath)
-
 	if targetVersion.Source.Checksum != "" {
 		if err := pm.verifyChecksum(downloadPath, targetVersion.Source.Checksum); err != nil {
 			return fmt.Errorf("文件校验失败: %w", err)
 		}
 	}
-
 	pluginInstallPath := filepath.Join(pm.installDir, pluginID, version)
 	if err := os.RemoveAll(pluginInstallPath); err != nil {
 		return fmt.Errorf("清理旧的安装目录失败: %w", err)
@@ -169,8 +170,7 @@ func (pm *PluginManager) Install(pluginID, version string) error {
 	if err := unzip(downloadPath, pluginInstallPath); err != nil {
 		return fmt.Errorf("解压失败: %w", err)
 	}
-
-	query := `INSERT INTO installed_plugins (plugin_id, version, install_path) VALUES (?, ?, ?) ON CONFLICT(plugin_id, version) DO NOTHING`
+	query := `INSERT INTO installed_plugins (plugin_id, version, install_path) VALUES (?, ?, ?) ON CONFLICT(plugin_id, version) DO UPDATE SET install_path=excluded.install_path`
 	if _, err := pm.db.Exec(query, pluginID, version, pluginInstallPath); err != nil {
 		return fmt.Errorf("更新数据库已安装列表失败: %w", err)
 	}
@@ -208,7 +208,6 @@ func (pm *PluginManager) ListInstances() ([]domain.PluginInstance, error) {
 		return nil, fmt.Errorf("查询插件实例列表失败: %w", err)
 	}
 	defer rows.Close()
-
 	var instances []domain.PluginInstance
 	for rows.Next() {
 		var p domain.PluginInstance
@@ -237,7 +236,6 @@ func (pm *PluginManager) Start(instanceID string) error {
 		return fmt.Errorf("插件实例 '%s' 已经在运行中", instanceID)
 	}
 	pm.runningPluginsMu.Unlock()
-
 	var inst domain.PluginInstance
 	var installPath string
 	query := `SELECT pi.plugin_id, pi.version, pi.biz_name, pi.port, ip.install_path 
@@ -247,7 +245,6 @@ func (pm *PluginManager) Start(instanceID string) error {
 	if err := pm.db.QueryRow(query, instanceID).Scan(&inst.PluginID, &inst.Version, &inst.BizName, &inst.Port, &installPath); err != nil {
 		return fmt.Errorf("未找到插件实例 '%s' 或其安装信息: %w", instanceID, err)
 	}
-
 	pm.catalogMu.RLock()
 	manifest, ok := pm.catalog[inst.PluginID]
 	pm.catalogMu.RUnlock()
@@ -264,32 +261,36 @@ func (pm *PluginManager) Start(instanceID string) error {
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的已安装版本 '%s' 的清单信息未找到", inst.PluginID, inst.Version)
 	}
-
 	cmdPath := filepath.Join(installPath, targetVersion.Execution.Entrypoint)
-	argsString := strings.ReplaceAll(targetVersion.Execution.Args, "<port>", strconv.Itoa(inst.Port))
-	argsString = strings.ReplaceAll(argsString, "<biz_name>", inst.BizName)
-	argsString = strings.ReplaceAll(argsString, "<name>", inst.DisplayName)
-	args := strings.Fields(argsString)
-
-	cmd := exec.Command(cmdPath, args...)
+	instanceDir, err := filepath.Abs(filepath.Dir(pm.installDir))
+	if err != nil {
+		return fmt.Errorf("无法确定 instance 根目录: %w", err)
+	}
+	replacer := strings.NewReplacer(
+		"<port>", strconv.Itoa(inst.Port),
+		"<biz_name>", inst.BizName,
+		"<name>", inst.DisplayName,
+		"<instance_dir>", instanceDir,
+	)
+	finalArgs := make([]string, len(targetVersion.Execution.Args))
+	for i, arg := range targetVersion.Execution.Args {
+		finalArgs[i] = replacer.Replace(arg)
+	}
+	cmd := exec.Command(cmdPath, finalArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动插件进程失败: %w", err)
 	}
-
 	pm.runningPluginsMu.Lock()
 	pm.runningPlugins[instanceID] = cmd
 	pm.runningPluginsMu.Unlock()
 	log.Printf("🚀 [PluginManager] 插件实例 '%s' (%s) 进程已启动 (PID: %d)", inst.DisplayName, instanceID, cmd.Process.Pid)
-
 	go func() {
 		if _, err := pm.db.Exec("UPDATE plugin_instances SET status = 'RUNNING', last_started_at = ? WHERE instance_id = ?", time.Now(), instanceID); err != nil {
 			log.Printf("⚠️ [PluginManager] 更新插件实例 '%s' 状态到 RUNNING 失败: %v", instanceID, err)
 		}
 	}()
-
 	go pm.registerAndMonitorPlugin(cmd, instanceID, "localhost:"+strconv.Itoa(inst.Port), inst.BizName)
 	return nil
 }
@@ -298,18 +299,15 @@ func (pm *PluginManager) Start(instanceID string) error {
 func (pm *PluginManager) Stop(instanceID string) error {
 	pm.runningPluginsMu.Lock()
 	defer pm.runningPluginsMu.Unlock()
-
 	cmd, isRunning := pm.runningPlugins[instanceID]
 	if !isRunning {
 		_, _ = pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", instanceID)
 		return fmt.Errorf("插件实例 '%s' 并未在运行中", instanceID)
 	}
-
 	if err := cmd.Process.Kill(); err != nil {
-		log.Printf("⚠️ [PluginManager] 停止插件进程 (PID: %d) 失败: %w", cmd.Process.Pid, err)
+		log.Printf("⚠️ [PluginManager] 停止插件进程 (PID: %d) 失败: %v", cmd.Process.Pid, err)
 	}
 	delete(pm.runningPlugins, instanceID)
-
 	pm.registryMu.Lock()
 	var bizToUnregister string
 	for biz, iID := range pm.bizToInstanceID {
@@ -324,45 +322,12 @@ func (pm *PluginManager) Stop(instanceID string) error {
 		log.Printf("🔌 [PluginManager] 业务组 '%s' 已从网关注销。", bizToUnregister)
 	}
 	pm.registryMu.Unlock()
-
 	log.Printf("👋 [PluginManager] 插件实例 '%s' 已停止。", instanceID)
 	_, err := pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", instanceID)
 	return err
 }
 
-// registerAndMonitorPlugin 连接到新启动的插件，将其注册到网关，并监控其生命周期。
-func (pm *PluginManager) registerAndMonitorPlugin(cmd *exec.Cmd, instanceID, address, bizName string) {
-	time.Sleep(2 * time.Second)
-	adapter, err := grpc_client.New(address)
-	if err != nil {
-		log.Printf("⚠️ [PluginManager] 启动后无法连接到实例 '%s' (%s): %v", instanceID, address, err)
-		_ = pm.Stop(instanceID)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err = adapter.GetPluginInfo(ctx)
-	cancel()
-	if err != nil {
-		log.Printf("⚠️ [PluginManager] 启动后无法从实例 '%s' 获取信息: %v", instanceID, err)
-		_ = pm.Stop(instanceID)
-		return
-	}
-
-	pm.registryMu.Lock()
-	pm.dataSourceRegistry[bizName] = adapter
-	pm.bizToInstanceID[bizName] = instanceID
-	*pm.closableAdapters = append(*pm.closableAdapters, adapter)
-	pm.registryMu.Unlock()
-	log.Printf("✅ [PluginManager] 实例 '%s' 现已在地址 '%s' 上运行，并为业务组 '%s' 提供服务。", instanceID, address, bizName)
-
-	err = cmd.Wait()
-	log.Printf("🔌 [PluginManager] 检测到实例 '%s' 进程已退出，错误: %v。", instanceID, err)
-	_ = pm.Stop(instanceID)
-}
-
 // DeleteInstance 从数据库中删除一个插件实例的配置。
-// 前提是该实例必须处于 STOPPED 状态。
 func (pm *PluginManager) DeleteInstance(instanceID string) error {
 	pm.runningPluginsMu.Lock()
 	_, isRunning := pm.runningPlugins[instanceID]
@@ -370,7 +335,6 @@ func (pm *PluginManager) DeleteInstance(instanceID string) error {
 	if isRunning {
 		return fmt.Errorf("无法删除正在运行的插件实例 '%s'，请先停止它", instanceID)
 	}
-
 	res, err := pm.db.Exec("DELETE FROM plugin_instances WHERE instance_id = ?", instanceID)
 	if err != nil {
 		return fmt.Errorf("从数据库删除实例 '%s' 失败: %w", instanceID, err)
@@ -379,75 +343,89 @@ func (pm *PluginManager) DeleteInstance(instanceID string) error {
 	if rowsAffected == 0 {
 		return fmt.Errorf("未找到要删除的插件实例 '%s'", instanceID)
 	}
-
 	log.Printf("🗑️ [PluginManager] 已成功删除插件实例 '%s' 的配置。", instanceID)
 	return nil
 }
 
-func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
-	u, err := url.Parse(repoURL)
+// registerAndMonitorPlugin 连接到新启动的插件，将其注册到网关，并监控其生命周期。
+func (pm *PluginManager) registerAndMonitorPlugin(cmd *exec.Cmd, instanceID, address, bizName string) {
+	var adapter *grpc_client.ClientAdapter
+	var err error
+	maxRetries := 5
+	retryDelay := 2 * time.Second
+	for i := 0; i < maxRetries; i++ {
+		log.Printf("ℹ️ [PluginManager] 正在尝试连接到实例 '%s' (%s), 第 %d/%d 次...", instanceID, address, i+1, maxRetries)
+		adapter, err = grpc_client.New(address)
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = adapter.GetPluginInfo(ctx)
+			cancel()
+			if err == nil {
+				log.Printf("✅ [PluginManager] 成功连接到实例 '%s'!", instanceID)
+				break
+			}
+		}
+		if i < maxRetries-1 {
+			time.Sleep(retryDelay)
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("无效的仓库URL: %w", err)
+		log.Printf("⚠️ [PluginManager] 在 %d 次尝试后，仍无法连接到实例 '%s' 并获取信息: %v", maxRetries, instanceID, err)
+		_ = pm.Stop(instanceID)
+		return
 	}
-	switch u.Scheme {
-	case "http", "https":
-		resp, err := pm.httpClient.Get(repoURL)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("HTTP请求失败，状态码: %d", resp.StatusCode)
-		}
-		return io.ReadAll(resp.Body)
-	case "file":
-		path := strings.TrimPrefix(u.String(), "file://")
-		return os.ReadFile(path)
-	default:
-		return nil, fmt.Errorf("不支持的仓库URL scheme: '%s'", u.Scheme)
-	}
+	pm.registryMu.Lock()
+	pm.dataSourceRegistry[bizName] = adapter
+	pm.bizToInstanceID[bizName] = instanceID
+	*pm.closableAdapters = append(*pm.closableAdapters, adapter)
+	pm.registryMu.Unlock()
+	log.Printf("✅ [PluginManager] 实例 '%s' 现已在地址 '%s' 上运行，并为业务组 '%s' 提供服务。", instanceID, address, bizName)
+	err = cmd.Wait()
+	log.Printf("🔌 [PluginManager] 检测到实例 '%s' 进程已退出，错误: %v。", instanceID, err)
+	_ = pm.Stop(instanceID)
 }
 
-func (pm *PluginManager) downloadFile(fileURL, destPath string) error {
-	u, err := url.Parse(fileURL)
-	if err != nil {
-		return fmt.Errorf("无效的下载URL: %w", err)
+func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" {
+		absPath := filepath.Join(pm.rootDir, rawURL)
+		return os.Open(absPath)
 	}
-
-	if u.Scheme == "file" {
-		sourcePath := strings.TrimPrefix(fileURL, "file://")
-		sourceFile, err := os.Open(sourcePath)
-		if err != nil {
-			return fmt.Errorf("无法打开本地源文件 '%s': %w", sourcePath, err)
+	var selectedDownloader downloader.Downloader
+	for _, d := range pm.downloaders {
+		if d.SupportsScheme(u.Scheme) {
+			selectedDownloader = d
+			break
 		}
-		defer sourceFile.Close()
-
-		destFile, err := os.Create(destPath)
-		if err != nil {
-			return fmt.Errorf("无法创建目标文件 '%s': %w", destPath, err)
-		}
-		defer destFile.Close()
-
-		_, err = io.Copy(destFile, sourceFile)
-		return err
 	}
+	if selectedDownloader == nil {
+		return nil, fmt.Errorf("没有找到支持协议 '%s' 的下载器", u.Scheme)
+	}
+	return selectedDownloader.Download(u)
+}
 
-	// 对于 http/https 等协议，保持原有逻辑
-	resp, err := pm.httpClient.Get(fileURL)
+func (pm *PluginManager) performDownload(sourceURL, destPath string) error {
+	reader, err := pm.getSourceReader(sourceURL)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载请求失败, 状态码: %d", resp.StatusCode)
-	}
-	out, err := os.Create(destPath)
+	defer reader.Close()
+	outFile, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
+	defer outFile.Close()
+	_, err = io.Copy(outFile, reader)
 	return err
+}
+
+func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
+	reader, err := pm.getSourceReader(repoURL)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
 }
 
 func (pm *PluginManager) verifyChecksum(filePath, expectedChecksum string) error {

@@ -1,12 +1,11 @@
-# ArchiveAegis 平台配置文件 V2 - 动态插件发现
 server:
   port: 10224
   log_level: "info"
 
-# 数据源插件列表
-# 网关会尝试连接下面的所有地址，并动态注册它们所声明的业务
-plugins:
-  # - "localhost:50051" # 你的 SQLite 插件
-  # - "another-plugin.example.com:50051" # 其他插件
-  - address: "localhost:50051"
-    enabled: true
+plugin_management:
+  # install_directory 现在直接指向我们期望的插件安装位置
+  install_directory: "./instance/plugins"
+  repositories:
+    - name: "本地测试仓库"
+      url: "./configs/local_repository.json" # 相对于项目根目录即可
+      enabled: true

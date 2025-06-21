@@ -4,6 +4,7 @@ package sqlite
 import (
 	"ArchiveAegis/internal/core/port"
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"runtime"
@@ -164,7 +165,9 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 				if errExec != nil {
 					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", req.BizName, currentLibName, targetTableName, errExec)
 				}
-				defer rows.Close()
+				defer func(rows *sql.Rows) {
+					_ = rows.Close()
+				}(rows)
 
 				actualReturnedColumns, _ := rows.Columns()
 				var libResults []map[string]any

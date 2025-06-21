@@ -45,6 +45,10 @@ func New(deps Dependencies) http.Handler {
 	}))
 	router.Use(middleware.ErrorHandlingMiddleware())
 
+	// ✅ FIX: 创建一个什么都不做的 http.Handler 作为中间件链的“下一个”占位符
+	// 它能确保请求在通过标准库中间件后，能继续回到 Gin 的处理链中
+	passthroughHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
 	// 将 http.Handler 转换为 gin.HandlerFunc 的辅助函数
 	wrap := func(h http.Handler) gin.HandlerFunc {
 		return gin.WrapH(h)
@@ -54,28 +58,25 @@ func New(deps Dependencies) http.Handler {
 	v1 := router.Group("/api/v1")
 	{
 		// --- 系统/认证平面 ---
-
 		authGroup := v1.Group("/auth")
-		// 为整个 /auth 组应用轻量级限制 (全局+IP)
-		authGroup.Use(wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
+		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
+		authGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
 		{
-			// 现在直接注册处理器即可，它会自动被上面的 Use 中间件保护
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
 		}
 
 		systemGroup := v1.Group("/system")
-		// 为整个 /system 组应用轻量级限制
-		systemGroup.Use(wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
+		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
+		systemGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
-			// status 接口比较轻量，可以放在组外，不受限制
-			// 如果也想限制它，只需将下面的这行也移入上面的 { ... } 中即可
 		}
-		v1.GET("/system/status", statusHandler(deps.AuthDB)) // 不受速率限制
+		v1.GET("/system/status", statusHandler(deps.AuthDB))
 
 		// --- 元数据/发现平面 ---
 		metaGroup := v1.Group("/meta")
-		metaGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.LightweightChain(http.DefaultServeMux)))
+		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
+		metaGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
 			metaGroup.GET("/schema/:bizName", schemaHandlerV1(deps.Registry))
@@ -84,7 +85,8 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 数据平面 ---
 		dataGroup := v1.Group("/data")
-		dataGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.FullBusinessChain(http.DefaultServeMux)))
+		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
+		dataGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
@@ -92,7 +94,8 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 控制平面 ---
 		adminGroup := v1.Group("/admin")
-		adminGroup.Use(authMiddleware(authService), requireAdmin(), wrap(deps.RateLimiter.FullBusinessChain(http.DefaultServeMux)))
+		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
+		adminGroup.Use(authMiddleware(authService), requireAdmin(), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
 		{
 			// (所有 admin 子路由定义不变, 它们会自动被 Use 的中间件保护)
 			pluginAdminGroup := adminGroup.Group("/plugins")

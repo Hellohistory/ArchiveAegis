@@ -99,7 +99,9 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 	if err != nil {
 		return nil, fmt.Errorf("获取业务组 '%s' 可配置表列表失败: %w", bizName, err)
 	}
-	defer rowsTables.Close()
+	defer func(rowsTables *sql.Rows) {
+		_ = rowsTables.Close()
+	}(rowsTables)
 
 	for rowsTables.Next() {
 		currentTableConfig := &domain.TableConfig{
