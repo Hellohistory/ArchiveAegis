@@ -134,14 +134,15 @@ func (pm *PluginManager) GetAvailablePlugins() []domain.PluginManifest {
 	return catalogSlice
 }
 
-// Install 下载、校验并解压指定ID和版本的插件。
-func (pm *PluginManager) Install(pluginID, version string) error {
+// Install 下载、校验并解压指定 ID 和版本的插件。
+func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	pm.catalogMu.RLock()
 	manifest, exists := pm.catalog[pluginID]
 	pm.catalogMu.RUnlock()
 	if !exists {
-		return fmt.Errorf("插件 '%s' 不在可用的插件目录中", pluginID)
+		return fmt.Errorf("插件 '%s' 不在可用插件目录中", pluginID)
 	}
+
 	var targetVersion *domain.PluginVersion
 	for i := range manifest.Versions {
 		if manifest.Versions[i].VersionString == version {
@@ -152,29 +153,51 @@ func (pm *PluginManager) Install(pluginID, version string) error {
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的版本 '%s' 未找到", pluginID, version)
 	}
+
 	log.Printf("⚙️ [PluginManager] 开始安装插件 '%s' v%s...", pluginID, version)
-	downloadPath := filepath.Join(pm.installDir, fmt.Sprintf("%s-%s.zip", pluginID, version))
-	if err := pm.performDownload(targetVersion.Source.URL, downloadPath); err != nil {
-		return fmt.Errorf("下载失败: %w", err)
+
+	// 为避免并发或路径冲突，使用临时 zip 文件路径
+	tempZipPath := filepath.Join(pm.installDir, fmt.Sprintf("%s-%s.tmp.zip", pluginID, version))
+	defer func() {
+		if err := os.Remove(tempZipPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("警告: 删除临时文件失败 (%s): %v", tempZipPath, err)
+		}
+	}()
+
+	// 执行下载
+	if err = pm.performDownload(targetVersion.Source.URL, tempZipPath); err != nil {
+		return fmt.Errorf("下载插件 '%s' v%s 失败: %w", pluginID, version, err)
 	}
-	defer os.Remove(downloadPath)
+
+	// 校验 zip 哈希
 	if targetVersion.Source.Checksum != "" {
-		if err := pm.verifyChecksum(downloadPath, targetVersion.Source.Checksum); err != nil {
-			return fmt.Errorf("文件校验失败: %w", err)
+		if err = pm.verifyChecksum(tempZipPath, targetVersion.Source.Checksum); err != nil {
+			return fmt.Errorf("插件 '%s' v%s 校验失败: %w", pluginID, version, err)
 		}
 	}
+
+	// 安装目标目录（按 ID + version）
 	pluginInstallPath := filepath.Join(pm.installDir, pluginID, version)
-	if err := os.RemoveAll(pluginInstallPath); err != nil {
-		return fmt.Errorf("清理旧的安装目录失败: %w", err)
+
+	if err = os.RemoveAll(pluginInstallPath); err != nil {
+		return fmt.Errorf("清理旧安装目录失败 (%s): %w", pluginInstallPath, err)
 	}
-	if err := unzip(downloadPath, pluginInstallPath); err != nil {
-		return fmt.Errorf("解压失败: %w", err)
+
+	if err = unzip(tempZipPath, pluginInstallPath); err != nil {
+		return fmt.Errorf("解压插件失败 (%s): %w", pluginID, err)
 	}
-	query := `INSERT INTO installed_plugins (plugin_id, version, install_path) VALUES (?, ?, ?) ON CONFLICT(plugin_id, version) DO UPDATE SET install_path=excluded.install_path`
-	if _, err := pm.db.Exec(query, pluginID, version, pluginInstallPath); err != nil {
-		return fmt.Errorf("更新数据库已安装列表失败: %w", err)
+
+	// 写入数据库（已安装插件信息）
+	query := `
+        INSERT INTO installed_plugins (plugin_id, version, install_path)
+        VALUES (?, ?, ?)
+        ON CONFLICT(plugin_id, version) DO UPDATE SET install_path = excluded.install_path
+    `
+	if _, err = pm.db.Exec(query, pluginID, version, pluginInstallPath); err != nil {
+		return fmt.Errorf("更新插件安装记录失败 (插件: %s, 版本: %s): %w", pluginID, version, err)
 	}
-	log.Printf("🎉 [PluginManager] 插件 '%s' v%s 安装成功！", pluginID, version)
+
+	log.Printf("🎉 [PluginManager] 插件 '%s' v%s 安装成功，路径: %s", pluginID, version, pluginInstallPath)
 	return nil
 }
 
@@ -187,13 +210,13 @@ func (pm *PluginManager) CreateInstance(displayName, pluginID, version, bizName 
 	if count > 0 {
 		return "", fmt.Errorf("业务组名称 (biz_name) '%s' 已被其他插件实例占用", bizName)
 	}
-	port, err := findFreePort()
+	freePort, err := findFreePort()
 	if err != nil {
 		return "", fmt.Errorf("寻找可用端口失败: %w", err)
 	}
 	instanceID := uuid.New().String()
-	query := `INSERT INTO plugin_instances (instance_id, display_name, plugin_id, version, biz_name, port) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = pm.db.Exec(query, instanceID, displayName, pluginID, version, bizName, port)
+	query := `INSERT INTO plugin_instances (instance_id, display_name, plugin_id, version, biz_name, freePort) VALUES (?, ?, ?, ?, ?, ?)`
+	_, err = pm.db.Exec(query, instanceID, displayName, pluginID, version, bizName, freePort)
 	if err != nil {
 		return "", fmt.Errorf("创建插件实例配置失败: %w", err)
 	}
@@ -407,16 +430,31 @@ func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
 func (pm *PluginManager) performDownload(sourceURL, destPath string) error {
 	reader, err := pm.getSourceReader(sourceURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("获取源读取器失败 (URL: %s): %w", sourceURL, err)
 	}
-	defer reader.Close()
+	defer func() {
+		if errClose := reader.Close(); errClose != nil {
+			log.Printf("警告: 关闭读取流失败 (URL: %s): %v", sourceURL, errClose)
+		}
+	}()
+
 	outFile, err := os.Create(destPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("创建目标文件失败 (路径: %s): %w", destPath, err)
 	}
-	defer outFile.Close()
-	_, err = io.Copy(outFile, reader)
-	return err
+	defer func() {
+		if errClose := outFile.Close(); errClose != nil {
+			log.Printf("警告: 关闭目标文件失败 (路径: %s): %v", destPath, errClose)
+		}
+	}()
+
+	written, err := io.Copy(outFile, reader)
+	if err != nil {
+		return fmt.Errorf("下载写入失败 (源: %s, 目标: %s): %w", sourceURL, destPath, err)
+	}
+
+	log.Printf("信息: 下载完成，源: %s，目标: %s，共写入 %d 字节", sourceURL, destPath, written)
+	return nil
 }
 
 func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
@@ -452,38 +490,70 @@ func (pm *PluginManager) verifyChecksum(filePath, expectedChecksum string) error
 func unzip(src, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("打开 zip 文件失败 (%s): %w", src, err)
 	}
-	defer r.Close()
+	defer func() {
+		if errClose := r.Close(); errClose != nil {
+			log.Printf("警告: 关闭 zip 文件失败 (%s): %v", src, errClose)
+		}
+	}()
+
 	if err := os.MkdirAll(dest, 0755); err != nil {
-		return err
+		return fmt.Errorf("创建解压目录失败 (%s): %w", dest, err)
 	}
+
 	for _, f := range r.File {
-		fpath := filepath.Join(dest, f.Name)
+		// 路径防御: Zip Slip（使用相对路径确保在 dest 内）
+		cleanName := filepath.Clean(f.Name)
+		fpath := filepath.Join(dest, cleanName)
+
+		// 严格检查是否超出解压根目录
+		if relPath, err := filepath.Rel(dest, fpath); err != nil || strings.HasPrefix(relPath, "..") {
+			return fmt.Errorf("检测到潜在非法路径 (文件: %s)", f.Name)
+		}
+
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, os.ModePerm)
+			if err := os.MkdirAll(fpath, 0755); err != nil {
+				return fmt.Errorf("创建目录失败 (%s): %w", fpath, err)
+			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
-			return err
+
+		if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+			return fmt.Errorf("创建文件父目录失败 (%s): %w", fpath, err)
 		}
-		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fallbackMode(f.Mode()))
 		if err != nil {
-			return err
+			return fmt.Errorf("创建文件失败 (%s): %w", fpath, err)
 		}
+
 		rc, err := f.Open()
 		if err != nil {
 			outFile.Close()
-			return err
+			return fmt.Errorf("打开 zip 内部文件失败 (%s): %w", f.Name, err)
 		}
+
 		_, err = io.Copy(outFile, rc)
 		outFile.Close()
 		rc.Close()
+
 		if err != nil {
-			return err
+			return fmt.Errorf("写入文件失败 (%s): %w", fpath, err)
 		}
+
+		log.Printf("解压完成: %s", fpath)
 	}
+
 	return nil
+}
+
+// fallbackMode 用于处理 zip 中 mode 缺失的场景
+func fallbackMode(m os.FileMode) os.FileMode {
+	if m == 0 {
+		return 0644
+	}
+	return m
 }
 
 func findFreePort() (int, error) {
