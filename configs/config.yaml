@@ -1,3 +1,4 @@
+# configs/config.yaml
 server:
   port: 10224
   log_level: "info"

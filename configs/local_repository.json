@@ -8,14 +8,20 @@
       "name": "本地 SQLite 插件",
       "description": "用于连接和查询本地 SQLite 数据库文件。",
       "author": "Local Dev",
-      "tags": ["database", "sqlite", "testing"],
-      "supported_biz_names": ["sales_data"],
+      "tags": [
+        "database",
+        "sqlite",
+        "testing"
+      ],
+      "supported_biz_names": [
+        "sales_data"
+      ],
       "versions": [
         {
           "version_string": "1.0.0",
           "release_date": "2025-06-21T00:00:00Z",
           "changelog": "- 用于本地开发的初始版本。",
-          "min_gateway_version": "v1.2.0",
+          "min_gateway_version": "v1.0.0-alpha2",
           "source": {
             "url": "./AegisBuild/plugins/sqlite_plugin_v1.0.0_windows_amd64.zip",
             "checksum": ""
@@ -33,6 +39,27 @@
               "<instance_dir>"
             ]
           }
+        }
+      ]
+    },
+    {
+      "id": "io.archiveaegis.system.observability",
+      "name": "高级可观测性模块",
+      "description": "启用高级结构化日志(slog)和性能剖析(pprof)端点。启用后，网关日志将以JSON格式输出，并可在 localhost:6060 查看 pprof 数据。需要重启网关生效。",
+      "author": "ArchiveAegis",
+      "tags": [
+        "SYSTEM_FEATURE",
+        "system",
+        "observability",
+        "logging",
+        "profiling"
+      ],
+      "versions": [
+        {
+          "version_string": "1.0.0",
+          "release_date": "2025-06-21T00:00:00Z",
+          "changelog": "- 初始版本",
+          "min_gateway_version": "v1.0.0-alpha5"
         }
       ]
     }
