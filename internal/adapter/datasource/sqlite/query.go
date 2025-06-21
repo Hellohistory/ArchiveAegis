@@ -1,4 +1,4 @@
-// file: internal/adapter/datasource/sqlite/query.go
+// Package sqlite file: internal/adapter/datasource/sqlite/query.go
 package sqlite
 
 import (
@@ -16,14 +16,14 @@ import (
 // Query 是实现 port.DataSource 接口的公开方法。
 // 它的职责是接收标准的 QueryRequest，调用内部实现，并封装返回标准 QueryResult。
 func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.QueryResult, error) {
-	// 1. 调用重构后的内部核心实现，同时获取数据和总数
+	// 内部核心实现：同时获取数据和总数
 	results, total, err := m.queryInternal(ctx, req)
 	if err != nil {
 		// 直接将内部错误向上传递。即使有部分数据，也把错误作为主要信息。
 		return &port.QueryResult{Data: results, Total: total, Source: m.Type()}, err
 	}
 
-	// 2. 将内部结果封装成标准的、可被外部消费的 QueryResult 结构
+	// 将内部结果封装成标准的、可被外部消费的 QueryResult 结构
 	queryResult := &port.QueryResult{
 		Data:   results,
 		Total:  total,
@@ -178,7 +178,7 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 						log.Printf("WARN: [DBManager Query] 扫描库 '%s/%s' 行数据失败: %v。跳过此行。", req.BizName, currentLibName, errScan)
 						continue
 					}
-					// ✅ FIX: Corrected map initialization syntax
+
 					rowData := map[string]any{"__lib": currentLibName}
 					for i, colName := range actualReturnedColumns {
 						if bytes, ok := scanDest[i].([]byte); ok {

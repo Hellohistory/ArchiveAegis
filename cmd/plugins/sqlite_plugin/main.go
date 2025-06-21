@@ -2,12 +2,13 @@
 package main
 
 import (
-	datasourcev1 "ArchiveAegis/gen/go/datasource/v1"
+	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/adapter/datasource/sqlite"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"context"
 	"database/sql"
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
@@ -17,13 +18,32 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
-	_ "modernc.org/sqlite" // 数据库驱动
+	_ "modernc.org/sqlite"
 )
+
+//go:embed README.md
+var pluginDescription string
+
+const pluginVersion = "1.0.0"
 
 // server 结构体实现了 gRPC 生成的 DataSourceServer 接口
 type server struct {
 	datasourcev1.UnimplementedDataSourceServer
-	manager port.DataSource
+	manager    port.DataSource
+	pluginName string
+	bizName    string
+}
+
+// GetPluginInfo 方法实现
+func (s *server) GetPluginInfo(ctx context.Context, req *datasourcev1.GetPluginInfoRequest) (*datasourcev1.GetPluginInfoResponse, error) {
+	log.Println("插件收到 GetPluginInfo 请求")
+	return &datasourcev1.GetPluginInfoResponse{
+		Name:                s.pluginName,
+		Version:             pluginVersion,
+		Type:                "sqlite_plugin",
+		SupportedBizNames:   []string{s.bizName}, // 告知网关它能处理哪个业务
+		DescriptionMarkdown: pluginDescription,
+	}, nil
 }
 
 // Query 将gRPC请求转换为内部调用，再将结果转换为gRPC响应
@@ -161,12 +181,13 @@ func (s *server) Mutate(ctx context.Context, req *datasourcev1.MutateRequest) (*
 }
 
 func main() {
-	portFlag := flag.Int("port", 50051, "The server port")
-	bizName := flag.String("biz", "", "Business group name this plugin manages")
-	instanceDir := flag.String("instance_dir", "./instance", "Path to instance directory")
+	portFlag := flag.Int("port", 50051, "服务监听端口")
+	bizNameFlag := flag.String("biz", "", "此插件管理的业务组名称 (必须)")
+	pluginNameFlag := flag.String("name", "unnamed-sqlite-plugin", "此插件实例的唯一名称")
+	instanceDir := flag.String("instance_dir", "./instance", "实例目录的路径")
 	flag.Parse()
 
-	if *bizName == "" {
+	if *bizNameFlag == "" {
 		log.Fatal("必须通过 -biz 参数指定插件管理的业务组名称")
 	}
 
@@ -186,10 +207,12 @@ func main() {
 	log.Println("🔌 插件成功创建 AdminConfigService")
 
 	sqliteManager := sqlite.NewManager(adminConfigService)
-	if err := sqliteManager.InitForBiz(context.Background(), *instanceDir, *bizName); err != nil {
-		log.Fatalf("插件初始化业务 '%s' 失败: %v", *bizName, err)
+	if err := sqliteManager.InitForBiz(context.Background(), *instanceDir, *bizNameFlag); err != nil {
+
+		log.Fatalf("插件初始化业务 '%s' 失败: %v", *bizNameFlag, err)
 	}
-	log.Printf("🔌 插件成功初始化业务数据: %s", *bizName)
+
+	log.Printf("🔌 插件成功初始化业务数据: %s", *bizNameFlag)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *portFlag))
 	if err != nil {
@@ -197,9 +220,13 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	datasourcev1.RegisterDataSourceServer(grpcServer, &server{manager: sqliteManager})
+	datasourcev1.RegisterDataSourceServer(grpcServer, &server{
+		manager:    sqliteManager,
+		pluginName: *pluginNameFlag,
+		bizName:    *bizNameFlag,
+	})
 
-	log.Printf("✅ SQLite插件启动成功，正在监听端口: %d，管理业务组: %s", *portFlag, *bizName)
+	log.Printf("✅ SQLite插件启动成功, 正在监听端口: %d, 管理业务组: %s", *portFlag, *bizNameFlag)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}

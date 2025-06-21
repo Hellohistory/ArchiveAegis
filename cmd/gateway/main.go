@@ -2,8 +2,8 @@
 package main
 
 import (
-	"ArchiveAegis/internal/adapter/datasource/grpc_client"
-	"ArchiveAegis/internal/adapter/datasource/sqlite"
+	"ArchiveAegis/internal/aegmiddleware"
+	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/transport/http/router"
@@ -22,46 +22,49 @@ import (
 	"syscall"
 	"time"
 
-	"ArchiveAegis/internal/aegobserve"
-
 	"github.com/spf13/viper"
 	_ "modernc.org/sqlite"
 )
 
-// version 定义当前程序的版本号
-const version = "v1.0.0-alpha2" // 版本升级，标志着插件系统集成
+// 版本升级，标志着插件管理器架构的集成
+const version = "v1.0.0-alpha3"
 
-// Config 结构体保持不变
-type Config struct {
-	Server      ServerConfig       `mapstructure:"server"`
-	DataSources []DataSourceConfig `mapstructure:"datasources"`
+// PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
+type PluginManagementConfig struct {
+	InstallDirectory string                     `mapstructure:"install_directory"`
+	Repositories     []service.RepositoryConfig `mapstructure:"repositories"`
 }
 
+// ServerConfig 对应 config.yaml 中的 `server` 部分
 type ServerConfig struct {
 	Port     int    `mapstructure:"port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 
-type DataSourceConfig struct {
-	Name    string                 `mapstructure:"name"`
-	Type    string                 `mapstructure:"type"`
-	Enabled bool                   `mapstructure:"enabled"`
-	Params  map[string]interface{} `mapstructure:"params"`
+// Config 是整个 config.yaml 的顶层结构体
+type Config struct {
+	Server           ServerConfig           `mapstructure:"server"`
+	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"`
 }
 
 func main() {
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 
+	// =========================================================================
+	//  1. 初始化配置
+	// =========================================================================
 	if err := initViper(); err != nil {
 		log.Fatalf("CRITICAL: 初始化配置失败: %v", err)
 	}
-
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
 		log.Fatalf("CRITICAL: 解析配置到结构体失败: %v", err)
 	}
 	log.Println("✅ 配置: config.yaml 加载并解析成功。")
 
+	// =========================================================================
+	//  2. 初始化数据库和核心服务
+	// =========================================================================
 	instanceDir := "instance"
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
@@ -78,83 +81,50 @@ func main() {
 		}
 	}()
 
+	if err := service.InitPlatformTables(sysDB); err != nil {
+		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
+	}
+
 	adminConfigService, err := service.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
 	}
 	log.Println("✅ 服务层: AdminConfigService 初始化完成")
 
-	if err := service.InitPlatformTables(sysDB); err != nil {
-		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
-	}
-
 	dataSourceRegistry := make(map[string]port.DataSource)
-
 	closableAdapters := make([]io.Closer, 0)
-	log.Println("⚙️ 注册中心: 开始根据 config.yaml 初始化数据源...")
-
-	for _, dsConfig := range config.DataSources {
-		if !dsConfig.Enabled {
-			log.Printf("⚪️ 数据源 '%s' 在配置中被禁用，已跳过。", dsConfig.Name)
-			continue
-		}
-
-		var dsAdapter port.DataSource
-		var initErr error
-
-		switch dsConfig.Type {
-		case "sqlite_builtin":
-			adapter := sqlite.NewManager(adminConfigService)
-			if err := adapter.InitForBiz(context.Background(), instanceDir, dsConfig.Name); err != nil {
-				initErr = fmt.Errorf("为 '%s' 初始化 'sqlite_builtin' 失败: %w", dsConfig.Name, err)
-			}
-			dsAdapter = adapter
-
-		case "sqlite_plugin":
-			address, ok := dsConfig.Params["address"].(string)
-			if !ok {
-				initErr = fmt.Errorf("gRPC插件 '%s' 的配置缺少 'address' 字符串参数", dsConfig.Name)
-			} else {
-				var adapter *grpc_client.ClientAdapter
-				adapter, initErr = grpc_client.New(address, dsConfig.Type)
-				if initErr == nil {
-					dsAdapter = adapter
-					closableAdapters = append(closableAdapters, adapter) // 添加到可关闭列表
-				}
-			}
-
-		default:
-			initErr = fmt.Errorf("未知的数据源类型 '%s' (用于 '%s')", dsConfig.Type, dsConfig.Name)
-		}
-
-		if initErr != nil {
-			log.Printf("⚠️  初始化数据源 '%s' 失败: %v，已跳过。", dsConfig.Name, initErr)
-			continue
-		}
-
-		dataSourceRegistry[dsConfig.Name] = dsAdapter
-		log.Printf("✅ 数据源 '%s' (类型: %s) 成功注册。", dsConfig.Name, dsConfig.Type)
+	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
+	if err != nil {
+		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
-	log.Println("✅ 注册中心: 所有已启用的数据源均已初始化并填充完成。")
+	log.Println("✅ 服务层: PluginManager 初始化完成")
 
-	// ✅ FINAL-MOD: 在停机时关闭所有可关闭的适配器连接
-	defer func() {
-		log.Println("正在关闭所有gRPC插件适配器连接...")
-		for _, closer := range closableAdapters {
-			if err := closer.Close(); err != nil {
-				log.Printf("ERROR: 关闭适配器连接时发生错误: %v", err)
+	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
+	log.Println("✅ 服务层: BusinessRateLimiter 初始化完成")
+
+	// =========================================================================
+	//  3. 启动后台任务
+	// =========================================================================
+	pluginManager.RefreshRepositories() // 启动时立即刷新一次仓库
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				pluginManager.RefreshRepositories()
 			}
 		}
 	}()
+	log.Println("✅ 后台任务: 插件仓库定期刷新已启动。")
 
 	// =========================================================================
-	//  3. 初始化传输层
+	//  4. 初始化并启动 HTTP 服务
 	// =========================================================================
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
 		setupToken = genToken()
-		// ✅ FINAL-MOD: 完善安装流程，传递过期时间
 		setupTokenDeadline = time.Now().Add(30 * time.Minute)
 		log.Printf("重要: [SETUP MODE] 系统中无管理员，安装令牌已生成 (30分钟内有效): %s", setupToken)
 	}
@@ -163,6 +133,8 @@ func main() {
 		router.Dependencies{
 			Registry:           dataSourceRegistry,
 			AdminConfigService: adminConfigService,
+			PluginManager:      pluginManager,
+			RateLimiter:        rateLimiter,
 			AuthDB:             sysDB,
 			SetupToken:         setupToken,
 			SetupTokenDeadline: setupTokenDeadline,
@@ -187,13 +159,14 @@ func main() {
 	aegobserve.Register()
 	log.Println("✅ 监控: pprof, metrics 已启用。")
 
-	// 等待中断信号
+	// =========================================================================
+	//  5. 优雅停机处理
+	// =========================================================================
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("👋 收到停机信号，准备优雅关闭...")
 
-	// 创建一个有超时的上下文
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -237,27 +210,30 @@ func initViper() error {
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		// 如果错误是“文件未找到”，则创建默认配置文件
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			log.Println("警告: 未找到 config.yaml。将创建默认配置文件 config.yaml。")
+			// 更新默认配置文件以匹配新的结构
 			defaultConfig := `
-# ArchiveAegis 平台默认配置文件
+# ArchiveAegis 平台默认配置文件 (V3 - 插件仓库模式)
 server:
   port: 10224
   log_level: "info"
 
-datasources:
-  - name: "local_data"
-    type: "sqlite_builtin"
-    enabled: true
-    params:
-      directory: "local_data" # 将会扫描 instance/local_data/ 目录下的 .db 文件
-
-  - name: "my_first_plugin"
-    type: "sqlite_plugin"
-    enabled: false # 默认禁用，请在启动插件后设为 true
-    params:
-      address: "localhost:50051"
+# 插件管理配置
+plugin_management:
+  # 插件将被下载和安装到这个目录
+  install_directory: "./instance/plugins"
+  
+  # 插件仓库列表
+  repositories:
+    - name: "本地测试仓库"
+      # 指向我们之前创建的本地清单文件，注意 file:// 协议头
+      url: "file://./configs/local_repository.json"
+      enabled: true
+      
+    - name: "ArchiveAegis 官方仓库 (示例)"
+      url: "https://plugins.archiveaegis.io/repository.json"
+      enabled: false # 默认禁用，因为地址是虚构的
 `
 			configFilePath := "configs/config.yaml"
 			if err := os.MkdirAll("configs", 0755); err != nil {
@@ -266,7 +242,9 @@ datasources:
 			if err := os.WriteFile(configFilePath, []byte(defaultConfig), 0644); err != nil {
 				return fmt.Errorf("创建默认配置文件失败: %w", err)
 			}
-			log.Fatalf("CRITICAL: 默认配置文件已在 '%s' 创建。请根据您的需求修改它，并将其重命名为 'config.yaml' 后，再重新启动程序。", configFilePath)
+			log.Printf("警告: 默认配置文件已在 '%s' 创建。请根据需要修改。", configFilePath)
+			// 重新读取刚刚创建的配置文件
+			return viper.ReadInConfig()
 		} else {
 			return fmt.Errorf("读取配置文件时发生错误: %w", err)
 		}

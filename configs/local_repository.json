@@ -1,0 +1,31 @@
+{
+  "repository_name": "本地开发测试仓库",
+  "owner": "Developer",
+  "last_updated": "2025-06-21T10:00:00Z",
+  "plugins": [
+    {
+      "id": "io.archiveaegis.sqlite",
+      "name": "本地 SQLite 插件",
+      "description": "用于连接和查询本地 SQLite 数据库文件。",
+      "author": "Local Dev",
+      "tags": ["database", "sqlite", "testing"],
+      "supported_biz_names": ["sales_data"],
+      "versions": [
+        {
+          "version_string": "1.0.0",
+          "release_date": "2025-06-21T00:00:00Z",
+          "changelog": "- 用于本地开发的初始版本。",
+          "min_gateway_version": "v1.1.0",
+          "source": {
+            "url": "file:///E:/Code/Go/ArchiveAegis/AegisBuild/plugins/sqlite_plugin_windows_amd64.zip",
+            "checksum": ""
+          },
+          "execution": {
+            "entrypoint": "sqlite_plugin.exe",
+            "args": "-name='我的本地插件' -biz='<biz_name>' -port=<port>"
+          }
+        }
+      ]
+    }
+  ]
+}

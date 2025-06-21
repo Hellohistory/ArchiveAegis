@@ -8,26 +8,23 @@ import (
 )
 
 // InitPlatformTables 负责在系统启动时，检查并创建/更新所有平台级的系统管理表。
-// 这是确保无论auth.db是否存在，系统都能正常运行的关键。
 func InitPlatformTables(db *sql.DB) error {
-	// 初始化用户表
 	if err := initUserTable(db); err != nil {
 		return fmt.Errorf("初始化用户表失败: %w", err)
 	}
-
-	// 初始化权限配置相关的表 (并为写操作增加权限字段)
 	if err := initPermissionTables(db); err != nil {
 		return fmt.Errorf("初始化权限表失败: %w", err)
 	}
-
-	// 初始化操作日志表 (用于回滚)
 	if err := initOperationLogTable(db); err != nil {
 		return fmt.Errorf("初始化操作日志表失败: %w", err)
 	}
-
-	// 初始化全局设置表
 	if err := initGlobalSettingsTable(db); err != nil {
 		return fmt.Errorf("初始化全局设置表失败: %w", err)
+	}
+
+	// ✅ NEW: 调用新函数来初始化插件管理相关的表
+	if err := initPluginManagementTable(db); err != nil {
+		return fmt.Errorf("初始化插件管理表失败: %w", err)
 	}
 
 	log.Println("✅ 数据库: 所有系统表结构初始化/检查完成。")
@@ -168,6 +165,42 @@ func initGlobalSettingsTable(db *sql.DB) error {
 	);`
 	if _, err := db.Exec(queryBizRateLimit); err != nil {
 		return fmt.Errorf("创建 'biz_ratelimit_settings' 表失败: %w", err)
+	}
+
+	return nil
+}
+
+// initPluginManagementTable 创建用于存储插件状态和实例配置的表。
+func initPluginManagementTable(db *sql.DB) error {
+	// 已安装插件表
+	queryInstalled := `
+    CREATE TABLE IF NOT EXISTS installed_plugins (
+        plugin_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        install_path TEXT NOT NULL,
+        installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (plugin_id, version)
+    );`
+	if _, err := db.Exec(queryInstalled); err != nil {
+		return fmt.Errorf("创建 'installed_plugins' 表失败: %w", err)
+	}
+
+	queryInstances := `
+	CREATE TABLE IF NOT EXISTS plugin_instances (
+		instance_id TEXT PRIMARY KEY,
+		display_name TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		version TEXT NOT NULL,
+		biz_name TEXT NOT NULL UNIQUE, -- 一个实例只服务一个业务组，且业务组不能重复
+		port INTEGER NOT NULL UNIQUE,    -- 每个实例拥有独立的端口号
+		status TEXT NOT NULL DEFAULT 'STOPPED', -- 状态: STOPPED, RUNNING, ERROR
+		enabled BOOLEAN NOT NULL DEFAULT TRUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_started_at DATETIME,
+		FOREIGN KEY (plugin_id, version) REFERENCES installed_plugins(plugin_id, version)
+	);`
+	if _, err := db.Exec(queryInstances); err != nil {
+		return fmt.Errorf("创建 'plugin_instances' 表失败: %w", err)
 	}
 
 	return nil
