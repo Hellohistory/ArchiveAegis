@@ -1,4 +1,4 @@
-// file: internal/adapter/datasource/grpc_client/client.go
+// Package grpc_client file: internal/adapter/datasource/grpc_client/client.go
 package grpc_client
 
 import (
@@ -205,9 +205,12 @@ func (a *ClientAdapter) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// Close 关闭与gRPC插件的连接
+// Close 关闭与gRPC插件的连接（若conn为nil则安全无操作）
 func (a *ClientAdapter) Close() error {
-	return a.conn.Close()
+	if a.conn != nil {
+		return a.conn.Close()
+	}
+	return nil
 }
 
 // Type 返回适配器的类型标识符, 这里返回一个通用值，因为具体类型由插件决定
