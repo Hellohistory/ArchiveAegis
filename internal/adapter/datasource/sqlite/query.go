@@ -4,9 +4,8 @@ package sqlite
 import (
 	"ArchiveAegis/internal/core/port"
 	"context"
-	"database/sql"
 	"fmt"
-	"log"
+	"log/slog" // 使用 slog
 	"runtime"
 	"sort"
 	"sync/atomic"
@@ -14,31 +13,92 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Query 是实现 port.DataSource 接口的公开方法。
-// 它的职责是接收标准的 QueryRequest，调用内部实现，并封装返回标准 QueryResult。
+type queryParam struct {
+	Field string
+	Value string
+	Logic string
+	Fuzzy bool
+}
+
+// Query 是适配新协议的公开方法。
+// 它的职责是：解析和校验通用的查询请求，然后调用内部核心逻辑，最后将结果包装成通用格式返回。
 func (m *Manager) Query(ctx context.Context, req port.QueryRequest) (*port.QueryResult, error) {
-	// 内部核心实现：同时获取数据和总数
-	results, total, err := m.queryInternal(ctx, req)
+	queryMap := req.Query
+	tableName, ok := queryMap["table"].(string)
+	if !ok || tableName == "" {
+		return nil, fmt.Errorf("无效请求: query 体必须包含一个有效的 'table' 字符串字段")
+	}
+
+	type parsedArgs struct {
+		tableName      string
+		queryParams    []queryParam
+		fieldsToReturn []string
+		page           int
+		size           int
+	}
+	args := parsedArgs{
+		tableName: tableName,
+		page:      1,
+		size:      50,
+	}
+
+	if pageF, ok := queryMap["page"].(float64); ok {
+		args.page = int(pageF)
+	}
+	if sizeF, ok := queryMap["size"].(float64); ok {
+		args.size = int(sizeF)
+	}
+
+	if filters, ok := queryMap["filters"].([]interface{}); ok {
+		for i, f := range filters {
+			filterMap, ok := f.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("无效请求: filters 数组的第 %d 个元素不是一个有效的JSON对象", i)
+			}
+
+			param := queryParam{}
+			if param.Field, ok = filterMap["field"].(string); !ok || param.Field == "" {
+				return nil, fmt.Errorf("无效请求: filter 对象缺少或 'field' 字段类型不正确")
+			}
+			param.Value = fmt.Sprintf("%v", filterMap["value"])
+			param.Logic, _ = filterMap["logic"].(string)
+			param.Fuzzy, _ = filterMap["fuzzy"].(bool)
+			args.queryParams = append(args.queryParams, param)
+		}
+	}
+	if fields, ok := queryMap["fields_to_return"].([]interface{}); ok {
+		for _, field := range fields {
+			if fStr, ok := field.(string); ok {
+				args.fieldsToReturn = append(args.fieldsToReturn, fStr)
+			}
+		}
+	}
+
+	results, total, err := m.queryInternal(ctx, req.BizName, args)
 	if err != nil {
-		// 直接将内部错误向上传递。即使有部分数据，也把错误作为主要信息。
-		return &port.QueryResult{Data: results, Total: total, Source: m.Type()}, err
+		return nil, err
 	}
 
-	// 将内部结果封装成标准的、可被外部消费的 QueryResult 结构
-	queryResult := &port.QueryResult{
-		Data:   results,
-		Total:  total,
-		Source: m.Type(), // 标明数据源类型
-	}
-
-	return queryResult, nil
+	return &port.QueryResult{
+		Data: map[string]interface{}{
+			"items": results,
+			"total": total,
+		},
+		Source: m.Type(),
+	}, nil
 }
 
 // queryInternal 是查询逻辑的内部核心实现。
-func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]map[string]any, int64, error) {
-	bizAdminConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
+func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct {
+	tableName      string
+	queryParams    []queryParam
+	fieldsToReturn []string
+	page           int
+	size           int
+}) ([]map[string]any, int64, error) {
+	bizAdminConfig, err := m.configService.GetBizQueryConfig(ctx, bizName)
 	if err != nil {
-		return nil, 0, fmt.Errorf("业务 '%s' 查询配置不可用: %w", req.BizName, err)
+		return nil, 0, fmt.Errorf("业务 '%s' 查询配置不可用: %w", bizName, err)
 	}
 	if bizAdminConfig == nil {
 		return nil, 0, port.ErrBizNotFound
@@ -47,12 +107,12 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 		return nil, 0, port.ErrPermissionDenied
 	}
 
-	targetTableName := req.TableName
+	targetTableName := args.tableName
 	if targetTableName == "" {
 		targetTableName = bizAdminConfig.DefaultQueryTable
 	}
 	if targetTableName == "" {
-		return nil, 0, fmt.Errorf("业务 '%s' 未能确定查询目标表", req.BizName)
+		return nil, 0, fmt.Errorf("业务 '%s' 未能确定查询目标表", bizName)
 	}
 
 	tableAdminConfig, tableConfigExists := bizAdminConfig.Tables[targetTableName]
@@ -63,8 +123,8 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 		return nil, 0, port.ErrPermissionDenied
 	}
 
-	validatedQueryParams := make([]port.QueryParam, 0, len(req.QueryParams))
-	for _, p := range req.QueryParams {
+	validatedQueryParams := make([]queryParam, 0, len(args.queryParams))
+	for _, p := range args.queryParams {
 		fieldSetting, fieldExists := tableAdminConfig.Fields[p.Field]
 		if !fieldExists || !fieldSetting.IsSearchable {
 			return nil, 0, fmt.Errorf("字段 '%s' 无效或不可搜索", p.Field)
@@ -73,8 +133,8 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 	}
 
 	var selectFieldsForSQL []string
-	if len(req.FieldsToReturn) > 0 {
-		for _, fieldName := range req.FieldsToReturn {
+	if len(args.fieldsToReturn) > 0 {
+		for _, fieldName := range args.fieldsToReturn {
 			fieldSetting, fieldExists := tableAdminConfig.Fields[fieldName]
 			if !fieldExists || !fieldSetting.IsReturnable {
 				return nil, 0, fmt.Errorf("安全策略冲突：字段 '%s' 未被授权返回", fieldName)
@@ -95,22 +155,20 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 	sort.Strings(selectFieldsForSQL)
 
 	m.mu.RLock()
-	dbInstancesInBiz, bizGroupExists := m.group[req.BizName]
+	dbInstancesInBiz, bizGroupExists := m.group[bizName]
 	m.mu.RUnlock()
 	if !bizGroupExists || len(dbInstancesInBiz) == 0 {
 		return []map[string]any{}, 0, nil
 	}
 
-	// --- 并发查询数据 和 并发计算总数 ---
 	var totalCount int64
 	resultsChannel := make(chan []map[string]any, len(dbInstancesInBiz))
 	g, queryCtx := errgroup.WithContext(ctx)
 
-	// Goroutine 1: 并发计算精确的总数
 	g.Go(func() error {
 		countGroup, countCtx := errgroup.WithContext(queryCtx)
 		for _, db := range dbInstancesInBiz {
-			currentDB := db // a copy of the loop variable
+			currentDB := db
 			countGroup.Go(func() error {
 				countSQL, countArgs, errBuild := buildCountSQL(targetTableName, validatedQueryParams)
 				if errBuild != nil {
@@ -119,8 +177,8 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 				var localCount int64
 				errScan := currentDB.QueryRowContext(countCtx, countSQL, countArgs...).Scan(&localCount)
 				if errScan != nil {
-					log.Printf("WARN: [DBManager Query] 计算总数时部分库查询失败 (不影响总结果): %v", errScan)
-					return nil // Don't fail the entire group, just log it.
+					slog.Warn("[DBManager Query] 计算总数时部分库查询失败 (不影响总结果)", "error", errScan)
+					return nil
 				}
 				atomic.AddInt64(&totalCount, localCount)
 				return nil
@@ -129,7 +187,6 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 		return countGroup.Wait()
 	})
 
-	// Goroutine 2: 并发查询分页数据
 	g.Go(func() error {
 		defer close(resultsChannel)
 		dataGroup, dataCtx := errgroup.WithContext(queryCtx)
@@ -155,19 +212,17 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 					return dataCtx.Err()
 				}
 
-				sqlQuery, queryArgs, errBuild := buildQuerySQL(targetTableName, selectFieldsForSQL, validatedQueryParams, req.Page, req.Size)
+				sqlQuery, queryArgs, errBuild := buildQuerySQL(targetTableName, selectFieldsForSQL, validatedQueryParams, args.page, args.size)
 				if errBuild != nil {
-					log.Printf("ERROR: [DBManager Query] 构建SQL失败，已跳过此库: %v", errBuild)
+					slog.Error("[DBManager Query] 构建SQL失败，已跳过此库", "error", errBuild)
 					return nil
 				}
 
 				rows, errExec := currentDBConn.QueryContext(dataCtx, sqlQuery, queryArgs...)
 				if errExec != nil {
-					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", req.BizName, currentLibName, targetTableName, errExec)
+					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", bizName, currentLibName, targetTableName, errExec)
 				}
-				defer func(rows *sql.Rows) {
-					_ = rows.Close()
-				}(rows)
+				defer rows.Close()
 
 				actualReturnedColumns, _ := rows.Columns()
 				var libResults []map[string]any
@@ -178,7 +233,7 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 						scanDestPtrs[i] = &scanDest[i]
 					}
 					if errScan := rows.Scan(scanDestPtrs...); errScan != nil {
-						log.Printf("WARN: [DBManager Query] 扫描库 '%s/%s' 行数据失败: %v。跳过此行。", req.BizName, currentLibName, errScan)
+						slog.Warn("[DBManager Query] 扫描库行数据失败，跳过此行", "biz", bizName, "lib", currentLibName, "error", errScan)
 						continue
 					}
 
@@ -193,7 +248,7 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 					libResults = append(libResults, rowData)
 				}
 				if errRows := rows.Err(); errRows != nil {
-					return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据时发生错误: %w", req.BizName, currentLibName, targetTableName, errRows)
+					return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据时发生错误: %w", bizName, currentLibName, targetTableName, errRows)
 				}
 				if len(libResults) > 0 {
 					resultsChannel <- libResults
@@ -210,8 +265,8 @@ func (m *Manager) queryInternal(ctx context.Context, req port.QueryRequest) ([]m
 	}
 
 	if err := g.Wait(); err != nil {
-		log.Printf("错误: [DBManager Query] 业务 '%s' 表 '%s' 查询中发生错误: %v", req.BizName, targetTableName, err)
-		return allAggregatedResults, totalCount, fmt.Errorf("查询业务 '%s' 的表 '%s' 时发生部分错误: %w", req.BizName, targetTableName, err)
+		slog.Error("[DBManager Query] 查询中发生错误", "biz", bizName, "table", targetTableName, "error", err)
+		return allAggregatedResults, totalCount, fmt.Errorf("查询业务 '%s' 的表 '%s' 时发生部分错误: %w", bizName, targetTableName, err)
 	}
 
 	return allAggregatedResults, totalCount, nil

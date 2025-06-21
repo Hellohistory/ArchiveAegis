@@ -3,14 +3,16 @@ package router
 
 import (
 	"ArchiveAegis/internal/aegmiddleware"
+	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
+	"ArchiveAegis/internal/service/plugin_manager"
 	"ArchiveAegis/internal/transport/http/middleware"
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"time"
@@ -24,7 +26,7 @@ import (
 type Dependencies struct {
 	Registry           map[string]port.DataSource
 	AdminConfigService port.QueryAdminConfigService
-	PluginManager      *service.PluginManager
+	PluginManager      *plugin_manager.PluginManager
 	RateLimiter        *aegmiddleware.BusinessRateLimiter
 	AuthDB             *sql.DB
 	SetupToken         string
@@ -34,6 +36,9 @@ type Dependencies struct {
 // New 创建并配置一个全新的、基于 Gin 的 HTTP 路由器
 func New(deps Dependencies) http.Handler {
 	router := gin.Default()
+
+	// --- 全局中间件注册 ---
+	router.Use(aegobserve.PrometheusMiddleware())
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
@@ -45,29 +50,19 @@ func New(deps Dependencies) http.Handler {
 	}))
 	router.Use(middleware.ErrorHandlingMiddleware())
 
-	// ✅ FIX: 创建一个什么都不做的 http.Handler 作为中间件链的“下一个”占位符
-	// 它能确保请求在通过标准库中间件后，能继续回到 Gin 的处理链中
-	passthroughHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
-
-	// 将 http.Handler 转换为 gin.HandlerFunc 的辅助函数
-	wrap := func(h http.Handler) gin.HandlerFunc {
-		return gin.WrapH(h)
-	}
-
 	authService := service.NewAuthenticator(deps.AuthDB)
+
 	v1 := router.Group("/api/v1")
 	{
 		// --- 系统/认证平面 ---
 		authGroup := v1.Group("/auth")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		authGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		authGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
 		}
 
 		systemGroup := v1.Group("/system")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		systemGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		systemGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
 		}
@@ -75,8 +70,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 元数据/发现平面 ---
 		metaGroup := v1.Group("/meta")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		metaGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		metaGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
 			metaGroup.GET("/schema/:bizName", schemaHandlerV1(deps.Registry))
@@ -85,19 +79,18 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 数据平面 ---
 		dataGroup := v1.Group("/data")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		dataGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
+		dataGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
 		}
 
-		// --- 控制平面 ---
+		// --- 控制平面 (Admin) ---
 		adminGroup := v1.Group("/admin")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		adminGroup.Use(authMiddleware(authService), requireAdmin(), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
+		adminGroup.Use(authMiddleware(authService), requireAdmin(), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
-			// (所有 admin 子路由定义不变, 它们会自动被 Use 的中间件保护)
+			adminGroup.GET("/metrics", gin.WrapH(aegobserve.Handler()))
+
 			pluginAdminGroup := adminGroup.Group("/plugins")
 			{
 				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
@@ -139,10 +132,20 @@ func New(deps Dependencies) http.Handler {
 }
 
 // =============================================================================
-//
-//	Gin 中间件 (Middleware)
-//
+// Gin 中间件 (Middleware)
 // =============================================================================
+
+// WrapNetHTTP 是一个更简洁、惯用的方式来包装 net/http 中间件给 Gin 使用
+func WrapNetHTTP(middleware func(http.Handler) http.Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c.Next()
+		})
+		handlerToExec := middleware(nextHandler)
+		handlerToExec.ServeHTTP(c.Writer, c.Request)
+	}
+}
+
 func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,11 +153,9 @@ func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 			c.Next()
 		}))
 		handler.ServeHTTP(c.Writer, c.Request)
-		if c.Writer.Written() {
-			c.Abort()
-		}
 	}
 }
+
 func requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := service.ClaimFrom(c.Request)
@@ -167,6 +168,96 @@ func requireAdmin() gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// =============================================================================
+//  API 处理器 (Handlers)
+// =============================================================================
+
+// --- V1 数据平面处理器 (已更新以适配新协议) ---
+
+// queryHandlerV1 现在处理通用的查询请求
+func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+	// 请求体现在直接对应我们核心接口中的 port.QueryRequest
+	type RequestBody struct {
+		BizName string                 `json:"biz_name" binding:"required"`
+		Query   map[string]interface{} `json:"query" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		dataSource, exists := registry[reqBody.BizName]
+		if !exists {
+			_ = c.Error(port.ErrBizNotFound)
+			return
+		}
+
+		// 直接构建通用的 port.QueryRequest
+		queryReq := port.QueryRequest{
+			BizName: reqBody.BizName,
+			Query:   reqBody.Query,
+		}
+
+		result, err := dataSource.Query(c.Request.Context(), queryReq)
+		if err != nil {
+			slog.Error("queryHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
+			_ = c.Error(err)
+			return
+		}
+		// 直接返回插件处理后的通用结果对象
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+// mutateHandlerV1 现在处理通用的写操作请求
+func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+	// 请求体现在直接对应我们核心接口中的 port.MutateRequest
+	type RequestBody struct {
+		BizName   string                 `json:"biz_name" binding:"required"`
+		Operation string                 `json:"operation" binding:"required"`
+		Payload   map[string]interface{} `json:"payload" binding:"required"`
+	}
+
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		dataSource, exists := registry[reqBody.BizName]
+		if !exists {
+			_ = c.Error(port.ErrBizNotFound)
+			return
+		}
+
+		slog.Info(
+			"审计日志: 收到 Mutate 请求",
+			"user_id", service.ClaimFrom(c.Request).ID,
+			"biz_name", reqBody.BizName,
+			"operation", reqBody.Operation,
+		)
+
+		// 直接构建通用的 port.MutateRequest
+		mutateReq := port.MutateRequest{
+			BizName:   reqBody.BizName,
+			Operation: reqBody.Operation,
+			Payload:   reqBody.Payload,
+		}
+
+		result, err := dataSource.Mutate(c.Request.Context(), mutateReq)
+		if err != nil {
+			slog.Error("mutateHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
 	}
 }
 
@@ -227,147 +318,6 @@ func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.Hand
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": viewConfig})
-	}
-}
-
-// --- V1 数据平面处理器 ---
-
-// queryHandlerV1 处理统一的数据查询请求
-func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	type QueryPayload struct {
-		Table          string            `json:"table"`
-		FieldsToReturn []string          `json:"fields_to_return"`
-		Filters        []port.QueryParam `json:"filters"`
-		Page           int               `json:"page"`
-		Size           int               `json:"size"`
-	}
-	type RequestBody struct {
-		BizName string       `json:"biz_name" binding:"required"`
-		Query   QueryPayload `json:"query" binding:"required"`
-	}
-
-	return func(c *gin.Context) {
-		var reqBody RequestBody
-		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			_ = c.Error(err)
-			return
-		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
-			return
-		}
-
-		if reqBody.Query.Page <= 0 {
-			reqBody.Query.Page = 1
-		}
-		if reqBody.Query.Size <= 0 {
-			reqBody.Query.Size = 50
-		}
-		if reqBody.Query.Size > 2000 {
-			reqBody.Query.Size = 2000
-		}
-
-		queryReq := port.QueryRequest{
-			BizName:        reqBody.BizName,
-			TableName:      reqBody.Query.Table,
-			QueryParams:    reqBody.Query.Filters,
-			Page:           reqBody.Query.Page,
-			Size:           reqBody.Query.Size,
-			FieldsToReturn: reqBody.Query.FieldsToReturn,
-		}
-
-		result, err := dataSource.Query(c.Request.Context(), queryReq)
-		if err != nil {
-			log.Printf("ERROR: queryHandlerV1 query failed for biz '%s': %v", reqBody.BizName, err)
-			_ = c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"data": result.Data, "total": result.Total})
-	}
-}
-
-// mutateHandlerV1 处理统一的数据写入（增删改）请求
-func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	type CreatePayload struct {
-		Table string                 `json:"table" binding:"required"`
-		Data  map[string]interface{} `json:"data" binding:"required"`
-	}
-	type UpdatePayload struct {
-		Table   string                 `json:"table" binding:"required"`
-		Data    map[string]interface{} `json:"data" binding:"required"`
-		Filters []port.QueryParam      `json:"filters" binding:"required"`
-	}
-	type DeletePayload struct {
-		Table   string            `json:"table" binding:"required"`
-		Filters []port.QueryParam `json:"filters" binding:"required"`
-	}
-	type RequestBody struct {
-		BizName    string         `json:"biz_name" binding:"required"`
-		Operation  string         `json:"operation" binding:"required,oneof=create update delete"`
-		CreateData *CreatePayload `json:"create_data,omitempty"`
-		UpdateData *UpdatePayload `json:"update_data,omitempty"`
-		DeleteData *DeletePayload `json:"delete_data,omitempty"`
-	}
-
-	return func(c *gin.Context) {
-		var reqBody RequestBody
-		if err := c.ShouldBindJSON(&reqBody); err != nil {
-			_ = c.Error(err)
-			return
-		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
-			return
-		}
-
-		var goReq port.MutateRequest
-		goReq.BizName = reqBody.BizName
-
-		switch reqBody.Operation {
-		case "create":
-			if reqBody.CreateData == nil {
-				_ = c.Error(errors.New("create操作缺少'create_data'字段"))
-				return
-			}
-			goReq.CreateOp = &port.CreateOperation{
-				TableName: reqBody.CreateData.Table,
-				Data:      reqBody.CreateData.Data,
-			}
-		case "update":
-			if reqBody.UpdateData == nil {
-				_ = c.Error(errors.New("update操作缺少'update_data'字段"))
-				return
-			}
-			goReq.UpdateOp = &port.UpdateOperation{
-				TableName: reqBody.UpdateData.Table,
-				Data:      reqBody.UpdateData.Data,
-				Filters:   reqBody.UpdateData.Filters,
-			}
-		case "delete":
-			if reqBody.DeleteData == nil {
-				_ = c.Error(errors.New("delete操作缺少'delete_data'字段"))
-				return
-			}
-			goReq.DeleteOp = &port.DeleteOperation{
-				TableName: reqBody.DeleteData.Table,
-				Filters:   reqBody.DeleteData.Filters,
-			}
-		}
-
-		claims := service.ClaimFrom(c.Request)
-		log.Printf("审计日志: 用户ID '%d' 正在尝试对业务 '%s' 执行 '%s' 操作。", claims.ID, reqBody.BizName, reqBody.Operation)
-
-		result, err := dataSource.Mutate(c.Request.Context(), goReq)
-		if err != nil {
-			log.Printf("ERROR: mutateHandlerV1 failed for biz '%s': %v", reqBody.BizName, err)
-			_ = c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
 
@@ -667,7 +617,7 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 }
 
 // listAvailablePluginsHandler 返回所有可供安装的插件列表。
-func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func listAvailablePluginsHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		availablePlugins := pluginManager.GetAvailablePlugins()
 		if availablePlugins == nil {
@@ -678,7 +628,7 @@ func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.Handl
 }
 
 // installPluginHandler 处理安装特定版本插件的请求。这是一个简化的接口。
-func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func installPluginHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	type installPayload struct {
 		PluginID string `json:"plugin_id" binding:"required"`
 		Version  string `json:"version" binding:"required"`
@@ -698,7 +648,7 @@ func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // listInstancesHandler 返回所有已配置的插件实例列表。
-func listInstancesHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instances, err := pluginManager.ListInstances()
 		if err != nil {
@@ -713,7 +663,7 @@ func listInstancesHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // deleteInstanceHandler 删除一个插件实例的配置。
-func deleteInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func deleteInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.DeleteInstance(instanceID); err != nil {
@@ -725,7 +675,7 @@ func deleteInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc
 }
 
 // startInstanceHandler 启动一个已配置的插件实例。
-func startInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.Start(instanceID); err != nil {
@@ -737,7 +687,7 @@ func startInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // stopInstanceHandler 停止一个正在运行的插件实例。
-func stopInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.Stop(instanceID); err != nil {
@@ -749,7 +699,7 @@ func stopInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 }
 
 // createInstanceHandler 创建一个新的插件实例配置。
-func createInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	type createPayload struct {
 		DisplayName string `json:"display_name" binding:"required"`
 		PluginID    string `json:"plugin_id" binding:"required"`

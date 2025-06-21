@@ -1,4 +1,4 @@
-// file: internal/service/db_init.go
+// Package service file: internal/service/db_init.go
 package service
 
 import (
@@ -22,13 +22,37 @@ func InitPlatformTables(db *sql.DB) error {
 		return fmt.Errorf("初始化全局设置表失败: %w", err)
 	}
 
-	// ✅ NEW: 调用新函数来初始化插件管理相关的表
 	if err := initPluginManagementTable(db); err != nil {
 		return fmt.Errorf("初始化插件管理表失败: %w", err)
+	}
+	if err := initSystemFeaturesTable(db); err != nil {
+		return fmt.Errorf("初始化系统功能表失败: %w", err)
 	}
 
 	log.Println("✅ 数据库: 所有系统表结构初始化/检查完成。")
 	return nil
+}
+
+// initSystemFeaturesTable 创建一个表来跟踪可开启/关闭的内置系统功能。
+func initSystemFeaturesTable(db *sql.DB) error {
+	query := `
+    CREATE TABLE IF NOT EXISTS system_features (
+        feature_id TEXT PRIMARY KEY NOT NULL, -- 例如: "io.archiveaegis.system.observability"
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        config_json TEXT, -- 为未来的功能配置预留
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );`
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("创建 'system_features' 表失败: %w", err)
+	}
+
+	// 默认为关闭
+	insertQuery := `
+	INSERT OR IGNORE INTO system_features (feature_id, enabled) VALUES
+		('io.archiveaegis.system.observability', FALSE);
+	`
+	_, err := db.Exec(insertQuery)
+	return err
 }
 
 // initUserTable 创建用户表

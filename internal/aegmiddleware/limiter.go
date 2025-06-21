@@ -1,3 +1,4 @@
+// Package aegmiddleware internal/aegmiddleware/limiter.go
 package aegmiddleware
 
 import (
@@ -52,22 +53,27 @@ type BusinessRateLimiter struct {
 // NewBusinessRateLimiter 创建一个新的、功能完备的业务速率限制器。
 func NewBusinessRateLimiter(cs port.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
 	brl := &BusinessRateLimiter{
-		configService: cs,
+		configService: cs, // 接收依赖
 
 		globalLimiter: rate.NewLimiter(rate.Limit(globalRate), globalBurst),
 
 		ipLimiters:     make(map[string]*limiterEntry),
-		ipDefaultRate:  1.0, // 默认 60 req/min
+		ipDefaultRate:  1.0,
 		ipDefaultBurst: 20,
 
 		userLimiters:     make(map[int64]*limiterEntry),
-		userDefaultRate:  5.0, // 已认证用户默认 5 req/s
+		userDefaultRate:  5.0,
 		userDefaultBurst: 15,
 
 		bizLimiters: make(map[string]*limiterEntry),
 	}
 
-	brl.loadIPDefaultSettings()
+	if cs != nil {
+		brl.loadIPDefaultSettings()
+	} else {
+		log.Println("警告: [Business Limiter] 未提供 configService，将使用硬编码的默认速率限制。")
+	}
+
 	go brl.cleanupIPs()
 	go brl.cleanupUsers()
 	go brl.cleanupBizs()
@@ -183,17 +189,24 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 		userID := claims.ID
 		brl.userMu.Lock()
 		entry, exists := brl.userLimiters[userID]
+
 		if !exists {
-			rateLimit, burstSize := brl.userDefaultRate, brl.userDefaultBurst // 先使用默认值
+			// 1. 先用默认值初始化配置变量
+			rateLimit, burstSize := brl.userDefaultRate, brl.userDefaultBurst
+
+			// 2. 尝试从配置服务获取并覆盖配置变量
 			if userSettings, err := brl.configService.GetUserLimitSettings(r.Context(), userID); err == nil && userSettings != nil {
 				rateLimit = rate.Limit(userSettings.RateLimitPerSecond)
 				burstSize = userSettings.BurstSize
 				log.Printf("调试: [Business Limiter] 为用户ID %d 加载了特定速率限制: %.2f req/s, burst %d", userID, rateLimit, burstSize)
 			}
+
+			// 3. 最后，使用最终确定的配置变量来创建限制器
 			limiter := rate.NewLimiter(rateLimit, burstSize)
 			entry = &limiterEntry{limiter: limiter, lastSeen: time.Now()}
 			brl.userLimiters[userID] = entry
 		}
+
 		entry.lastSeen = time.Now()
 		brl.userMu.Unlock()
 
@@ -201,6 +214,7 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 			errResp(w, http.StatusTooManyRequests, "您的账户请求过于频繁，请稍后再试 (per-user limit)")
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -291,17 +305,6 @@ type IPRateLimiter struct {
 	burst    int
 }
 
-// NewIPRateLimiter 创建一个新的IP速率限制器
-func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
-	limiter := &IPRateLimiter{
-		limiters: make(map[string]*limiterEntry),
-		rate:     r,
-		burst:    b,
-	}
-	go limiter.cleanupDaemon()
-	return limiter
-}
-
 // getClientIP 从请求中获取客户端IP地址，考虑代理情况
 func getClientIP(r *http.Request) string {
 	ip := r.Header.Get("X-Forwarded-For")
@@ -367,15 +370,6 @@ type LoginFailureLock struct {
 	failureCache    *cache.Cache
 	maxFailures     int
 	lockoutDuration time.Duration
-}
-
-// NewLoginFailureLock 创建一个新的登录失败锁定器
-func NewLoginFailureLock(maxFailures int, lockoutDuration time.Duration) *LoginFailureLock {
-	return &LoginFailureLock{
-		failureCache:    cache.New(5*time.Minute, 10*time.Minute),
-		maxFailures:     maxFailures,
-		lockoutDuration: lockoutDuration,
-	}
 }
 
 // statusRecorder 是一个健壮的 http.ResponseWriter 包装器
@@ -461,4 +455,13 @@ func errResp(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// SetIPDefaultRateForTest 是一个仅用于测试的辅助函数，用于动态修改IP限制器的默认速率和峰值。
+// 注意：这个方法不应该在生产代码中被调用。
+func (brl *BusinessRateLimiter) SetIPDefaultRateForTest(newRate float64, burst int) {
+	brl.ipMu.Lock()
+	defer brl.ipMu.Unlock()
+	brl.ipDefaultRate = rate.Limit(newRate)
+	brl.ipDefaultBurst = burst
 }

@@ -4,7 +4,7 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v6.31.1
-// source: proto/datasource/v1/datasource.proto
+// source: datasource/v1/datasource.proto
 
 package datasourcev1
 
@@ -57,11 +57,11 @@ func (x HealthCheckResponse_ServingStatus) String() string {
 }
 
 func (HealthCheckResponse_ServingStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_datasource_v1_datasource_proto_enumTypes[0].Descriptor()
+	return file_datasource_v1_datasource_proto_enumTypes[0].Descriptor()
 }
 
 func (HealthCheckResponse_ServingStatus) Type() protoreflect.EnumType {
-	return &file_proto_datasource_v1_datasource_proto_enumTypes[0]
+	return &file_datasource_v1_datasource_proto_enumTypes[0]
 }
 
 func (x HealthCheckResponse_ServingStatus) Number() protoreflect.EnumNumber {
@@ -70,10 +70,290 @@ func (x HealthCheckResponse_ServingStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HealthCheckResponse_ServingStatus.Descriptor instead.
 func (HealthCheckResponse_ServingStatus) EnumDescriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{15, 0}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{11, 0}
 }
 
-// GetPluginInfo 定义请求和响应体
+// QueryRequest 代表一次查询请求。
+type QueryRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// biz_name 是网关用于路由的业务组标识。
+	BizName string `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
+	// query 是一个通用的、结构化的查询对象。
+	// 它的具体结构由插件自行定义和解释。网关内核完全不关心其内容。
+	//
+	// 示例 (对于一个SQL插件):
+	//
+	//	{
+	//	  "table": "users",
+	//	  "filters": [{"field": "age", "op": ">", "value": 30}],
+	//	  "page": 1,
+	//	  "size": 10
+	//	}
+	//
+	// 示例 (对于一个Elasticsearch插件):
+	//
+	//	{
+	//	  "index": "products",
+	//	  "query": { "match": { "description": "durable laptop" } }
+	//	}
+	Query         *structpb.Struct `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryRequest) Reset() {
+	*x = QueryRequest{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryRequest) ProtoMessage() {}
+
+func (x *QueryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
+func (*QueryRequest) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *QueryRequest) GetBizName() string {
+	if x != nil {
+		return x.BizName
+	}
+	return ""
+}
+
+func (x *QueryRequest) GetQuery() *structpb.Struct {
+	if x != nil {
+		return x.Query
+	}
+	return nil
+}
+
+// QueryResult 代表一次查询的结果。
+type QueryResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// data 是一个通用的、结构化的结果对象。
+	// 这允许插件返回任何形式的数据，例如包含分页、聚合、高亮等信息的复杂结构。
+	//
+	// 示例 (对于一个SQL插件):
+	//
+	//	{
+	//	  "items": [ {"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"} ],
+	//	  "total": 100
+	//	}
+	//
+	// 示例 (对于一个Elasticsearch插件):
+	//
+	//	{
+	//	  "hits": [ {"_id": "a", "_source": {...}, "highlight": {...}} ],
+	//	  "total": { "value": 1, "relation": "eq" },
+	//	  "aggregations": { ... }
+	//	}
+	Data *structpb.Struct `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// source 字段用于标识处理此请求的插件类型。
+	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryResult) Reset() {
+	*x = QueryResult{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryResult) ProtoMessage() {}
+
+func (x *QueryResult) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryResult.ProtoReflect.Descriptor instead.
+func (*QueryResult) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *QueryResult) GetData() *structpb.Struct {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *QueryResult) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// MutateRequest 代表一次写操作请求，同样变得通用。
+type MutateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// biz_name 是网关用于路由的业务组标识。
+	BizName string `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
+	// operation 是一个字符串，用于告诉插件执行何种类型的写操作。
+	// 常见的操作有 "create", "update", "delete", "bulk", "upsert" 等。
+	// 具体支持哪些操作由插件自行定义。
+	Operation string `protobuf:"bytes,2,opt,name=operation,proto3" json:"operation,omitempty"`
+	// payload 是本次写操作的载荷，一个通用的结构化对象。
+	//
+	// 示例 (对于 "create" 操作):
+	//
+	//	{
+	//	  "table": "posts",
+	//	  "data": { "title": "New Post", "content": "..." }
+	//	}
+	Payload       *structpb.Struct `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MutateRequest) Reset() {
+	*x = MutateRequest{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MutateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MutateRequest) ProtoMessage() {}
+
+func (x *MutateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MutateRequest.ProtoReflect.Descriptor instead.
+func (*MutateRequest) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *MutateRequest) GetBizName() string {
+	if x != nil {
+		return x.BizName
+	}
+	return ""
+}
+
+func (x *MutateRequest) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *MutateRequest) GetPayload() *structpb.Struct {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+// MutateResult 代表一次写操作的结果。
+type MutateResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// data 是一个通用的结果对象，可以包含比简单布尔值更丰富的信息。
+	//
+	// 示例:
+	//
+	//	{
+	//	  "success": true,
+	//	  "id": "post-123",
+	//	  "affected_rows": 1,
+	//	  "message": "操作成功"
+	//	}
+	Data *structpb.Struct `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// source 字段用于标识处理此请求的插件类型。
+	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MutateResult) Reset() {
+	*x = MutateResult{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MutateResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MutateResult) ProtoMessage() {}
+
+func (x *MutateResult) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MutateResult.ProtoReflect.Descriptor instead.
+func (*MutateResult) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *MutateResult) GetData() *structpb.Struct {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *MutateResult) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// GetPluginInfo 请求体为空。
 type GetPluginInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -82,7 +362,7 @@ type GetPluginInfoRequest struct {
 
 func (x *GetPluginInfoRequest) Reset() {
 	*x = GetPluginInfoRequest{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[0]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -94,7 +374,7 @@ func (x *GetPluginInfoRequest) String() string {
 func (*GetPluginInfoRequest) ProtoMessage() {}
 
 func (x *GetPluginInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[0]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -107,21 +387,22 @@ func (x *GetPluginInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetPluginInfoRequest) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{0}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{4}
 }
 
+// GetPluginInfoResponse 返回插件的元数据。
 type GetPluginInfoResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 插件的唯一名称, e.g., "sqlite-sales-plugin-v1"
+	// 插件的唯一名称, e.g., "official-sqlite-plugin"
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// 插件的版本号, e.g., "1.0.2"
 	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	// 插件处理的数据源类型, e.g., "sqlite", "mysql"
+	// 插件处理的数据源类型, e.g., "SQL", "Search", "Graph", "TimeSeries"
 	Type string `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
 	// 这个插件实例负责处理的所有业务组 (biz_name) 列表
-	// 这是动态注册的关键！
+	// 这是网关注册和路由的关键！
 	SupportedBizNames []string `protobuf:"bytes,4,rep,name=supported_biz_names,json=supportedBizNames,proto3" json:"supported_biz_names,omitempty"`
-	// 插件的详细描述，可以是 Markdown 格式
+	// 插件的详细描述，可以是 Markdown 格式，用于在UI中展示。
 	DescriptionMarkdown string `protobuf:"bytes,5,opt,name=description_markdown,json=descriptionMarkdown,proto3" json:"description_markdown,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
@@ -129,7 +410,7 @@ type GetPluginInfoResponse struct {
 
 func (x *GetPluginInfoResponse) Reset() {
 	*x = GetPluginInfoResponse{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[1]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -141,7 +422,7 @@ func (x *GetPluginInfoResponse) String() string {
 func (*GetPluginInfoResponse) ProtoMessage() {}
 
 func (x *GetPluginInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[1]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -154,7 +435,7 @@ func (x *GetPluginInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetPluginInfoResponse) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{1}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetPluginInfoResponse) GetName() string {
@@ -192,565 +473,19 @@ func (x *GetPluginInfoResponse) GetDescriptionMarkdown() string {
 	return ""
 }
 
-// 查询参数
-type QueryParam struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Field         string                 `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	Logic         string                 `protobuf:"bytes,3,opt,name=logic,proto3" json:"logic,omitempty"`
-	Fuzzy         bool                   `protobuf:"varint,4,opt,name=fuzzy,proto3" json:"fuzzy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *QueryParam) Reset() {
-	*x = QueryParam{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QueryParam) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QueryParam) ProtoMessage() {}
-
-func (x *QueryParam) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QueryParam.ProtoReflect.Descriptor instead.
-func (*QueryParam) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *QueryParam) GetField() string {
-	if x != nil {
-		return x.Field
-	}
-	return ""
-}
-
-func (x *QueryParam) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-func (x *QueryParam) GetLogic() string {
-	if x != nil {
-		return x.Logic
-	}
-	return ""
-}
-
-func (x *QueryParam) GetFuzzy() bool {
-	if x != nil {
-		return x.Fuzzy
-	}
-	return false
-}
-
-// 查询请求
-type QueryRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	BizName        string                 `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
-	TableName      string                 `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	QueryParams    []*QueryParam          `protobuf:"bytes,3,rep,name=query_params,json=queryParams,proto3" json:"query_params,omitempty"`
-	Page           int32                  `protobuf:"varint,4,opt,name=page,proto3" json:"page,omitempty"`
-	Size           int32                  `protobuf:"varint,5,opt,name=size,proto3" json:"size,omitempty"`
-	FieldsToReturn []string               `protobuf:"bytes,6,rep,name=fields_to_return,json=fieldsToReturn,proto3" json:"fields_to_return,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *QueryRequest) Reset() {
-	*x = QueryRequest{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QueryRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QueryRequest) ProtoMessage() {}
-
-func (x *QueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
-func (*QueryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *QueryRequest) GetBizName() string {
-	if x != nil {
-		return x.BizName
-	}
-	return ""
-}
-
-func (x *QueryRequest) GetTableName() string {
-	if x != nil {
-		return x.TableName
-	}
-	return ""
-}
-
-func (x *QueryRequest) GetQueryParams() []*QueryParam {
-	if x != nil {
-		return x.QueryParams
-	}
-	return nil
-}
-
-func (x *QueryRequest) GetPage() int32 {
-	if x != nil {
-		return x.Page
-	}
-	return 0
-}
-
-func (x *QueryRequest) GetSize() int32 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-func (x *QueryRequest) GetFieldsToReturn() []string {
-	if x != nil {
-		return x.FieldsToReturn
-	}
-	return nil
-}
-
-// 查询结果
-type QueryResult struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 使用 google.protobuf.ListValue 来表示 []map[string]any
-	Data          *structpb.ListValue `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	Total         int64               `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	Source        string              `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *QueryResult) Reset() {
-	*x = QueryResult{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QueryResult) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QueryResult) ProtoMessage() {}
-
-func (x *QueryResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QueryResult.ProtoReflect.Descriptor instead.
-func (*QueryResult) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *QueryResult) GetData() *structpb.ListValue {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *QueryResult) GetTotal() int64 {
-	if x != nil {
-		return x.Total
-	}
-	return 0
-}
-
-func (x *QueryResult) GetSource() string {
-	if x != nil {
-		return x.Source
-	}
-	return ""
-}
-
-// --- Mutate 相关 ---
-type MutateRequest struct {
+// --- Schema 相关 (结构相对固定，保持不变) ---
+type SchemaRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	BizName string                 `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
-	// Types that are valid to be assigned to Operation:
-	//
-	//	*MutateRequest_CreateOp
-	//	*MutateRequest_UpdateOp
-	//	*MutateRequest_DeleteOp
-	Operation     isMutateRequest_Operation `protobuf_oneof:"operation"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MutateRequest) Reset() {
-	*x = MutateRequest{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MutateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MutateRequest) ProtoMessage() {}
-
-func (x *MutateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MutateRequest.ProtoReflect.Descriptor instead.
-func (*MutateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *MutateRequest) GetBizName() string {
-	if x != nil {
-		return x.BizName
-	}
-	return ""
-}
-
-func (x *MutateRequest) GetOperation() isMutateRequest_Operation {
-	if x != nil {
-		return x.Operation
-	}
-	return nil
-}
-
-func (x *MutateRequest) GetCreateOp() *CreateOperation {
-	if x != nil {
-		if x, ok := x.Operation.(*MutateRequest_CreateOp); ok {
-			return x.CreateOp
-		}
-	}
-	return nil
-}
-
-func (x *MutateRequest) GetUpdateOp() *UpdateOperation {
-	if x != nil {
-		if x, ok := x.Operation.(*MutateRequest_UpdateOp); ok {
-			return x.UpdateOp
-		}
-	}
-	return nil
-}
-
-func (x *MutateRequest) GetDeleteOp() *DeleteOperation {
-	if x != nil {
-		if x, ok := x.Operation.(*MutateRequest_DeleteOp); ok {
-			return x.DeleteOp
-		}
-	}
-	return nil
-}
-
-type isMutateRequest_Operation interface {
-	isMutateRequest_Operation()
-}
-
-type MutateRequest_CreateOp struct {
-	CreateOp *CreateOperation `protobuf:"bytes,2,opt,name=create_op,json=createOp,proto3,oneof"`
-}
-
-type MutateRequest_UpdateOp struct {
-	UpdateOp *UpdateOperation `protobuf:"bytes,3,opt,name=update_op,json=updateOp,proto3,oneof"`
-}
-
-type MutateRequest_DeleteOp struct {
-	DeleteOp *DeleteOperation `protobuf:"bytes,4,opt,name=delete_op,json=deleteOp,proto3,oneof"`
-}
-
-func (*MutateRequest_CreateOp) isMutateRequest_Operation() {}
-
-func (*MutateRequest_UpdateOp) isMutateRequest_Operation() {}
-
-func (*MutateRequest_DeleteOp) isMutateRequest_Operation() {}
-
-type CreateOperation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	Data          *structpb.Struct       `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateOperation) Reset() {
-	*x = CreateOperation{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateOperation) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateOperation) ProtoMessage() {}
-
-func (x *CreateOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateOperation.ProtoReflect.Descriptor instead.
-func (*CreateOperation) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *CreateOperation) GetTableName() string {
-	if x != nil {
-		return x.TableName
-	}
-	return ""
-}
-
-func (x *CreateOperation) GetData() *structpb.Struct {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-type UpdateOperation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	Data          *structpb.Struct       `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
-	Filters       []*QueryParam          `protobuf:"bytes,3,rep,name=filters,proto3" json:"filters,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateOperation) Reset() {
-	*x = UpdateOperation{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateOperation) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateOperation) ProtoMessage() {}
-
-func (x *UpdateOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateOperation.ProtoReflect.Descriptor instead.
-func (*UpdateOperation) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *UpdateOperation) GetTableName() string {
-	if x != nil {
-		return x.TableName
-	}
-	return ""
-}
-
-func (x *UpdateOperation) GetData() *structpb.Struct {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *UpdateOperation) GetFilters() []*QueryParam {
-	if x != nil {
-		return x.Filters
-	}
-	return nil
-}
-
-type DeleteOperation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TableName     string                 `protobuf:"bytes,1,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
-	Filters       []*QueryParam          `protobuf:"bytes,2,rep,name=filters,proto3" json:"filters,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteOperation) Reset() {
-	*x = DeleteOperation{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteOperation) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteOperation) ProtoMessage() {}
-
-func (x *DeleteOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteOperation.ProtoReflect.Descriptor instead.
-func (*DeleteOperation) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *DeleteOperation) GetTableName() string {
-	if x != nil {
-		return x.TableName
-	}
-	return ""
-}
-
-func (x *DeleteOperation) GetFilters() []*QueryParam {
-	if x != nil {
-		return x.Filters
-	}
-	return nil
-}
-
-type MutateResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	RowsAffected  int64                  `protobuf:"varint,2,opt,name=rows_affected,json=rowsAffected,proto3" json:"rows_affected,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MutateResult) Reset() {
-	*x = MutateResult{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MutateResult) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MutateResult) ProtoMessage() {}
-
-func (x *MutateResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MutateResult.ProtoReflect.Descriptor instead.
-func (*MutateResult) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *MutateResult) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *MutateResult) GetRowsAffected() int64 {
-	if x != nil {
-		return x.RowsAffected
-	}
-	return 0
-}
-
-func (x *MutateResult) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
-// --- Schema 相关 ---
-type SchemaRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BizName       string                 `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
-	TableName     string                 `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
+	// table_name 是可选的，如果为空，插件应返回所有可访问表的 schema。
+	TableName     string `protobuf:"bytes,2,opt,name=table_name,json=tableName,proto3" json:"table_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SchemaRequest) Reset() {
 	*x = SchemaRequest{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[10]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -762,7 +497,7 @@ func (x *SchemaRequest) String() string {
 func (*SchemaRequest) ProtoMessage() {}
 
 func (x *SchemaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[10]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -775,7 +510,7 @@ func (x *SchemaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchemaRequest.ProtoReflect.Descriptor instead.
 func (*SchemaRequest) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{10}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SchemaRequest) GetBizName() string {
@@ -795,18 +530,18 @@ func (x *SchemaRequest) GetTableName() string {
 type FieldDescription struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DataType      string                 `protobuf:"bytes,2,opt,name=data_type,json=dataType,proto3" json:"data_type,omitempty"`
-	IsSearchable  bool                   `protobuf:"varint,3,opt,name=is_searchable,json=isSearchable,proto3" json:"is_searchable,omitempty"`
-	IsReturnable  bool                   `protobuf:"varint,4,opt,name=is_returnable,json=isReturnable,proto3" json:"is_returnable,omitempty"`
-	IsPrimary     bool                   `protobuf:"varint,5,opt,name=is_primary,json=isPrimary,proto3" json:"is_primary,omitempty"`
-	Description   string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
+	DataType      string                 `protobuf:"bytes,2,opt,name=data_type,json=dataType,proto3" json:"data_type,omitempty"`              // 例如: "TEXT", "INTEGER", "TIMESTAMP", "NESTED"
+	IsSearchable  bool                   `protobuf:"varint,3,opt,name=is_searchable,json=isSearchable,proto3" json:"is_searchable,omitempty"` // 该字段是否可以作为查询条件
+	IsReturnable  bool                   `protobuf:"varint,4,opt,name=is_returnable,json=isReturnable,proto3" json:"is_returnable,omitempty"` // 该字段是否可以在结果中返回
+	IsPrimary     bool                   `protobuf:"varint,5,opt,name=is_primary,json=isPrimary,proto3" json:"is_primary,omitempty"`          // 是否是主键或唯一标识符
+	Description   string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                        // 字段的描述信息
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FieldDescription) Reset() {
 	*x = FieldDescription{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[11]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -818,7 +553,7 @@ func (x *FieldDescription) String() string {
 func (*FieldDescription) ProtoMessage() {}
 
 func (x *FieldDescription) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[11]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -831,7 +566,7 @@ func (x *FieldDescription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldDescription.ProtoReflect.Descriptor instead.
 func (*FieldDescription) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{11}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FieldDescription) GetName() string {
@@ -885,7 +620,7 @@ type SchemaResult struct {
 
 func (x *SchemaResult) Reset() {
 	*x = SchemaResult{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[12]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -897,7 +632,7 @@ func (x *SchemaResult) String() string {
 func (*SchemaResult) ProtoMessage() {}
 
 func (x *SchemaResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[12]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -910,7 +645,7 @@ func (x *SchemaResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchemaResult.ProtoReflect.Descriptor instead.
 func (*SchemaResult) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{12}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SchemaResult) GetTables() map[string]*TableSchema {
@@ -929,7 +664,7 @@ type TableSchema struct {
 
 func (x *TableSchema) Reset() {
 	*x = TableSchema{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[13]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -941,7 +676,7 @@ func (x *TableSchema) String() string {
 func (*TableSchema) ProtoMessage() {}
 
 func (x *TableSchema) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[13]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -954,7 +689,7 @@ func (x *TableSchema) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TableSchema.ProtoReflect.Descriptor instead.
 func (*TableSchema) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{13}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TableSchema) GetFields() []*FieldDescription {
@@ -964,7 +699,7 @@ func (x *TableSchema) GetFields() []*FieldDescription {
 	return nil
 }
 
-// --- HealthCheck 相关 ---
+// --- HealthCheck 相关 (保持不变) ---
 type HealthCheckRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -973,7 +708,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[14]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -985,7 +720,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[14]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -998,7 +733,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{14}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{10}
 }
 
 type HealthCheckResponse struct {
@@ -1010,7 +745,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[15]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1022,7 +757,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_datasource_v1_datasource_proto_msgTypes[15]
+	mi := &file_datasource_v1_datasource_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1035,7 +770,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_proto_datasource_v1_datasource_proto_rawDescGZIP(), []int{15}
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
@@ -1045,59 +780,31 @@ func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
 	return HealthCheckResponse_UNKNOWN
 }
 
-var File_proto_datasource_v1_datasource_proto protoreflect.FileDescriptor
+var File_datasource_v1_datasource_proto protoreflect.FileDescriptor
 
-const file_proto_datasource_v1_datasource_proto_rawDesc = "" +
+const file_datasource_v1_datasource_proto_rawDesc = "" +
 	"\n" +
-	"$proto/datasource/v1/datasource.proto\x12\rdatasource.v1\x1a\x1cgoogle/protobuf/struct.proto\"\x16\n" +
+	"\x1edatasource/v1/datasource.proto\x12\rdatasource.v1\x1a\x1cgoogle/protobuf/struct.proto\"X\n" +
+	"\fQueryRequest\x12\x19\n" +
+	"\bbiz_name\x18\x01 \x01(\tR\abizName\x12-\n" +
+	"\x05query\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x05query\"R\n" +
+	"\vQueryResult\x12+\n" +
+	"\x04data\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x04data\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\"{\n" +
+	"\rMutateRequest\x12\x19\n" +
+	"\bbiz_name\x18\x01 \x01(\tR\abizName\x12\x1c\n" +
+	"\toperation\x18\x02 \x01(\tR\toperation\x121\n" +
+	"\apayload\x18\x03 \x01(\v2\x17.google.protobuf.StructR\apayload\"S\n" +
+	"\fMutateResult\x12+\n" +
+	"\x04data\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x04data\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\"\x16\n" +
 	"\x14GetPluginInfoRequest\"\xbc\x01\n" +
 	"\x15GetPluginInfoResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12.\n" +
 	"\x13supported_biz_names\x18\x04 \x03(\tR\x11supportedBizNames\x121\n" +
-	"\x14description_markdown\x18\x05 \x01(\tR\x13descriptionMarkdown\"d\n" +
-	"\n" +
-	"QueryParam\x12\x14\n" +
-	"\x05field\x18\x01 \x01(\tR\x05field\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\x12\x14\n" +
-	"\x05logic\x18\x03 \x01(\tR\x05logic\x12\x14\n" +
-	"\x05fuzzy\x18\x04 \x01(\bR\x05fuzzy\"\xd8\x01\n" +
-	"\fQueryRequest\x12\x19\n" +
-	"\bbiz_name\x18\x01 \x01(\tR\abizName\x12\x1d\n" +
-	"\n" +
-	"table_name\x18\x02 \x01(\tR\ttableName\x12<\n" +
-	"\fquery_params\x18\x03 \x03(\v2\x19.datasource.v1.QueryParamR\vqueryParams\x12\x12\n" +
-	"\x04page\x18\x04 \x01(\x05R\x04page\x12\x12\n" +
-	"\x04size\x18\x05 \x01(\x05R\x04size\x12(\n" +
-	"\x10fields_to_return\x18\x06 \x03(\tR\x0efieldsToReturn\"k\n" +
-	"\vQueryResult\x12.\n" +
-	"\x04data\x18\x01 \x01(\v2\x1a.google.protobuf.ListValueR\x04data\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\x12\x16\n" +
-	"\x06source\x18\x03 \x01(\tR\x06source\"\xf4\x01\n" +
-	"\rMutateRequest\x12\x19\n" +
-	"\bbiz_name\x18\x01 \x01(\tR\abizName\x12=\n" +
-	"\tcreate_op\x18\x02 \x01(\v2\x1e.datasource.v1.CreateOperationH\x00R\bcreateOp\x12=\n" +
-	"\tupdate_op\x18\x03 \x01(\v2\x1e.datasource.v1.UpdateOperationH\x00R\bupdateOp\x12=\n" +
-	"\tdelete_op\x18\x04 \x01(\v2\x1e.datasource.v1.DeleteOperationH\x00R\bdeleteOpB\v\n" +
-	"\toperation\"]\n" +
-	"\x0fCreateOperation\x12\x1d\n" +
-	"\n" +
-	"table_name\x18\x01 \x01(\tR\ttableName\x12+\n" +
-	"\x04data\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x04data\"\x92\x01\n" +
-	"\x0fUpdateOperation\x12\x1d\n" +
-	"\n" +
-	"table_name\x18\x01 \x01(\tR\ttableName\x12+\n" +
-	"\x04data\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x04data\x123\n" +
-	"\afilters\x18\x03 \x03(\v2\x19.datasource.v1.QueryParamR\afilters\"e\n" +
-	"\x0fDeleteOperation\x12\x1d\n" +
-	"\n" +
-	"table_name\x18\x01 \x01(\tR\ttableName\x123\n" +
-	"\afilters\x18\x02 \x03(\v2\x19.datasource.v1.QueryParamR\afilters\"g\n" +
-	"\fMutateResult\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rrows_affected\x18\x02 \x01(\x03R\frowsAffected\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"I\n" +
+	"\x14description_markdown\x18\x05 \x01(\tR\x13descriptionMarkdown\"I\n" +
 	"\rSchemaRequest\x12\x19\n" +
 	"\bbiz_name\x18\x01 \x01(\tR\abizName\x12\x1d\n" +
 	"\n" +
@@ -1133,98 +840,83 @@ const file_proto_datasource_v1_datasource_proto_rawDesc = "" +
 	"\vHealthCheck\x12!.datasource.v1.HealthCheckRequest\x1a\".datasource.v1.HealthCheckResponseB#Z!gen/go/datasource/v1;datasourcev1b\x06proto3"
 
 var (
-	file_proto_datasource_v1_datasource_proto_rawDescOnce sync.Once
-	file_proto_datasource_v1_datasource_proto_rawDescData []byte
+	file_datasource_v1_datasource_proto_rawDescOnce sync.Once
+	file_datasource_v1_datasource_proto_rawDescData []byte
 )
 
-func file_proto_datasource_v1_datasource_proto_rawDescGZIP() []byte {
-	file_proto_datasource_v1_datasource_proto_rawDescOnce.Do(func() {
-		file_proto_datasource_v1_datasource_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_datasource_v1_datasource_proto_rawDesc), len(file_proto_datasource_v1_datasource_proto_rawDesc)))
+func file_datasource_v1_datasource_proto_rawDescGZIP() []byte {
+	file_datasource_v1_datasource_proto_rawDescOnce.Do(func() {
+		file_datasource_v1_datasource_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_datasource_v1_datasource_proto_rawDesc), len(file_datasource_v1_datasource_proto_rawDesc)))
 	})
-	return file_proto_datasource_v1_datasource_proto_rawDescData
+	return file_datasource_v1_datasource_proto_rawDescData
 }
 
-var file_proto_datasource_v1_datasource_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
-var file_proto_datasource_v1_datasource_proto_goTypes = []any{
+var file_datasource_v1_datasource_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_datasource_v1_datasource_proto_goTypes = []any{
 	(HealthCheckResponse_ServingStatus)(0), // 0: datasource.v1.HealthCheckResponse.ServingStatus
-	(*GetPluginInfoRequest)(nil),           // 1: datasource.v1.GetPluginInfoRequest
-	(*GetPluginInfoResponse)(nil),          // 2: datasource.v1.GetPluginInfoResponse
-	(*QueryParam)(nil),                     // 3: datasource.v1.QueryParam
-	(*QueryRequest)(nil),                   // 4: datasource.v1.QueryRequest
-	(*QueryResult)(nil),                    // 5: datasource.v1.QueryResult
-	(*MutateRequest)(nil),                  // 6: datasource.v1.MutateRequest
-	(*CreateOperation)(nil),                // 7: datasource.v1.CreateOperation
-	(*UpdateOperation)(nil),                // 8: datasource.v1.UpdateOperation
-	(*DeleteOperation)(nil),                // 9: datasource.v1.DeleteOperation
-	(*MutateResult)(nil),                   // 10: datasource.v1.MutateResult
-	(*SchemaRequest)(nil),                  // 11: datasource.v1.SchemaRequest
-	(*FieldDescription)(nil),               // 12: datasource.v1.FieldDescription
-	(*SchemaResult)(nil),                   // 13: datasource.v1.SchemaResult
-	(*TableSchema)(nil),                    // 14: datasource.v1.TableSchema
-	(*HealthCheckRequest)(nil),             // 15: datasource.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),            // 16: datasource.v1.HealthCheckResponse
-	nil,                                    // 17: datasource.v1.SchemaResult.TablesEntry
-	(*structpb.ListValue)(nil),             // 18: google.protobuf.ListValue
-	(*structpb.Struct)(nil),                // 19: google.protobuf.Struct
+	(*QueryRequest)(nil),                   // 1: datasource.v1.QueryRequest
+	(*QueryResult)(nil),                    // 2: datasource.v1.QueryResult
+	(*MutateRequest)(nil),                  // 3: datasource.v1.MutateRequest
+	(*MutateResult)(nil),                   // 4: datasource.v1.MutateResult
+	(*GetPluginInfoRequest)(nil),           // 5: datasource.v1.GetPluginInfoRequest
+	(*GetPluginInfoResponse)(nil),          // 6: datasource.v1.GetPluginInfoResponse
+	(*SchemaRequest)(nil),                  // 7: datasource.v1.SchemaRequest
+	(*FieldDescription)(nil),               // 8: datasource.v1.FieldDescription
+	(*SchemaResult)(nil),                   // 9: datasource.v1.SchemaResult
+	(*TableSchema)(nil),                    // 10: datasource.v1.TableSchema
+	(*HealthCheckRequest)(nil),             // 11: datasource.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),            // 12: datasource.v1.HealthCheckResponse
+	nil,                                    // 13: datasource.v1.SchemaResult.TablesEntry
+	(*structpb.Struct)(nil),                // 14: google.protobuf.Struct
 }
-var file_proto_datasource_v1_datasource_proto_depIdxs = []int32{
-	3,  // 0: datasource.v1.QueryRequest.query_params:type_name -> datasource.v1.QueryParam
-	18, // 1: datasource.v1.QueryResult.data:type_name -> google.protobuf.ListValue
-	7,  // 2: datasource.v1.MutateRequest.create_op:type_name -> datasource.v1.CreateOperation
-	8,  // 3: datasource.v1.MutateRequest.update_op:type_name -> datasource.v1.UpdateOperation
-	9,  // 4: datasource.v1.MutateRequest.delete_op:type_name -> datasource.v1.DeleteOperation
-	19, // 5: datasource.v1.CreateOperation.data:type_name -> google.protobuf.Struct
-	19, // 6: datasource.v1.UpdateOperation.data:type_name -> google.protobuf.Struct
-	3,  // 7: datasource.v1.UpdateOperation.filters:type_name -> datasource.v1.QueryParam
-	3,  // 8: datasource.v1.DeleteOperation.filters:type_name -> datasource.v1.QueryParam
-	17, // 9: datasource.v1.SchemaResult.tables:type_name -> datasource.v1.SchemaResult.TablesEntry
-	12, // 10: datasource.v1.TableSchema.fields:type_name -> datasource.v1.FieldDescription
-	0,  // 11: datasource.v1.HealthCheckResponse.status:type_name -> datasource.v1.HealthCheckResponse.ServingStatus
-	14, // 12: datasource.v1.SchemaResult.TablesEntry.value:type_name -> datasource.v1.TableSchema
-	1,  // 13: datasource.v1.DataSource.GetPluginInfo:input_type -> datasource.v1.GetPluginInfoRequest
-	4,  // 14: datasource.v1.DataSource.Query:input_type -> datasource.v1.QueryRequest
-	6,  // 15: datasource.v1.DataSource.Mutate:input_type -> datasource.v1.MutateRequest
-	11, // 16: datasource.v1.DataSource.GetSchema:input_type -> datasource.v1.SchemaRequest
-	15, // 17: datasource.v1.DataSource.HealthCheck:input_type -> datasource.v1.HealthCheckRequest
-	2,  // 18: datasource.v1.DataSource.GetPluginInfo:output_type -> datasource.v1.GetPluginInfoResponse
-	5,  // 19: datasource.v1.DataSource.Query:output_type -> datasource.v1.QueryResult
-	10, // 20: datasource.v1.DataSource.Mutate:output_type -> datasource.v1.MutateResult
-	13, // 21: datasource.v1.DataSource.GetSchema:output_type -> datasource.v1.SchemaResult
-	16, // 22: datasource.v1.DataSource.HealthCheck:output_type -> datasource.v1.HealthCheckResponse
-	18, // [18:23] is the sub-list for method output_type
-	13, // [13:18] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+var file_datasource_v1_datasource_proto_depIdxs = []int32{
+	14, // 0: datasource.v1.QueryRequest.query:type_name -> google.protobuf.Struct
+	14, // 1: datasource.v1.QueryResult.data:type_name -> google.protobuf.Struct
+	14, // 2: datasource.v1.MutateRequest.payload:type_name -> google.protobuf.Struct
+	14, // 3: datasource.v1.MutateResult.data:type_name -> google.protobuf.Struct
+	13, // 4: datasource.v1.SchemaResult.tables:type_name -> datasource.v1.SchemaResult.TablesEntry
+	8,  // 5: datasource.v1.TableSchema.fields:type_name -> datasource.v1.FieldDescription
+	0,  // 6: datasource.v1.HealthCheckResponse.status:type_name -> datasource.v1.HealthCheckResponse.ServingStatus
+	10, // 7: datasource.v1.SchemaResult.TablesEntry.value:type_name -> datasource.v1.TableSchema
+	5,  // 8: datasource.v1.DataSource.GetPluginInfo:input_type -> datasource.v1.GetPluginInfoRequest
+	1,  // 9: datasource.v1.DataSource.Query:input_type -> datasource.v1.QueryRequest
+	3,  // 10: datasource.v1.DataSource.Mutate:input_type -> datasource.v1.MutateRequest
+	7,  // 11: datasource.v1.DataSource.GetSchema:input_type -> datasource.v1.SchemaRequest
+	11, // 12: datasource.v1.DataSource.HealthCheck:input_type -> datasource.v1.HealthCheckRequest
+	6,  // 13: datasource.v1.DataSource.GetPluginInfo:output_type -> datasource.v1.GetPluginInfoResponse
+	2,  // 14: datasource.v1.DataSource.Query:output_type -> datasource.v1.QueryResult
+	4,  // 15: datasource.v1.DataSource.Mutate:output_type -> datasource.v1.MutateResult
+	9,  // 16: datasource.v1.DataSource.GetSchema:output_type -> datasource.v1.SchemaResult
+	12, // 17: datasource.v1.DataSource.HealthCheck:output_type -> datasource.v1.HealthCheckResponse
+	13, // [13:18] is the sub-list for method output_type
+	8,  // [8:13] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
-func init() { file_proto_datasource_v1_datasource_proto_init() }
-func file_proto_datasource_v1_datasource_proto_init() {
-	if File_proto_datasource_v1_datasource_proto != nil {
+func init() { file_datasource_v1_datasource_proto_init() }
+func file_datasource_v1_datasource_proto_init() {
+	if File_datasource_v1_datasource_proto != nil {
 		return
-	}
-	file_proto_datasource_v1_datasource_proto_msgTypes[5].OneofWrappers = []any{
-		(*MutateRequest_CreateOp)(nil),
-		(*MutateRequest_UpdateOp)(nil),
-		(*MutateRequest_DeleteOp)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_datasource_v1_datasource_proto_rawDesc), len(file_proto_datasource_v1_datasource_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_datasource_v1_datasource_proto_rawDesc), len(file_datasource_v1_datasource_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   17,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_datasource_v1_datasource_proto_goTypes,
-		DependencyIndexes: file_proto_datasource_v1_datasource_proto_depIdxs,
-		EnumInfos:         file_proto_datasource_v1_datasource_proto_enumTypes,
-		MessageInfos:      file_proto_datasource_v1_datasource_proto_msgTypes,
+		GoTypes:           file_datasource_v1_datasource_proto_goTypes,
+		DependencyIndexes: file_datasource_v1_datasource_proto_depIdxs,
+		EnumInfos:         file_datasource_v1_datasource_proto_enumTypes,
+		MessageInfos:      file_datasource_v1_datasource_proto_msgTypes,
 	}.Build()
-	File_proto_datasource_v1_datasource_proto = out.File
-	file_proto_datasource_v1_datasource_proto_goTypes = nil
-	file_proto_datasource_v1_datasource_proto_depIdxs = nil
+	File_datasource_v1_datasource_proto = out.File
+	file_datasource_v1_datasource_proto_goTypes = nil
+	file_datasource_v1_datasource_proto_depIdxs = nil
 }

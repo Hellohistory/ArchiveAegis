@@ -4,7 +4,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v6.31.1
-// source: proto/datasource/v1/datasource.proto
+// source: datasource/v1/datasource.proto
 
 package datasourcev1
 
@@ -32,17 +32,19 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// --- 服务定义 ---
+// DataSource v1 (Revised for Long-Term Support)
+// 这是数据源插件必须实现的 gRPC 服务接口。
+// 它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
 type DataSourceClient interface {
-	// 用于获取插件自身的信息
+	// GetPluginInfo 用于网关发现和识别插件的基本信息。
 	GetPluginInfo(ctx context.Context, in *GetPluginInfoRequest, opts ...grpc.CallOption) (*GetPluginInfoResponse, error)
-	// Query 对应 "R" (Read)
+	// Query 是一个通用的只读操作接口。
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResult, error)
-	// Mutate 对应 "C, U, D" (Create, Update, Delete)
+	// Mutate 是一个通用的写操作接口 (Create, Update, Delete)。
 	Mutate(ctx context.Context, in *MutateRequest, opts ...grpc.CallOption) (*MutateResult, error)
-	// GetSchema 获取元数据
+	// GetSchema 用于获取数据源的结构信息，对于前端UI构建和API探索很有用。
 	GetSchema(ctx context.Context, in *SchemaRequest, opts ...grpc.CallOption) (*SchemaResult, error)
-	// HealthCheck 检查健康状况
+	// HealthCheck 用于网关对插件进行健康检查，以实现自愈和监控。
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 }
 
@@ -108,17 +110,19 @@ func (c *dataSourceClient) HealthCheck(ctx context.Context, in *HealthCheckReque
 // All implementations must embed UnimplementedDataSourceServer
 // for forward compatibility.
 //
-// --- 服务定义 ---
+// DataSource v1 (Revised for Long-Term Support)
+// 这是数据源插件必须实现的 gRPC 服务接口。
+// 它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
 type DataSourceServer interface {
-	// 用于获取插件自身的信息
+	// GetPluginInfo 用于网关发现和识别插件的基本信息。
 	GetPluginInfo(context.Context, *GetPluginInfoRequest) (*GetPluginInfoResponse, error)
-	// Query 对应 "R" (Read)
+	// Query 是一个通用的只读操作接口。
 	Query(context.Context, *QueryRequest) (*QueryResult, error)
-	// Mutate 对应 "C, U, D" (Create, Update, Delete)
+	// Mutate 是一个通用的写操作接口 (Create, Update, Delete)。
 	Mutate(context.Context, *MutateRequest) (*MutateResult, error)
-	// GetSchema 获取元数据
+	// GetSchema 用于获取数据源的结构信息，对于前端UI构建和API探索很有用。
 	GetSchema(context.Context, *SchemaRequest) (*SchemaResult, error)
-	// HealthCheck 检查健康状况
+	// HealthCheck 用于网关对插件进行健康检查，以实现自愈和监控。
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	mustEmbedUnimplementedDataSourceServer()
 }
@@ -285,5 +289,5 @@ var DataSource_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/datasource/v1/datasource.proto",
+	Metadata: "datasource/v1/datasource.proto",
 }

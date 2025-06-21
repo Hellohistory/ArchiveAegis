@@ -2,19 +2,42 @@ version: '3'
 
 vars:
   PROTO_ROOT: proto
-  OUT_DIR: gen/go
+  OUT_DIR: gen/go/proto
 
 tasks:
   gen:
-    desc: 生成 Go + gRPC 代码到 gen/go/proto 目录
+    desc: 生成 Go + gRPC 代码到 {{.OUT_DIR}}/proto 目录
+    deps: [mkdir]
     cmds:
-      - mkdir -p {{.OUT_DIR}}/proto/datasource/v1
-      - protoc --proto_path={{.PROTO_ROOT}} \
-               --go_out={{.OUT_DIR}} --go_opt=paths=source_relative \
-               --go-grpc_out={{.OUT_DIR}} --go-grpc_opt=paths=source_relative \
-               {{.PROTO_ROOT}}/datasource/v1/datasource.proto
+      - cmd: |
+          protoc --proto_path={{.PROTO_ROOT}} \
+                 --go_out={{.OUT_DIR}} --go_opt=paths=source_relative \
+                 --go-grpc_out={{.OUT_DIR}} --go-grpc_opt=paths=source_relative \
+                 {{.PROTO_ROOT}}/datasource/v1/datasource.proto
+
+  mkdir:
+    desc: 创建输出目录（兼容多平台）
+    cmds:
+      # Linux / macOS 下用 mkdir -p
+      - cmd: mkdir -p {{.OUT_DIR}}/proto/datasource/v1
+        platforms: [linux, darwin]
+
+      # Windows 下显式调用 PowerShell 来创建目录
+      - cmd: >
+          powershell -NoProfile -Command
+          "if (-not (Test-Path '{{.OUT_DIR}}\proto\datasource\v1')) {
+             New-Item -ItemType Directory -Path '{{.OUT_DIR}}\proto\datasource\v1' -Force | Out-Null
+           }"
+        platforms: [windows]
 
   clean:
     desc: 清理生成目录
     cmds:
-      - rm -rf {{.OUT_DIR}}
+      - cmd: rm -rf {{.OUT_DIR}}
+        platforms: [linux, darwin]
+      - cmd: >
+          powershell -NoProfile -Command
+          "if (Test-Path '{{.OUT_DIR}}') {
+             Remove-Item -Recurse -Force '{{.OUT_DIR}}' | Out-Null
+           }"
+        platforms: [windows]
