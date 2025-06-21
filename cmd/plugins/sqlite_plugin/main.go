@@ -5,7 +5,7 @@ import (
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/adapter/datasource/sqlite"
 	"ArchiveAegis/internal/core/port"
-	"ArchiveAegis/internal/service"
+	"ArchiveAegis/internal/service/admin_config"
 	"context"
 	"database/sql"
 	_ "embed"
@@ -200,7 +200,7 @@ func main() {
 	defer pluginSysDB.Close()
 	log.Println("🔌 插件成功连接到 auth.db")
 
-	adminConfigService, err := service.NewAdminConfigServiceImpl(pluginSysDB, 100, 1*time.Minute)
+	adminConfigService, err := admin_config.NewAdminConfigServiceImpl(pluginSysDB, 100, 1*time.Minute)
 	if err != nil {
 		log.Fatalf("插件无法创建AdminConfigService: %v", err)
 	}

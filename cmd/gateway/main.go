@@ -6,6 +6,7 @@ import (
 	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
+	"ArchiveAegis/internal/service/admin_config"
 	"ArchiveAegis/internal/transport/http/router"
 	"context"
 	"crypto/rand"
@@ -109,7 +110,7 @@ func main() {
 		log.Fatalf("CRITICAL: 初始化平台系统表失败: %v", err)
 	}
 
-	adminConfigService, err := service.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
+	adminConfigService, err := admin_config.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 AdminConfigService 失败: %v", err)
 	}
