@@ -15,14 +15,23 @@
           "version_string": "1.0.0",
           "release_date": "2025-06-21T00:00:00Z",
           "changelog": "- 用于本地开发的初始版本。",
-          "min_gateway_version": "v1.1.0",
+          "min_gateway_version": "v1.2.0",
           "source": {
-            "url": "file:///E:/Code/Go/ArchiveAegis/AegisBuild/plugins/sqlite_plugin_windows_amd64.zip",
+            "url": "./AegisBuild/plugins/sqlite_plugin_v1.0.0_windows_amd64.zip",
             "checksum": ""
           },
           "execution": {
             "entrypoint": "sqlite_plugin.exe",
-            "args": "-name='我的本地插件' -biz='<biz_name>' -port=<port>"
+            "args": [
+              "-name",
+              "<name>",
+              "-biz",
+              "<biz_name>",
+              "-port",
+              "<port>",
+              "-instance_dir",
+              "<instance_dir>"
+            ]
           }
         }
       ]

@@ -1,34 +1,10 @@
-// Package domain file: internal/core/domain/plugin_models.go
+// file: internal/core/domain/plugin_models.go
 package domain
 
 import (
 	"database/sql"
 	"time"
 )
-
-// InstalledPlugin 代表一个在本地已安装的插件及其当前状态。
-type InstalledPlugin struct {
-	PluginID         string       `json:"plugin_id"`
-	InstalledVersion string       `json:"installed_version"`
-	InstallPath      string       `json:"install_path"`
-	Status           string       `json:"status"`
-	InstalledAt      time.Time    `json:"installed_at"`
-	LastStartedAt    sql.NullTime `json:"last_started_at"`
-}
-
-// PluginInstance 代表一个具体的、带有独立配置的插件运行实例。
-type PluginInstance struct {
-	InstanceID    string       `json:"instance_id"`
-	DisplayName   string       `json:"display_name"`
-	PluginID      string       `json:"plugin_id"`
-	Version       string       `json:"version"`
-	BizName       string       `json:"biz_name"`
-	Port          int          `json:"port"`
-	Status        string       `json:"status"`
-	Enabled       bool         `json:"enabled"`
-	CreatedAt     time.Time    `json:"created_at"`
-	LastStartedAt sql.NullTime `json:"last_started_at"`
-}
 
 // Repository 代表一个插件仓库的元数据
 type Repository struct {
@@ -51,22 +27,37 @@ type PluginManifest struct {
 
 // PluginVersion 代表插件的一个特定版本
 type PluginVersion struct {
-	VersionString     string    `json:"version_string"`      // 版本号, e.g., "1.0.1"
-	ReleaseDate       time.Time `json:"release_date"`        // 发布日期
-	Changelog         string    `json:"changelog"`           // 更新日志
-	MinGatewayVersion string    `json:"min_gateway_version"` // 要求的最低网关版本
-	Source            Source    `json:"source"`              // 下载源信息
-	Execution         Execution `json:"execution"`           // 执行信息
+	VersionString     string    `json:"version_string"`
+	ReleaseDate       time.Time `json:"release_date"`
+	Changelog         string    `json:"changelog"`
+	MinGatewayVersion string    `json:"min_gateway_version"`
+	Source            Source    `json:"source"`
+	Execution         Execution `json:"execution"`
 }
 
 // Source 定义了如何获取插件的二进制文件
 type Source struct {
-	URL      string `json:"url"`      // 下载地址
-	Checksum string `json:"checksum"` // 文件校验和 (e.g., "sha256:f2ca...")
+	URL      string `json:"url"`
+	Checksum string `json:"checksum"`
 }
 
 // Execution 定义了如何运行插件
 type Execution struct {
-	Entrypoint string `json:"entrypoint"` // 可执行文件的相对路径
-	Args       string `json:"args"`       // 启动参数模板
+	Entrypoint string   `json:"entrypoint"`
+	Args       []string `json:"args"`
+}
+
+// PluginInstance 代表一个已配置的、可运行的插件实例。
+// 将一个“已安装插件”转化为一个具体“服务”的配置实体。
+type PluginInstance struct {
+	InstanceID    string       `json:"instance_id"`
+	DisplayName   string       `json:"display_name"`
+	PluginID      string       `json:"plugin_id"`
+	Version       string       `json:"version"`
+	BizName       string       `json:"biz_name"`
+	Port          int          `json:"port"`
+	Status        string       `json:"status"`
+	Enabled       bool         `json:"enabled"`
+	CreatedAt     time.Time    `json:"created_at"`
+	LastStartedAt sql.NullTime `json:"last_started_at"`
 }

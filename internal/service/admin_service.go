@@ -76,13 +76,14 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 		Tables:  make(map[string]*domain.TableConfig),
 	}
 
+	// 查询总体配置
 	var defaultQueryTableNullable sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		"SELECT is_publicly_searchable, default_query_table FROM biz_overall_settings WHERE biz_name = ?",
 		bizName).Scan(&bizConfig.IsPubliclySearchable, &defaultQueryTableNullable)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // Not an error, just no config found
+		return nil, nil // 非错误，仅未配置
 	}
 	if err != nil {
 		return nil, fmt.Errorf("获取业务组 '%s' 总体配置失败: %w", bizName, err)
@@ -91,6 +92,7 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 		bizConfig.DefaultQueryTable = defaultQueryTableNullable.String
 	}
 
+	// 查询所有配置表
 	queryTables := `
         SELECT table_name, is_searchable, allow_create, allow_update, allow_delete
         FROM biz_searchable_tables WHERE biz_name = ?
@@ -99,8 +101,13 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 	if err != nil {
 		return nil, fmt.Errorf("获取业务组 '%s' 可配置表列表失败: %w", bizName, err)
 	}
-	defer rowsTables.Close()
+	defer func() {
+		if err := rowsTables.Close(); err != nil {
+			log.Printf("警告: 关闭业务表结果集失败 (业务 '%s'): %v", bizName, err)
+		}
+	}()
 
+	// 遍历每张表，加载字段配置
 	for rowsTables.Next() {
 		currentTableConfig := &domain.TableConfig{
 			Fields: make(map[string]domain.FieldSetting),
@@ -117,36 +124,40 @@ func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, b
 			continue
 		}
 
-		// 5. 加载该表的字段配置 (这部分逻辑不变)
-		fieldRows, errFieldQuery := s.db.QueryContext(ctx,
-			`SELECT field_name, is_searchable, is_returnable, data_type
-           FROM biz_table_field_settings
-           WHERE biz_name = ? AND table_name = ?`,
-			bizName, currentTableConfig.TableName)
+		// 查询字段配置（封装成闭包以处理 Close）
+		func(tableName string, tc *domain.TableConfig) {
+			fieldRows, errFieldQuery := s.db.QueryContext(ctx,
+				`SELECT field_name, is_searchable, is_returnable, data_type
+                 FROM biz_table_field_settings
+                 WHERE biz_name = ? AND table_name = ?`,
+				bizName, tableName)
+			if errFieldQuery != nil {
+				log.Printf("错误: [AdminConfigService DB] 查询字段失败 (业务 '%s', 表 '%s'): %v。跳过此表。", bizName, tableName, errFieldQuery)
+				return
+			}
+			defer func() {
+				if err := fieldRows.Close(); err != nil {
+					log.Printf("警告: 关闭字段结果集失败 (业务 '%s', 表 '%s'): %v", bizName, tableName, err)
+				}
+			}()
 
-		if errFieldQuery != nil {
-			log.Printf("错误: [AdminConfigService DB] 查询字段失败 (业务 '%s', 表 '%s'): %v. 跳过此表。", bizName, currentTableConfig.TableName, errFieldQuery)
-			continue
-		}
-
-		// 使用 defer in a loop 的标准做法
-		func() {
-			defer fieldRows.Close()
 			for fieldRows.Next() {
 				var fs domain.FieldSetting
 				if errScan := fieldRows.Scan(&fs.FieldName, &fs.IsSearchable, &fs.IsReturnable, &fs.DataType); errScan != nil {
-					log.Printf("错误: [AdminConfigService DB] 扫描字段失败 (业务 '%s', 表 '%s'): %v. 跳过此字段。", bizName, currentTableConfig.TableName, errScan)
+					log.Printf("错误: [AdminConfigService DB] 扫描字段失败 (业务 '%s', 表 '%s'): %v。跳过此字段。", bizName, tableName, errScan)
 					continue
 				}
-				currentTableConfig.Fields[fs.FieldName] = fs
+				tc.Fields[fs.FieldName] = fs
 			}
-		}()
-		if errFieldRows := fieldRows.Err(); errFieldRows != nil {
-			log.Printf("错误: [AdminConfigService DB] 迭代字段结果失败 (业务 '%s', 表 '%s'): %v.", bizName, currentTableConfig.TableName, errFieldRows)
-		}
+			if errIter := fieldRows.Err(); errIter != nil {
+				log.Printf("错误: [AdminConfigService DB] 迭代字段结果失败 (业务 '%s', 表 '%s'): %v。", bizName, tableName, errIter)
+			}
+		}(currentTableConfig.TableName, currentTableConfig)
 
+		// 加入配置集
 		bizConfig.Tables[currentTableConfig.TableName] = currentTableConfig
 	}
+
 	if errRows := rowsTables.Err(); errRows != nil {
 		return nil, fmt.Errorf("处理业务组 '%s' 可配置表列表时出错: %w", bizName, errRows)
 	}
@@ -190,11 +201,21 @@ func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bi
 	if err != nil {
 		return nil, fmt.Errorf("获取业务 '%s' 的所有视图配置时发生数据库错误: %w", bizName, err)
 	}
-	defer rows.Close()
+
+	// 通过 defer 封装资源释放逻辑，并增加错误日志
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("警告: 关闭视图配置结果集失败 (业务 '%s'): %v", bizName, err)
+		}
+	}()
 
 	results := make(map[string][]*domain.ViewConfig)
+
 	for rows.Next() {
-		var tableName, configJSON string
+		var tableName string
+		var configJSON string
+
+		// 扫描每一行的表名与配置JSON
 		if err := rows.Scan(&tableName, &configJSON); err != nil {
 			log.Printf("警告: [AdminConfigService DB] 扫描视图配置行失败 (业务 '%s'): %v", bizName, err)
 			continue
@@ -202,14 +223,18 @@ func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bi
 
 		var viewConf domain.ViewConfig
 		if err := json.Unmarshal([]byte(configJSON), &viewConf); err != nil {
-			log.Printf("警告: [AdminConfigService DB] 解析视图配置JSON失败 (业务 '%s', 表 '%s'): %v", bizName, tableName, err)
+			log.Printf("警告: [AdminConfigService DB] JSON解析失败 (业务 '%s', 表 '%s')，数据: %s，错误: %v", bizName, tableName, configJSON, err)
 			continue
 		}
+
+		// 追加到对应表的视图列表中
 		results[tableName] = append(results[tableName], &viewConf)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("处理业务 '%s' 的视图配置列表时出错: %w", bizName, err)
 	}
+
 	return results, nil
 }
 
@@ -221,34 +246,48 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("数据库操作失败: %w", err)
+		return fmt.Errorf("开启事务失败 (业务 '%s'): %w", bizName, err)
 	}
+
+	// 管理事务提交 / 回滚逻辑
 	defer func() {
 		if p := recover(); p != nil {
 			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateAllViewsForBiz 触发 panic，事务已回滚 (业务 '%s'): %v", bizName, p)
 			panic(p)
 		} else if err != nil {
 			_ = tx.Rollback()
+			log.Printf("警告: UpdateAllViewsForBiz 执行失败，事务已回滚 (业务 '%s'): %v", bizName, err)
 		} else {
-			err = tx.Commit()
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (业务 '%s'): %w", bizName, commitErr)
+			}
 		}
 	}()
 
+	// 清空旧配置
 	if _, err = tx.ExecContext(ctx, "DELETE FROM biz_view_definitions WHERE biz_name = ?", bizName); err != nil {
-		return fmt.Errorf("更新视图配置时，清除旧数据失败: %w", err)
+		return fmt.Errorf("清除旧视图配置失败 (业务 '%s'): %w", bizName, err)
 	}
+
 	if len(viewsData) == 0 {
 		return nil
 	}
 
+	// 插入新配置
 	stmt, err := tx.PrepareContext(ctx, `
         INSERT INTO biz_view_definitions 
         (biz_name, table_name, view_name, view_config_json, is_default) 
-        VALUES (?, ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?)
+    `)
 	if err != nil {
-		return fmt.Errorf("数据库操作失败: %w", err)
+		return fmt.Errorf("准备插入视图配置失败 (业务 '%s'): %w", bizName, err)
 	}
-	defer stmt.Close()
+	defer func() {
+		if errClose := stmt.Close(); errClose != nil {
+			log.Printf("警告: 关闭 stmt 失败 (业务 '%s'): %v", bizName, errClose)
+		}
+	}()
 
 	for tableName, views := range viewsData {
 		for _, view := range views {
@@ -257,73 +296,103 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 			}
 			configJSON, errMarshal := json.Marshal(view)
 			if errMarshal != nil {
-				return fmt.Errorf("序列化视图配置 '%s' (表 '%s') 失败: %w", view.ViewName, tableName, errMarshal)
+				return fmt.Errorf("序列化视图配置 '%s' (表 '%s', 业务 '%s') 失败: %w", view.ViewName, tableName, bizName, errMarshal)
 			}
 			if _, errExec := stmt.ExecContext(ctx, bizName, tableName, view.ViewName, string(configJSON), view.IsDefault); errExec != nil {
-				return fmt.Errorf("插入视图配置 '%s' (表 '%s') 失败: %w", view.ViewName, tableName, errExec)
+				return fmt.Errorf("插入视图配置 '%s' (表 '%s', 业务 '%s') 失败: %w", view.ViewName, tableName, bizName, errExec)
 			}
 		}
 	}
+
 	return nil
 }
 
 // GetAllConfiguredBizNames 从 biz_overall_settings 表中检索所有已配置业务组的名称列表。
 func (s *AdminConfigServiceImpl) GetAllConfiguredBizNames(ctx context.Context) ([]string, error) {
-	query := `SELECT biz_name FROM biz_overall_settings ORDER BY biz_name;`
+	query := `SELECT biz_name FROM biz_overall_settings ORDER BY biz_name`
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("数据库查询失败: %w", err)
+		return nil, fmt.Errorf("查询业务组列表失败: %w", err)
 	}
-	defer rows.Close()
+
+	// 安全释放资源并记录错误
+	defer func() {
+		if errClose := rows.Close(); errClose != nil {
+			log.Printf("警告: 查询业务组列表后关闭 rows 失败: %v", errClose)
+		}
+	}()
 
 	var names []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("数据库扫描失败: %w", err)
+			return nil, fmt.Errorf("扫描业务组名称失败: %w", err)
 		}
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("迭代数据库结果时出错: %w", err)
+		return nil, fmt.Errorf("迭代业务组名称列表失败: %w", err)
 	}
+
 	return names, nil
 }
 
 // GetIPLimitSettings 获取全局IP速率限制配置
 func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domain.IPLimitSetting, error) {
 	settings := &domain.IPLimitSetting{}
-	rows, err := s.db.QueryContext(ctx, "SELECT key, value FROM global_settings WHERE key IN (?, ?)", "ip_rate_limit_per_minute", "ip_burst_size")
-	if err != nil {
-		return nil, fmt.Errorf("数据库查询失败: %w", err)
-	}
-	defer rows.Close()
 
-	foundKeys := 0
+	query := "SELECT key, value FROM global_settings WHERE key IN (?, ?)"
+	rows, err := s.db.QueryContext(ctx, query, "ip_rate_limit_per_minute", "ip_burst_size")
+	if err != nil {
+		return nil, fmt.Errorf("查询全局IP限制配置失败: %w", err)
+	}
+
+	// 安全释放资源并捕获关闭错误
+	defer func() {
+		if errClose := rows.Close(); errClose != nil {
+			log.Printf("警告: 关闭 rows 失败 (IPLimitSettings 查询): %v", errClose)
+		}
+	}()
+
+	var (
+		hasRate  bool
+		hasBurst bool
+	)
+
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
-			return nil, fmt.Errorf("数据库扫描失败: %w", err)
+			return nil, fmt.Errorf("扫描 IP 限制配置失败: %w", err)
 		}
+
 		switch key {
 		case "ip_rate_limit_per_minute":
 			if v, errConv := strconv.ParseFloat(value, 64); errConv == nil {
 				settings.RateLimitPerMinute = v
-				foundKeys++
+				hasRate = true
+			} else {
+				log.Printf("警告: ip_rate_limit_per_minute 配置值非法: '%s'", value)
 			}
 		case "ip_burst_size":
 			if v, errConv := strconv.Atoi(value); errConv == nil {
 				settings.BurstSize = v
-				foundKeys++
+				hasBurst = true
+			} else {
+				log.Printf("警告: ip_burst_size 配置值非法: '%s'", value)
 			}
 		}
 	}
+
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("迭代数据库结果时出错: %w", err)
+		return nil, fmt.Errorf("遍历 IP 限制配置失败: %w", err)
 	}
-	if foundKeys < 2 {
-		return nil, nil // Not an error, just means no settings found
+
+	// 未配置任何有效项，视为未设置
+	if !hasRate && !hasBurst {
+		log.Printf("信息: 系统中未找到有效的 IP 限速设置")
+		return nil, nil
 	}
+
 	return settings, nil
 }
 
@@ -331,29 +400,53 @@ func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domai
 func (s *AdminConfigServiceImpl) UpdateIPLimitSettings(ctx context.Context, settings domain.IPLimitSetting) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("开启事务失败: %w", err)
+		return fmt.Errorf("开启事务失败 (UpdateIPLimitSettings): %w", err)
 	}
+
+	// 管理事务的提交/回滚行为
 	defer func() {
-		if err != nil {
+		if p := recover(); p != nil {
 			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateIPLimitSettings 触发 panic，事务已回滚: %v", p)
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+			log.Printf("警告: UpdateIPLimitSettings 执行失败，事务已回滚: %v", err)
 		} else {
-			err = tx.Commit()
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (UpdateIPLimitSettings): %w", commitErr)
+			}
 		}
 	}()
 
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+	// 预编译 UPSERT 语句
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO global_settings (key, value)
+         VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
 	if err != nil {
-		return fmt.Errorf("准备SQL语句失败: %w", err)
+		return fmt.Errorf("准备 UPSERT 语句失败: %w", err)
 	}
-	defer stmt.Close()
+	defer func() {
+		if errClose := stmt.Close(); errClose != nil {
+			log.Printf("警告: 关闭 stmt 失败 (UpdateIPLimitSettings): %v", errClose)
+		}
+	}()
 
-	if _, err = stmt.ExecContext(ctx, "ip_rate_limit_per_minute", fmt.Sprintf("%f", settings.RateLimitPerMinute)); err != nil {
-		return fmt.Errorf("更新 ip_rate_limit_per_minute 失败: %w", err)
+	// 写入 ip_rate_limit_per_minute
+	rateStr := fmt.Sprintf("%.4f", settings.RateLimitPerMinute)
+	if _, err = stmt.ExecContext(ctx, "ip_rate_limit_per_minute", rateStr); err != nil {
+		return fmt.Errorf("写入 ip_rate_limit_per_minute 失败，值为 '%s': %w", rateStr, err)
 	}
-	if _, err = stmt.ExecContext(ctx, "ip_burst_size", strconv.Itoa(settings.BurstSize)); err != nil {
-		return fmt.Errorf("更新 ip_burst_size 失败: %w", err)
+
+	// 写入 ip_burst_size
+	burstStr := strconv.Itoa(settings.BurstSize)
+	if _, err = stmt.ExecContext(ctx, "ip_burst_size", burstStr); err != nil {
+		return fmt.Errorf("写入 ip_burst_size 失败，值为 '%s': %w", burstStr, err)
 	}
-	return nil
+
+	log.Printf("信息: 全局 IP 限速配置已更新 (Rate: %s, Burst: %s)", rateStr, burstStr)
+	return nil // 事务提交由 defer 完成
 }
 
 // GetUserLimitSettings 获取特定用户的速率限制配置
@@ -436,81 +529,164 @@ func (s *AdminConfigServiceImpl) InvalidateAllCaches() {
 }
 
 // UpdateTableWritePermissions 更新指定表的写权限设置。
-func (s *AdminConfigServiceImpl) UpdateTableWritePermissions(ctx context.Context, bizName, tableName string, perms domain.TableConfig) error {
-	var exists bool
-	err := s.db.QueryRowContext(ctx, "SELECT 1 FROM biz_overall_settings WHERE biz_name = ?", bizName).Scan(&exists)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("业务组 '%s' 不存在，无法为其下的表设置权限", bizName)
-		}
-		return fmt.Errorf("检查业务组是否存在时出错: %w", err)
+func (s *AdminConfigServiceImpl) UpdateTableWritePermissions(ctx context.Context, bizName, tableName string, perms domain.TableConfig) (err error) {
+	if bizName == "" || tableName == "" {
+		return fmt.Errorf("业务名和表名不能为空")
 	}
 
-	query := `
-        INSERT INTO biz_searchable_tables (biz_name, table_name, is_searchable, allow_create, allow_update, allow_delete)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启事务失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, err)
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateTableWritePermissions panic，事务已回滚 (业务 '%s', 表 '%s'): %v", bizName, tableName, p)
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+			log.Printf("警告: UpdateTableWritePermissions 失败，事务已回滚 (业务 '%s', 表 '%s'): %v", bizName, tableName, err)
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, commitErr)
+			}
+		}
+	}()
+
+	// 检查业务组是否存在
+	var exists bool
+	checkQuery := "SELECT 1 FROM biz_overall_settings WHERE biz_name = ?"
+	if err = tx.QueryRowContext(ctx, checkQuery, bizName).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("业务组 '%s' 不存在，无法设置表 '%s' 的权限", bizName, tableName)
+		}
+		return fmt.Errorf("检查业务组 '%s' 是否存在失败: %w", bizName, err)
+	}
+
+	// 获取当前 is_searchable 状态，若无记录则设为默认值 false
+	var isSearchable bool
+	getSearchable := "SELECT is_searchable FROM biz_searchable_tables WHERE biz_name = ? AND table_name = ?"
+	if errScan := tx.QueryRowContext(ctx, getSearchable, bizName, tableName).Scan(&isSearchable); errScan != nil {
+		if errors.Is(errScan, sql.ErrNoRows) {
+			isSearchable = false // 默认值
+		} else {
+			return fmt.Errorf("查询表 '%s/%s' 的 is_searchable 状态失败: %w", bizName, tableName, errScan)
+		}
+	}
+
+	// UPSERT 权限信息
+	upsertQuery := `
+        INSERT INTO biz_searchable_tables 
+        (biz_name, table_name, is_searchable, allow_create, allow_update, allow_delete)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(biz_name, table_name) DO UPDATE SET
             allow_create = excluded.allow_create,
             allow_update = excluded.allow_update,
-            allow_delete = excluded.allow_delete;
-    `
-	// 注意: is_searchable 需要一个值，我们假设它保持不变或设为默认值
-	var isSearchable bool
-	s.db.QueryRowContext(ctx, "SELECT is_searchable FROM biz_searchable_tables WHERE biz_name = ? AND table_name = ?", bizName, tableName).Scan(&isSearchable)
-
-	_, err = s.db.ExecContext(ctx, query, bizName, tableName, isSearchable, perms.AllowCreate, perms.AllowUpdate, perms.AllowDelete)
-	if err != nil {
-		return fmt.Errorf("更新表 '%s' 的写权限失败: %w", tableName, err)
+            allow_delete = excluded.allow_delete`
+	if _, err = tx.ExecContext(ctx, upsertQuery,
+		bizName, tableName, isSearchable,
+		perms.AllowCreate, perms.AllowUpdate, perms.AllowDelete); err != nil {
+		return fmt.Errorf("更新表 '%s/%s' 写权限失败: %w", bizName, tableName, err)
 	}
 
 	s.InvalidateCacheForBiz(bizName)
 	log.Printf("信息: [AdminConfigService] 表 '%s/%s' 的写权限已更新，相关缓存已失效。", bizName, tableName)
 
-	return nil
+	return nil // 提交事务由 defer 执行
 }
 
 // UpdateBizSearchableTables 全量更新一个业务组下所有可搜索的表。
-func (s *AdminConfigServiceImpl) UpdateBizSearchableTables(ctx context.Context, bizName string, tableNames []string) error {
+func (s *AdminConfigServiceImpl) UpdateBizSearchableTables(ctx context.Context, bizName string, tableNames []string) (err error) {
+	if bizName == "" {
+		return fmt.Errorf("业务组名称不能为空")
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("开启事务失败: %w", err)
-	}
-	defer tx.Rollback()
-
-	// 先删除该业务组下所有的旧表记录
-	if _, err := tx.ExecContext(ctx, "DELETE FROM biz_searchable_tables WHERE biz_name = ?", bizName); err != nil {
-		return fmt.Errorf("清除旧可搜索表失败: %w", err)
+		return fmt.Errorf("开启事务失败 (业务 '%s'): %w", bizName, err)
 	}
 
-	if len(tableNames) > 0 {
-		stmt, err := tx.PrepareContext(ctx, "INSERT INTO biz_searchable_tables (biz_name, table_name) VALUES (?, ?)")
-		if err != nil {
-			return fmt.Errorf("准备插入语句失败: %w", err)
-		}
-		defer stmt.Close()
-
-		for _, tableName := range tableNames {
-			if _, err := stmt.ExecContext(ctx, bizName, tableName); err != nil {
-				return fmt.Errorf("插入可搜索表 '%s' 失败: %w", tableName, err)
+	// 管理事务的回滚 / 提交行为
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateBizSearchableTables 触发 panic，事务已回滚 (业务 '%s'): %v", bizName, p)
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+			log.Printf("警告: UpdateBizSearchableTables 执行失败，事务已回滚 (业务 '%s'): %v", bizName, err)
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (业务 '%s'): %w", bizName, commitErr)
 			}
+		}
+	}()
+
+	// 删除旧配置
+	if _, err = tx.ExecContext(ctx,
+		"DELETE FROM biz_searchable_tables WHERE biz_name = ?", bizName); err != nil {
+		return fmt.Errorf("清除旧可搜索表失败 (业务 '%s'): %w", bizName, err)
+	}
+
+	if len(tableNames) == 0 {
+		s.InvalidateCacheForBiz(bizName)
+		return nil
+	}
+
+	// 插入新配置
+	stmt, err := tx.PrepareContext(ctx,
+		"INSERT INTO biz_searchable_tables (biz_name, table_name) VALUES (?, ?)")
+	if err != nil {
+		return fmt.Errorf("准备插入语句失败 (业务 '%s'): %w", bizName, err)
+	}
+	defer func() {
+		if errClose := stmt.Close(); errClose != nil {
+			log.Printf("警告: 关闭 stmt 失败 (业务 '%s'): %v", bizName, errClose)
+		}
+	}()
+
+	for _, tableName := range tableNames {
+		if _, err = stmt.ExecContext(ctx, bizName, tableName); err != nil {
+			return fmt.Errorf("插入可搜索表 '%s' 失败 (业务 '%s'): %w", tableName, bizName, err)
 		}
 	}
 
 	s.InvalidateCacheForBiz(bizName)
-	return tx.Commit()
+	return nil // 提交由 defer 完成
 }
 
 // UpdateBizOverallSettings 更新业务组的总体设置。
-func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, bizName string, settings domain.BizOverallSettings) error {
+func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, bizName string, settings domain.BizOverallSettings) (err error) {
+	if bizName == "" {
+		return fmt.Errorf("业务组名称不能为空")
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("开启事务失败: %w", err)
+		return fmt.Errorf("开启事务失败 (业务 '%s'): %w", bizName, err)
 	}
-	defer tx.Rollback() // 如果后续操作失败或panic，自动回滚
 
-	// 动态构建SQL语句以支持部分更新
+	// 管理事务回滚/提交逻辑
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateBizOverallSettings 触发 panic，事务已回滚 (业务 '%s'): %v", bizName, p)
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+			log.Printf("警告: UpdateBizOverallSettings 执行失败，事务已回滚 (业务 '%s'): %v", bizName, err)
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (业务 '%s'): %w", bizName, commitErr)
+			}
+		}
+	}()
+
+	// 构建 UPDATE 语句及参数
 	var updates []string
 	var args []interface{}
+
 	if settings.IsPubliclySearchable != nil {
 		updates = append(updates, "is_publicly_searchable = ?")
 		args = append(args, *settings.IsPubliclySearchable)
@@ -521,51 +697,91 @@ func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, b
 	}
 
 	if len(updates) == 0 {
-		return nil // 如果没有要更新的字段，直接返回成功
+		log.Printf("信息: 未传入可更新字段，跳过更新 (业务 '%s')", bizName)
+		return nil
 	}
 
 	args = append(args, bizName)
 	query := fmt.Sprintf("UPDATE biz_overall_settings SET %s WHERE biz_name = ?", strings.Join(updates, ", "))
 
-	res, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("数据库更新失败: %w", err)
-	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		return fmt.Errorf("业务组 '%s' 未找到或无需更新", bizName)
+	res, execErr := tx.ExecContext(ctx, query, args...)
+	if execErr != nil {
+		return fmt.Errorf("更新业务 '%s' 的总体配置失败: %w", bizName, execErr)
 	}
 
+	rows, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("无法获取受影响行数 (业务 '%s'): %w", bizName, rowsErr)
+	}
+	if rows == 0 {
+		return fmt.Errorf("业务组 '%s' 未找到或数据未变更", bizName)
+	}
+
+	// 清除缓存
 	s.InvalidateCacheForBiz(bizName)
-	return tx.Commit() // 提交事务
+	return nil // 提交逻辑已在 defer 中处理
 }
 
 // UpdateTableFieldSettings 全量更新指定表的字段配置。
-func (s *AdminConfigServiceImpl) UpdateTableFieldSettings(ctx context.Context, bizName, tableName string, fields []domain.FieldSetting) error {
+func (s *AdminConfigServiceImpl) UpdateTableFieldSettings(ctx context.Context, bizName, tableName string, fields []domain.FieldSetting) (err error) {
+	if bizName == "" || tableName == "" {
+		return fmt.Errorf("业务名或表名不能为空")
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("开启事务失败: %w", err)
-	}
-	defer tx.Rollback()
-
-	// 先删除该表的所有旧字段配置
-	if _, err := tx.ExecContext(ctx, "DELETE FROM biz_table_field_settings WHERE biz_name = ? AND table_name = ?", bizName, tableName); err != nil {
-		return fmt.Errorf("清除表 '%s' 的旧字段配置失败: %w", tableName, err)
+		return fmt.Errorf("开启事务失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, err)
 	}
 
-	if len(fields) > 0 {
-		stmt, err := tx.PrepareContext(ctx, "INSERT INTO biz_table_field_settings (biz_name, table_name, field_name, is_searchable, is_returnable, data_type) VALUES (?, ?, ?, ?, ?, ?)")
-		if err != nil {
-			return fmt.Errorf("准备插入字段配置语句失败: %w", err)
-		}
-		defer stmt.Close()
-
-		for _, field := range fields {
-			if _, err := stmt.ExecContext(ctx, bizName, tableName, field.FieldName, field.IsSearchable, field.IsReturnable, field.DataType); err != nil {
-				return fmt.Errorf("插入字段 '%s' 的配置失败: %w", field.FieldName, err)
+	// 使用 defer 管理事务提交 / 回滚
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			log.Printf("严重错误: UpdateTableFieldSettings 触发 panic，事务已回滚 (业务 '%s', 表 '%s'): %v", bizName, tableName, p)
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+			log.Printf("警告: UpdateTableFieldSettings 执行失败，事务已回滚 (业务 '%s', 表 '%s'): %v", bizName, tableName, err)
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				err = fmt.Errorf("提交事务失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, commitErr)
 			}
+		}
+	}()
+
+	// 删除旧字段配置
+	if _, err = tx.ExecContext(ctx,
+		"DELETE FROM biz_table_field_settings WHERE biz_name = ? AND table_name = ?", bizName, tableName); err != nil {
+		return fmt.Errorf("清除旧字段配置失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, err)
+	}
+
+	if len(fields) == 0 {
+		// 没有字段配置，删除完即可
+		s.InvalidateCacheForBiz(bizName)
+		return nil
+	}
+
+	// 批量插入字段配置
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO biz_table_field_settings 
+		(biz_name, table_name, field_name, is_searchable, is_returnable, data_type) 
+		VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("准备插入字段配置失败 (业务 '%s', 表 '%s'): %w", bizName, tableName, err)
+	}
+	defer func() {
+		if errClose := stmt.Close(); errClose != nil {
+			log.Printf("警告: 关闭字段插入语句失败 (业务 '%s', 表 '%s'): %v", bizName, tableName, errClose)
+		}
+	}()
+
+	for _, field := range fields {
+		if _, err = stmt.ExecContext(ctx, bizName, tableName, field.FieldName,
+			field.IsSearchable, field.IsReturnable, field.DataType); err != nil {
+			return fmt.Errorf("插入字段配置失败 (业务 '%s', 表 '%s', 字段 '%s'): %w", bizName, tableName, field.FieldName, err)
 		}
 	}
 
 	s.InvalidateCacheForBiz(bizName)
-	return tx.Commit()
+	return nil // 提交已在 defer 中处理
 }

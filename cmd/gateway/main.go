@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 )
 
 // 版本升级，标志着插件管理器架构的集成
-const version = "v1.0.0-alpha3"
+const version = "v1.0.0-alpha4"
 
 // PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
 type PluginManagementConfig struct {
@@ -50,22 +51,45 @@ type Config struct {
 func main() {
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 
-	// =========================================================================
-	//  1. 初始化配置
-	// =========================================================================
-	if err := initViper(); err != nil {
-		log.Fatalf("CRITICAL: 初始化配置失败: %v", err)
+	// 1. 初始化配置和路径
+	// 让程序自我感知，确定项目根目录
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("CRITICAL: 无法获取可执行文件路径: %v", err)
 	}
+	// 假设可执行文件在 .../AegisBuild/ 目录下，项目根目录是其上一级
+	rootDir := filepath.Dir(filepath.Dir(exePath))
+	log.Printf("ℹ️  检测到项目根目录: %s", rootDir)
+
+	// 指定配置文件的绝对路径
+	configFilePath := filepath.Join(rootDir, "configs", "config.yaml")
+	viper.SetConfigFile(configFilePath)
+
+	if err := viper.ReadInConfig(); err != nil {
+		// 此处不再自动创建，要求部署时必须提供配置文件
+		log.Fatalf("CRITICAL: 读取配置文件 '%s' 失败: %v", configFilePath, err)
+	}
+
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
 		log.Fatalf("CRITICAL: 解析配置到结构体失败: %v", err)
 	}
 	log.Println("✅ 配置: config.yaml 加载并解析成功。")
 
-	// =========================================================================
-	//  2. 初始化数据库和核心服务
-	// =========================================================================
-	instanceDir := "instance"
+	// 将所有配置文件中的相对路径转换为绝对路径
+	config.PluginManagement.InstallDirectory = filepath.Join(rootDir, config.PluginManagement.InstallDirectory)
+	log.Printf("   -> 插件安装目录绝对路径: %s", config.PluginManagement.InstallDirectory)
+
+	for i, repo := range config.PluginManagement.Repositories {
+		if !strings.Contains(repo.URL, "://") {
+			absPath := filepath.Join(rootDir, repo.URL)
+			config.PluginManagement.Repositories[i].URL = "file://" + filepath.ToSlash(absPath)
+			log.Printf("   -> 仓库 '%s' 的URL已转换为: %s", repo.Name, config.PluginManagement.Repositories[i].URL)
+		}
+	}
+
+	// 2. 初始化系统数据库 (auth.db)
+	instanceDir := filepath.Join(rootDir, "instance") // 使用根目录下的 instance
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
 	}
@@ -93,7 +117,7 @@ func main() {
 
 	dataSourceRegistry := make(map[string]port.DataSource)
 	closableAdapters := make([]io.Closer, 0)
-	pluginManager, err := service.NewPluginManager(sysDB, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
+	pluginManager, err := service.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
@@ -102,10 +126,8 @@ func main() {
 	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
 	log.Println("✅ 服务层: BusinessRateLimiter 初始化完成")
 
-	// =========================================================================
-	//  3. 启动后台任务
-	// =========================================================================
-	pluginManager.RefreshRepositories() // 启动时立即刷新一次仓库
+	// 3. 启动后台任务
+	pluginManager.RefreshRepositories()
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
@@ -118,9 +140,7 @@ func main() {
 	}()
 	log.Println("✅ 后台任务: 插件仓库定期刷新已启动。")
 
-	// =========================================================================
-	//  4. 初始化并启动 HTTP 服务
-	// =========================================================================
+	// 4. 初始化并启动 HTTP 服务
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(sysDB) == 0 {
@@ -159,9 +179,7 @@ func main() {
 	aegobserve.Register()
 	log.Println("✅ 监控: pprof, metrics 已启用。")
 
-	// =========================================================================
-	//  5. 优雅停机处理
-	// =========================================================================
+	// 5. 优雅停机处理
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -199,55 +217,4 @@ func genToken() string {
 		return "fallback_token_generation_failed"
 	}
 	return hex.EncodeToString(b)
-}
-
-// initViper 辅助函数，用于处理配置文件
-func initViper() error {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./configs")
-	viper.AddConfigPath(".")
-
-	err := viper.ReadInConfig()
-	if err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			log.Println("警告: 未找到 config.yaml。将创建默认配置文件 config.yaml。")
-			// 更新默认配置文件以匹配新的结构
-			defaultConfig := `
-# ArchiveAegis 平台默认配置文件 (V3 - 插件仓库模式)
-server:
-  port: 10224
-  log_level: "info"
-
-# 插件管理配置
-plugin_management:
-  # 插件将被下载和安装到这个目录
-  install_directory: "./instance/plugins"
-  
-  # 插件仓库列表
-  repositories:
-    - name: "本地测试仓库"
-      # 指向我们之前创建的本地清单文件，注意 file:// 协议头
-      url: "file://./configs/local_repository.json"
-      enabled: true
-      
-    - name: "ArchiveAegis 官方仓库 (示例)"
-      url: "https://plugins.archiveaegis.io/repository.json"
-      enabled: false # 默认禁用，因为地址是虚构的
-`
-			configFilePath := "configs/config.yaml"
-			if err := os.MkdirAll("configs", 0755); err != nil {
-				return fmt.Errorf("创建configs目录失败: %w", err)
-			}
-			if err := os.WriteFile(configFilePath, []byte(defaultConfig), 0644); err != nil {
-				return fmt.Errorf("创建默认配置文件失败: %w", err)
-			}
-			log.Printf("警告: 默认配置文件已在 '%s' 创建。请根据需要修改。", configFilePath)
-			// 重新读取刚刚创建的配置文件
-			return viper.ReadInConfig()
-		} else {
-			return fmt.Errorf("读取配置文件时发生错误: %w", err)
-		}
-	}
-	return nil
 }
