@@ -3,6 +3,7 @@ package router
 
 import (
 	"ArchiveAegis/internal/aegmiddleware"
+	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
@@ -35,7 +36,13 @@ type Dependencies struct {
 // New 创建并配置一个全新的、基于 Gin 的 HTTP 路由器
 func New(deps Dependencies) http.Handler {
 	router := gin.Default()
+
+	// --- 全局中间件注册 ---
+	// Prometheus 中间件：放在最顶层以捕获所有请求
+	router.Use(aegobserve.PrometheusMiddleware())
+	// Gzip 压缩
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
+	// CORS 跨域配置
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -44,31 +51,23 @@ func New(deps Dependencies) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
+	// 4. 统一的错误处理中间件，放在最后，可以捕获所有处理器返回的错误
 	router.Use(middleware.ErrorHandlingMiddleware())
 
-	// ✅ FIX: 创建一个什么都不做的 http.Handler 作为中间件链的“下一个”占位符
-	// 它能确保请求在通过标准库中间件后，能继续回到 Gin 的处理链中
-	passthroughHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
-
-	// 将 http.Handler 转换为 gin.HandlerFunc 的辅助函数
-	wrap := func(h http.Handler) gin.HandlerFunc {
-		return gin.WrapH(h)
-	}
-
 	authService := service.NewAuthenticator(deps.AuthDB)
+
 	v1 := router.Group("/api/v1")
 	{
 		// --- 系统/认证平面 ---
 		authGroup := v1.Group("/auth")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		authGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		// 应用轻量级的速率限制中间件链
+		authGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
 		}
 
 		systemGroup := v1.Group("/system")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		systemGroup.Use(wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		systemGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
 		}
@@ -76,8 +75,7 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 元数据/发现平面 ---
 		metaGroup := v1.Group("/meta")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		metaGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.LightweightChain(passthroughHandler)))
+		metaGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
 			metaGroup.GET("/schema/:bizName", schemaHandlerV1(deps.Registry))
@@ -86,19 +84,19 @@ func New(deps Dependencies) http.Handler {
 
 		// --- 数据平面 ---
 		dataGroup := v1.Group("/data")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		dataGroup.Use(authMiddleware(authService), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
+		dataGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
 		}
 
-		// --- 控制平面 ---
+		// --- 控制平面 (Admin) ---
 		adminGroup := v1.Group("/admin")
-		// ✅ FIX: 使用 passthroughHandler 替换 http.DefaultServeMux
-		adminGroup.Use(authMiddleware(authService), requireAdmin(), wrap(deps.RateLimiter.FullBusinessChain(passthroughHandler)))
+		adminGroup.Use(authMiddleware(authService), requireAdmin(), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
-			// (所有 admin 子路由定义不变, 它们会自动被 Use 的中间件保护)
+			// 将 Prometheus 指标端点安全地置于管理员路由下
+			adminGroup.GET("/metrics", gin.WrapH(aegobserve.Handler()))
+
 			pluginAdminGroup := adminGroup.Group("/plugins")
 			{
 				pluginAdminGroup.GET("/available", listAvailablePluginsHandler(deps.PluginManager))
@@ -140,22 +138,34 @@ func New(deps Dependencies) http.Handler {
 }
 
 // =============================================================================
-//
-//	Gin 中间件 (Middleware)
-//
+// Gin 中间件 (Middleware)
 // =============================================================================
+
+// WrapNetHTTP 接受一个函数，该函数接收 http.Handler 并返回 http.Handler（这是标准中间件的签名），
+// 然后将其转换为一个 gin.HandlerFunc。
+func WrapNetHTTP(middleware func(http.Handler) http.Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 创建一个 handler，它的唯一作用就是调用 Gin 的下一个处理器
+		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c.Next()
+		})
+		// 将 nextHandler 传入标准中间件，得到一个新的 handler
+		handlerToExec := middleware(nextHandler)
+		// 执行这个包装后的 handler
+		handlerToExec.ServeHTTP(c.Writer, c.Request)
+	}
+}
+
 func authMiddleware(auth *service.Authenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c.Request = r
+			c.Request = r // 确保对 request 的修改能传递回 Gin
 			c.Next()
 		}))
 		handler.ServeHTTP(c.Writer, c.Request)
-		if c.Writer.Written() {
-			c.Abort()
-		}
 	}
 }
+
 func requireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := service.ClaimFrom(c.Request)
