@@ -64,7 +64,13 @@ jobs:
 
       - name: Check for Uncommitted Generated Files
         run: |
-          git diff --exit-code || (echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。" && exit 1)
+          if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
+            echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
+            git --no-pager diff
+            exit 1
+          else
+            echo "✅ Protobuf 文件已是最新，无需提交。"
+          fi
 
       - name: All checks passed
         run: echo "✅🎉 CI 流程全部成功！所有检查均已通过。"
