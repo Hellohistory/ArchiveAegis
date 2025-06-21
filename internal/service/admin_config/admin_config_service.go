@@ -64,99 +64,129 @@ func (s *AdminConfigServiceImpl) InvalidateAllCaches() {
 	log.Printf("信息: [AdminConfigService] 所有查询配置LRU缓存已清除。")
 }
 
-// loadBizQueryConfigFromDB 是实际从数据库加载完整业务组配置的内部方法。
-// 这是一个辅助方法，因为它在其他 Get 方法中被调用。
+// loadBizQueryConfigFromDB 实际从数据库加载完整业务组配置。
+// 优先从缓存读取，缓存miss时加载，完成后自动更新缓存。
 func (s *AdminConfigServiceImpl) loadBizQueryConfigFromDB(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
-	bizConfig := &domain.BizQueryConfig{
-		BizName: bizName,
-		Tables:  make(map[string]*domain.TableConfig),
+	if bizName == "" {
+		return nil, errors.New("bizName 不能为空")
 	}
 
 	// 查询总体配置
+	bizConfig, err := s.queryBizOverallConfig(ctx, bizName)
+	if err != nil || bizConfig == nil {
+		return bizConfig, err // err为nil且bizConfig为nil时为“未配置”，否则为错误
+	}
+
+	// 查询所有业务表及其配置
+	tables, err := s.queryBizTables(ctx, bizName)
+	if err != nil {
+		return nil, err
+	}
+
+	bizConfig.Tables = tables
+
+	// 更新缓存（如果有必要）
+	s.cache.Add(bizName, bizConfig)
+
+	return bizConfig, nil
+}
+
+// queryBizOverallConfig 查询业务组整体配置。
+func (s *AdminConfigServiceImpl) queryBizOverallConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
+	var isPubliclySearchable bool
 	var defaultQueryTableNullable sql.NullString
+
 	err := s.db.QueryRowContext(ctx,
-		"SELECT is_publicly_searchable, default_query_table FROM biz_overall_settings WHERE biz_name = ?",
-		bizName).Scan(&bizConfig.IsPubliclySearchable, &defaultQueryTableNullable)
+		`SELECT is_publicly_searchable, default_query_table FROM biz_overall_settings WHERE biz_name = ?`,
+		bizName,
+	).Scan(&isPubliclySearchable, &defaultQueryTableNullable)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // 非错误，仅未配置
+		return nil, nil // 业务未配置，不是错误
 	}
 	if err != nil {
-		return nil, fmt.Errorf("获取业务组 '%s' 总体配置失败: %w", bizName, err)
+		return nil, fmt.Errorf("查询业务组 '%s' 总体配置失败: %w", bizName, err)
+	}
+
+	cfg := &domain.BizQueryConfig{
+		BizName:              bizName,
+		IsPubliclySearchable: isPubliclySearchable,
+		DefaultQueryTable:    "",
+		Tables:               make(map[string]*domain.TableConfig),
 	}
 	if defaultQueryTableNullable.Valid {
-		bizConfig.DefaultQueryTable = defaultQueryTableNullable.String
+		cfg.DefaultQueryTable = defaultQueryTableNullable.String
 	}
+	return cfg, nil
+}
 
-	// 查询所有配置表
+// queryBizTables 查询业务组下所有业务表的配置和字段信息。
+func (s *AdminConfigServiceImpl) queryBizTables(ctx context.Context, bizName string) (map[string]*domain.TableConfig, error) {
+	tables := make(map[string]*domain.TableConfig)
+
 	queryTables := `
-        SELECT table_name, is_searchable, allow_create, allow_update, allow_delete
-        FROM biz_searchable_tables WHERE biz_name = ?
-    `
-	rowsTables, err := s.db.QueryContext(ctx, queryTables, bizName)
+		SELECT table_name, is_searchable, allow_create, allow_update, allow_delete
+		FROM biz_searchable_tables WHERE biz_name = ?
+	`
+	rows, err := s.db.QueryContext(ctx, queryTables, bizName)
 	if err != nil {
-		return nil, fmt.Errorf("获取业务组 '%s' 可配置表列表失败: %w", bizName, err)
+		return nil, fmt.Errorf("查询业务组 '%s' 可配置表失败: %w", bizName, err)
 	}
-	defer func() {
-		if err := rowsTables.Close(); err != nil {
-			log.Printf("警告: 关闭业务表结果集失败 (业务 '%s'): %v", bizName, err)
-		}
-	}()
+	defer rows.Close()
 
-	// 遍历每张表，加载字段配置
-	for rowsTables.Next() {
-		currentTableConfig := &domain.TableConfig{
+	for rows.Next() {
+		tc := &domain.TableConfig{
 			Fields: make(map[string]domain.FieldSetting),
 		}
-
-		if errScan := rowsTables.Scan(
-			&currentTableConfig.TableName,
-			&currentTableConfig.IsSearchable,
-			&currentTableConfig.AllowCreate,
-			&currentTableConfig.AllowUpdate,
-			&currentTableConfig.AllowDelete,
-		); errScan != nil {
-			log.Printf("警告: [AdminConfigService] 扫描业务组 '%s' 的表配置失败: %v。已跳过此表。", bizName, errScan)
+		if err := rows.Scan(&tc.TableName, &tc.IsSearchable, &tc.AllowCreate, &tc.AllowUpdate, &tc.AllowDelete); err != nil {
+			log.Printf("警告: [AdminConfigService] 扫描业务 '%s' 的表配置失败: %v，已跳过该表", bizName, err)
 			continue
 		}
 
-		// 查询字段配置（封装成闭包以处理 Close）
-		func(tableName string, tc *domain.TableConfig) {
-			fieldRows, errFieldQuery := s.db.QueryContext(ctx,
-				`SELECT field_name, is_searchable, is_returnable, data_type
-                 FROM biz_table_field_settings
-                 WHERE biz_name = ? AND table_name = ?`,
-				bizName, tableName)
-			if errFieldQuery != nil {
-				log.Printf("错误: [AdminConfigService DB] 查询字段失败 (业务 '%s', 表 '%s'): %v。跳过此表。", bizName, tableName, errFieldQuery)
-				return
-			}
-			defer func() {
-				if err := fieldRows.Close(); err != nil {
-					log.Printf("警告: 关闭字段结果集失败 (业务 '%s', 表 '%s'): %v", bizName, tableName, err)
-				}
-			}()
+		fields, err := s.queryTableFields(ctx, bizName, tc.TableName)
+		if err != nil {
+			log.Printf("错误: [AdminConfigService] 查询表字段失败(业务 '%s', 表 '%s'): %v", bizName, tc.TableName, err)
+			tc.Fields = map[string]domain.FieldSetting{}
+		} else {
+			tc.Fields = fields
+		}
 
-			for fieldRows.Next() {
-				var fs domain.FieldSetting
-				if errScan := fieldRows.Scan(&fs.FieldName, &fs.IsSearchable, &fs.IsReturnable, &fs.DataType); errScan != nil {
-					log.Printf("错误: [AdminConfigService DB] 扫描字段失败 (业务 '%s', 表 '%s'): %v。跳过此字段。", bizName, tableName, errScan)
-					continue
-				}
-				tc.Fields[fs.FieldName] = fs
-			}
-			if errIter := fieldRows.Err(); errIter != nil {
-				log.Printf("错误: [AdminConfigService DB] 迭代字段结果失败 (业务 '%s', 表 '%s'): %v。", bizName, tableName, errIter)
-			}
-		}(currentTableConfig.TableName, currentTableConfig)
-
-		// 加入配置集
-		bizConfig.Tables[currentTableConfig.TableName] = currentTableConfig
+		tables[tc.TableName] = tc
 	}
 
-	if errRows := rowsTables.Err(); errRows != nil {
-		return nil, fmt.Errorf("处理业务组 '%s' 可配置表列表时出错: %w", bizName, errRows)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历业务组 '%s' 可配置表失败: %w", bizName, err)
 	}
 
-	return bizConfig, nil
+	return tables, nil
+}
+
+// queryTableFields 查询单表所有字段的详细配置。
+func (s *AdminConfigServiceImpl) queryTableFields(ctx context.Context, bizName, tableName string) (map[string]domain.FieldSetting, error) {
+	fields := make(map[string]domain.FieldSetting)
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT field_name, is_searchable, is_returnable, data_type
+		 FROM biz_table_field_settings
+		 WHERE biz_name = ? AND table_name = ?`,
+		bizName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fs domain.FieldSetting
+		if err := rows.Scan(&fs.FieldName, &fs.IsSearchable, &fs.IsReturnable, &fs.DataType); err != nil {
+			log.Printf("警告: [AdminConfigService] 扫描字段失败(业务 '%s', 表 '%s'): %v，已跳过", bizName, tableName, err)
+			continue
+		}
+		fields[fs.FieldName] = fs
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历表字段失败(业务 '%s', 表 '%s'): %w", bizName, tableName, err)
+	}
+
+	return fields, nil
 }
