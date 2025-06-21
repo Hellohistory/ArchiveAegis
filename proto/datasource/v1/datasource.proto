@@ -9,111 +9,153 @@ option go_package = "gen/go/datasource/v1;datasourcev1";
 import "google/protobuf/struct.proto";
 
 // --- 服务定义 ---
+
+// DataSource v1 (Revised for Long-Term Support)
+// 这是数据源插件必须实现的 gRPC 服务接口。
+// 它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
 service DataSource {
-  // 用于获取插件自身的信息
+  // GetPluginInfo 用于网关发现和识别插件的基本信息。
   rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
 
-  // Query 对应 "R" (Read)
+  // Query 是一个通用的只读操作接口。
   rpc Query(QueryRequest) returns (QueryResult);
-  // Mutate 对应 "C, U, D" (Create, Update, Delete)
+
+  // Mutate 是一个通用的写操作接口 (Create, Update, Delete)。
   rpc Mutate(MutateRequest) returns (MutateResult);
-  // GetSchema 获取元数据
+
+  // GetSchema 用于获取数据源的结构信息，对于前端UI构建和API探索很有用。
   rpc GetSchema(SchemaRequest) returns (SchemaResult);
-  // HealthCheck 检查健康状况
+
+  // HealthCheck 用于网关对插件进行健康检查，以实现自愈和监控。
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
-// GetPluginInfo 定义请求和响应体
+// =============================================================================
+//  核心通用消息体 (为通用性而重构)
+// =============================================================================
+
+// QueryRequest 代表一次查询请求。
+message QueryRequest {
+  // biz_name 是网关用于路由的业务组标识。
+  string biz_name = 1;
+
+  // query 是一个通用的、结构化的查询对象。
+  // 它的具体结构由插件自行定义和解释。网关内核完全不关心其内容。
+  //
+  // 示例 (对于一个SQL插件):
+  // {
+  //   "table": "users",
+  //   "filters": [{"field": "age", "op": ">", "value": 30}],
+  //   "page": 1,
+  //   "size": 10
+  // }
+  //
+  // 示例 (对于一个Elasticsearch插件):
+  // {
+  //   "index": "products",
+  //   "query": { "match": { "description": "durable laptop" } }
+  // }
+  google.protobuf.Struct query = 2;
+}
+
+// QueryResult 代表一次查询的结果。
+message QueryResult {
+  // data 是一个通用的、结构化的结果对象。
+  // 这允许插件返回任何形式的数据，例如包含分页、聚合、高亮等信息的复杂结构。
+  //
+  // 示例 (对于一个SQL插件):
+  // {
+  //   "items": [ {"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"} ],
+  //   "total": 100
+  // }
+  //
+  // 示例 (对于一个Elasticsearch插件):
+  // {
+  //   "hits": [ {"_id": "a", "_source": {...}, "highlight": {...}} ],
+  //   "total": { "value": 1, "relation": "eq" },
+  //   "aggregations": { ... }
+  // }
+  google.protobuf.Struct data = 1;
+
+  // source 字段用于标识处理此请求的插件类型。
+  string source = 2;
+}
+
+// MutateRequest 代表一次写操作请求，同样变得通用。
+message MutateRequest {
+  // biz_name 是网关用于路由的业务组标识。
+  string biz_name = 1;
+
+  // operation 是一个字符串，用于告诉插件执行何种类型的写操作。
+  // 常见的操作有 "create", "update", "delete", "bulk", "upsert" 等。
+  // 具体支持哪些操作由插件自行定义。
+  string operation = 2;
+
+  // payload 是本次写操作的载荷，一个通用的结构化对象。
+  //
+  // 示例 (对于 "create" 操作):
+  // {
+  //   "table": "posts",
+  //   "data": { "title": "New Post", "content": "..." }
+  // }
+  google.protobuf.Struct payload = 3;
+}
+
+// MutateResult 代表一次写操作的结果。
+message MutateResult {
+  // data 是一个通用的结果对象，可以包含比简单布尔值更丰富的信息。
+  //
+  // 示例:
+  // {
+  //   "success": true,
+  //   "id": "post-123",
+  //   "affected_rows": 1,
+  //   "message": "操作成功"
+  // }
+  google.protobuf.Struct data = 1;
+
+  // source 字段用于标识处理此请求的插件类型。
+  string source = 2;
+}
+
+
+// =============================================================================
+//  元数据与能力描述消息体
+// =============================================================================
+
+// GetPluginInfo 请求体为空。
 message GetPluginInfoRequest {}
 
+// GetPluginInfoResponse 返回插件的元数据。
 message GetPluginInfoResponse {
-  // 插件的唯一名称, e.g., "sqlite-sales-plugin-v1"
+  // 插件的唯一名称, e.g., "official-sqlite-plugin"
   string name = 1;
   // 插件的版本号, e.g., "1.0.2"
   string version = 2;
-  // 插件处理的数据源类型, e.g., "sqlite", "mysql"
+  // 插件处理的数据源类型, e.g., "SQL", "Search", "Graph", "TimeSeries"
   string type = 3;
   // 这个插件实例负责处理的所有业务组 (biz_name) 列表
-  // 这是动态注册的关键！
+  // 这是网关注册和路由的关键！
   repeated string supported_biz_names = 4;
-  // 插件的详细描述，可以是 Markdown 格式
+  // 插件的详细描述，可以是 Markdown 格式，用于在UI中展示。
   string description_markdown = 5;
 }
 
-// --- 消息体定义 ---
 
-// 查询参数
-message QueryParam {
-  string field = 1;
-  string value = 2;
-  string logic = 3;
-  bool fuzzy = 4;
-}
-
-// 查询请求
-message QueryRequest {
-  string biz_name = 1;
-  string table_name = 2;
-  repeated QueryParam query_params = 3;
-  int32 page = 4;
-  int32 size = 5;
-  repeated string fields_to_return = 6;
-}
-
-// 查询结果
-message QueryResult {
-  // 使用 google.protobuf.ListValue 来表示 []map[string]any
-  google.protobuf.ListValue data = 1;
-  int64 total = 2;
-  string source = 3;
-}
-
-// --- Mutate 相关 ---
-message MutateRequest {
-  string biz_name = 1;
-  oneof operation {
-    CreateOperation create_op = 2;
-    UpdateOperation update_op = 3;
-    DeleteOperation delete_op = 4;
-  }
-}
-
-message CreateOperation {
-  string table_name = 1;
-  google.protobuf.Struct data = 2;
-}
-
-message UpdateOperation {
-  string table_name = 1;
-  google.protobuf.Struct data = 2;
-  repeated QueryParam filters = 3;
-}
-
-message DeleteOperation {
-  string table_name = 1;
-  repeated QueryParam filters = 2;
-}
-
-message MutateResult {
-  bool success = 1;
-  int64 rows_affected = 2;
-  string message = 3;
-}
-
-
-// --- Schema 相关 ---
+// --- Schema 相关 (结构相对固定，保持不变) ---
 message SchemaRequest {
   string biz_name = 1;
+  // table_name 是可选的，如果为空，插件应返回所有可访问表的 schema。
   string table_name = 2;
 }
 
 message FieldDescription {
   string name = 1;
-  string data_type = 2;
-  bool is_searchable = 3;
-  bool is_returnable = 4;
-  bool is_primary = 5;
-  string description = 6;
+  string data_type = 2;        // 例如: "TEXT", "INTEGER", "TIMESTAMP", "NESTED"
+  bool is_searchable = 3;    // 该字段是否可以作为查询条件
+  bool is_returnable = 4;    // 该字段是否可以在结果中返回
+  bool is_primary = 5;         // 是否是主键或唯一标识符
+  string description = 6;      // 字段的描述信息
 }
 
 message SchemaResult {
@@ -124,8 +166,9 @@ message TableSchema {
   repeated FieldDescription fields = 1;
 }
 
-// --- HealthCheck 相关 ---
+// --- HealthCheck 相关 (保持不变) ---
 message HealthCheckRequest {}
+
 message HealthCheckResponse {
   enum ServingStatus {
     UNKNOWN = 0;
