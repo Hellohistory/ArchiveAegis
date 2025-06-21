@@ -6,6 +6,7 @@ import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
+	"ArchiveAegis/internal/service/plugin_manager"
 	"ArchiveAegis/internal/transport/http/middleware"
 	"database/sql"
 	"errors"
@@ -24,7 +25,7 @@ import (
 type Dependencies struct {
 	Registry           map[string]port.DataSource
 	AdminConfigService port.QueryAdminConfigService
-	PluginManager      *service.PluginManager
+	PluginManager      *plugin_manager.PluginManager
 	RateLimiter        *aegmiddleware.BusinessRateLimiter
 	AuthDB             *sql.DB
 	SetupToken         string
@@ -667,7 +668,7 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 }
 
 // listAvailablePluginsHandler 返回所有可供安装的插件列表。
-func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func listAvailablePluginsHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		availablePlugins := pluginManager.GetAvailablePlugins()
 		if availablePlugins == nil {
@@ -678,7 +679,7 @@ func listAvailablePluginsHandler(pluginManager *service.PluginManager) gin.Handl
 }
 
 // installPluginHandler 处理安装特定版本插件的请求。这是一个简化的接口。
-func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func installPluginHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	type installPayload struct {
 		PluginID string `json:"plugin_id" binding:"required"`
 		Version  string `json:"version" binding:"required"`
@@ -698,7 +699,7 @@ func installPluginHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // listInstancesHandler 返回所有已配置的插件实例列表。
-func listInstancesHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instances, err := pluginManager.ListInstances()
 		if err != nil {
@@ -713,7 +714,7 @@ func listInstancesHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // deleteInstanceHandler 删除一个插件实例的配置。
-func deleteInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func deleteInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.DeleteInstance(instanceID); err != nil {
@@ -725,7 +726,7 @@ func deleteInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc
 }
 
 // startInstanceHandler 启动一个已配置的插件实例。
-func startInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.Start(instanceID); err != nil {
@@ -737,7 +738,7 @@ func startInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc 
 }
 
 // stopInstanceHandler 停止一个正在运行的插件实例。
-func stopInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.Stop(instanceID); err != nil {
@@ -749,7 +750,7 @@ func stopInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
 }
 
 // createInstanceHandler 创建一个新的插件实例配置。
-func createInstanceHandler(pluginManager *service.PluginManager) gin.HandlerFunc {
+func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	type createPayload struct {
 		DisplayName string `json:"display_name" binding:"required"`
 		PluginID    string `json:"plugin_id" binding:"required"`

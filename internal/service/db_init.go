@@ -22,7 +22,6 @@ func InitPlatformTables(db *sql.DB) error {
 		return fmt.Errorf("初始化全局设置表失败: %w", err)
 	}
 
-	// ✅ NEW: 调用新函数来初始化插件管理相关的表
 	if err := initPluginManagementTable(db); err != nil {
 		return fmt.Errorf("初始化插件管理表失败: %w", err)
 	}

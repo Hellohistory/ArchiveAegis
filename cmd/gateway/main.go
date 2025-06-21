@@ -7,6 +7,7 @@ import (
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/service/admin_config"
+	"ArchiveAegis/internal/service/plugin_manager"
 	"ArchiveAegis/internal/transport/http/router"
 	"context"
 	"crypto/rand"
@@ -33,8 +34,8 @@ const version = "v1.0.0-alpha5"
 
 // PluginManagementConfig 对应 config.yaml 中的 `plugin_management` 部分
 type PluginManagementConfig struct {
-	InstallDirectory string                     `mapstructure:"install_directory"`
-	Repositories     []service.RepositoryConfig `mapstructure:"repositories"`
+	InstallDirectory string                            `mapstructure:"install_directory"`
+	Repositories     []plugin_manager.RepositoryConfig `mapstructure:"repositories"`
 }
 
 // ServerConfig 对应 config.yaml 中的 `server` 部分
@@ -118,7 +119,7 @@ func main() {
 
 	dataSourceRegistry := make(map[string]port.DataSource)
 	closableAdapters := make([]io.Closer, 0)
-	pluginManager, err := service.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
+	pluginManager, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
 	if err != nil {
 		log.Fatalf("CRITICAL: 初始化 PluginManager 失败: %v", err)
 	}
