@@ -1,4 +1,3 @@
-# .github/workflows/proto-check.yml
 name: Build & Check Proto
 
 on:
@@ -52,15 +51,26 @@ jobs:
 
       - name: Run tests only on changed packages
         if: steps.changed_test_files.outputs.any_changed == 'true'
-        working-directory: .
         run: |
-          PKGS_TO_TEST=$(echo "${{ steps.changed_test_files.outputs.all_changed_files }}" | xargs -n1 dirname | sort -u)
+          # 1. 获取变更的测试文件目录，去重、添加 ./ 前缀，并过滤空行
+          PKGS_TO_TEST=$(echo "${{ steps.changed_test_files.outputs.all_changed_files }}" \
+            | xargs -n1 dirname \
+            | sort -u \
+            | sed 's|^|./|' \
+            | grep -v '^$')
+          
           echo "Found changes in the following test files:"
           echo "${{ steps.changed_test_files.outputs.all_changed_files }}"
           echo "=================================================="
           echo "Running tests for the following packages:"
           echo "$PKGS_TO_TEST"
-          go test -v -race $PKGS_TO_TEST
+          
+          # 2. 如果目录列表不为空，则执行测试；否则跳过
+          if [ -n "$PKGS_TO_TEST" ]; then
+            go test -v -race $PKGS_TO_TEST
+          else
+            echo "No changed packages to test."
+          fi
 
       - name: Check for Uncommitted Generated Files
         run: |
