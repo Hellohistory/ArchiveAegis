@@ -267,7 +267,7 @@ func (pm *PluginManager) Stop(instanceID string) error {
 		}
 	}
 	if bizToUnregister != "" {
-		delete(pm.dataSourceRegistry, bizToUnregister)
+		delete(pm.executorRegistry, bizToUnregister)
 		delete(pm.bizToInstanceID, bizToUnregister)
 		log.Printf("🔌 [PluginManager] 业务组 '%s' 已从网关注销。", bizToUnregister)
 	}
@@ -296,31 +296,30 @@ func (pm *PluginManager) StartHealthChecks(interval time.Duration) {
 // performAllHealthChecks 执行一轮完整的健康检查
 func (pm *PluginManager) performAllHealthChecks() {
 	pm.registryMu.RLock()
-	if len(pm.dataSourceRegistry) == 0 {
+	if len(pm.executorRegistry) == 0 {
 		pm.registryMu.RUnlock()
-		return // 没有正在运行的插件，直接返回
+		return
 	}
 
-	// 创建一个当前注册表的快照进行检查，避免长时间锁定
-	registrySnapshot := make(map[string]port.DataSource)
-	for bizName, ds := range pm.dataSourceRegistry {
-		registrySnapshot[bizName] = ds
+	registrySnapshot := make(map[string]port.Executor)
+	for bizName, executor := range pm.executorRegistry {
+		registrySnapshot[bizName] = executor
 	}
 	pm.registryMu.RUnlock()
 
 	log.Printf("🩺 [PluginManager] 开始对 %d 个正在运行的插件实例进行健康巡检...", len(registrySnapshot))
 
-	for bizName, dataSource := range registrySnapshot {
-		go pm.checkPluginHealth(bizName, dataSource) // 并发检查每个插件
+	for bizName, executor := range registrySnapshot {
+		go pm.checkPluginHealth(bizName, executor) // 并发检查每个插件
 	}
 }
 
 // checkPluginHealth 负责检查单个插件的健康状况并处理结果
-func (pm *PluginManager) checkPluginHealth(bizName string, ds port.DataSource) {
+func (pm *PluginManager) checkPluginHealth(bizName string, executor port.Executor) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := ds.HealthCheck(ctx); err != nil {
+	if err := executor.HealthCheck(ctx); err != nil {
 		// 健康检查失败！
 		log.Printf("🚨 [PluginManager] 检测到插件实例 (业务: %s) 健康检查失败: %v", bizName, err)
 
@@ -393,7 +392,7 @@ func (pm *PluginManager) registerPlugin(instanceID, bizName string, adapter *grp
 	pm.registryMu.Lock()
 	defer pm.registryMu.Unlock()
 
-	pm.dataSourceRegistry[bizName] = adapter
+	pm.executorRegistry[bizName] = adapter
 	pm.bizToInstanceID[bizName] = instanceID
 	*pm.closableAdapters = append(*pm.closableAdapters, adapter)
 
