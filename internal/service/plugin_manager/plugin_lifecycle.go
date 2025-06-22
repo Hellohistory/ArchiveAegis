@@ -409,7 +409,13 @@ func (pm *PluginManager) registerPlugin(instanceID, bizName string, adapter *grp
 func (pm *PluginManager) monitorPlugin(cmd *exec.Cmd, instanceID string) {
 	err := cmd.Wait()
 	log.Printf("🔌 [PluginManager] 插件 '%s' 进程已退出，错误: %v", instanceID, err)
-	_ = pm.Stop(instanceID)
+
+	// 判断：只有当前状态为 RUNNING 才调用 Stop()，防止状态覆盖
+	var status string
+	_ = pm.db.QueryRow("SELECT status FROM plugin_instances WHERE instance_id = ?", instanceID).Scan(&status)
+	if status == "RUNNING" {
+		_ = pm.Stop(instanceID)
+	}
 }
 
 // findFreePort 查找一个可用的 TCP 端口。
