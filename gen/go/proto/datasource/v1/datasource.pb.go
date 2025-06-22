@@ -473,7 +473,7 @@ func (x *GetPluginInfoResponse) GetDescriptionMarkdown() string {
 	return ""
 }
 
-// --- Schema 相关 (结构相对固定，保持不变) ---
+// --- Schema 相关 ---
 type SchemaRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	BizName string                 `protobuf:"bytes,1,opt,name=biz_name,json=bizName,proto3" json:"biz_name,omitempty"`
@@ -699,7 +699,7 @@ func (x *TableSchema) GetFields() []*FieldDescription {
 	return nil
 }
 
-// --- HealthCheck 相关 (保持不变) ---
+// --- HealthCheck 相关  ---
 type HealthCheckRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields

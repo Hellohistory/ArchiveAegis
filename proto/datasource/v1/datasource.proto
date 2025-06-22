@@ -31,7 +31,7 @@ service DataSource {
 }
 
 // =============================================================================
-//  核心通用消息体 (为通用性而重构)
+//  核心通用消息体
 // =============================================================================
 
 // QueryRequest 代表一次查询请求。
@@ -142,7 +142,7 @@ message GetPluginInfoResponse {
 }
 
 
-// --- Schema 相关 (结构相对固定，保持不变) ---
+// --- Schema 相关 ---
 message SchemaRequest {
   string biz_name = 1;
   // table_name 是可选的，如果为空，插件应返回所有可访问表的 schema。
@@ -166,7 +166,7 @@ message TableSchema {
   repeated FieldDescription fields = 1;
 }
 
-// --- HealthCheck 相关 (保持不变) ---
+// --- HealthCheck 相关  ---
 message HealthCheckRequest {}
 
 message HealthCheckResponse {
