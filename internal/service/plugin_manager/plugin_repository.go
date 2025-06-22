@@ -3,6 +3,7 @@ package plugin_manager
 
 import (
 	"ArchiveAegis/internal/core/domain"
+	"ArchiveAegis/internal/downloader"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 )
 
@@ -83,17 +86,44 @@ func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 
 // getSourceReader 根据 URL scheme 选择合适的下载器
 func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" {
-		absPath := filepath.Join(pm.rootDir, rawURL)
-		return os.Open(absPath)
+	// ---------------------- ① Windows 绝对路径 ----------------------------
+	if runtime.GOOS == "windows" && isWindowsAbsPath(rawURL) {
+		return os.Open(rawURL)
 	}
 
+	// ---------------------- ② 解析成 URL ---------------------------------
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		// 解析失败，则按「相对路径」处理（加入 rootDir）
+		abs := filepath.Join(pm.rootDir, rawURL)
+		return os.Open(abs)
+	}
+
+	// ---------------------- ③ 无 scheme：相对 / Unix 绝对路径 -------------
+	if u.Scheme == "" {
+		abs := filepath.Join(pm.rootDir, u.Path)
+		return os.Open(abs)
+	}
+
+	// ---------------------- ④ file:// 协议 --------------------------------
+	if u.Scheme == "file" {
+		localPath := downloader.ResolveLocalFilePath(u)
+		return os.Open(localPath)
+	}
+
+	// ---------------------- ⑤ 其它协议（http/https…） ----------------------
 	for _, d := range pm.downloaders {
 		if d.SupportsScheme(u.Scheme) {
 			return d.Download(u)
 		}
 	}
-
 	return nil, fmt.Errorf("没有找到支持协议 '%s' 的下载器", u.Scheme)
+}
+
+// ============================================================================
+// 🛠️ isWindowsAbsPath —— 判断字符串是否形如  C:\或 D:/ 开头
+// ============================================================================
+func isWindowsAbsPath(p string) bool {
+	absWin := regexp.MustCompile(`^[a-zA-Z]:[\\/].+`)
+	return absWin.MatchString(p)
 }
