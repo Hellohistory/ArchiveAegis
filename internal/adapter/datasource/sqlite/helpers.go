@@ -1,11 +1,9 @@
-// file: internal/adapter/datasource/sqlite/helpers.go
+// Package sqlite file: internal/adapter/datasource/sqlite/helpers.go
 package sqlite
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 )
@@ -158,56 +156,4 @@ func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 		}
 	}
 	return "WHERE " + strings.Join(conditions, " "), args, nil
-}
-
-// getTablesSet 返回数据库中所有用户表的集合
-func getTablesSet(db *sql.DB) (map[string]struct{}, error) {
-	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ?`, innerPrefix+"%")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	set := make(map[string]struct{})
-	for rows.Next() {
-		var tbl string
-		if err := rows.Scan(&tbl); err != nil {
-			log.Printf("警告: [DBManager] getTablesSet 扫描表名失败: %v", err)
-			continue
-		}
-		set[tbl] = struct{}{}
-	}
-	return set, rows.Err()
-}
-
-// detectTable 尝试检测数据库中的一个 "默认" 用户表
-func detectTable(db *sql.DB) (string, error) {
-	var name string
-	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ? ORDER BY name ASC LIMIT 1`, innerPrefix+"%").Scan(&name)
-	return name, err
-}
-
-// listColumns 返回指定表的所有物理列名
-func listColumns(db *sql.DB, tableName string) ([]string, error) {
-	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%q)`, tableName))
-	if err != nil {
-		return nil, fmt.Errorf("PRAGMA table_info for table %q 失败: %w", tableName, err)
-	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		var (
-			cid       int
-			colName   string
-			colType   string
-			notnull   int
-			dfltValue sql.NullString
-			pk        int
-		)
-		if err := rows.Scan(&cid, &colName, &colType, &notnull, &dfltValue, &pk); err != nil {
-			log.Printf("警告: [DBManager] listColumns for table '%s' 扫描列信息失败: %v", tableName, err)
-			continue
-		}
-		cols = append(cols, colName)
-	}
-	return cols, rows.Err()
 }

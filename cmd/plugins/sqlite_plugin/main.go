@@ -20,6 +20,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	_ "modernc.org/sqlite"
 )
@@ -27,100 +29,180 @@ import (
 //go:embed README.md
 var pluginDescription string
 
-const pluginVersion = "1.0.0"
+const pluginVersion = "2.0.0" // 版本升级以反映契约变更
 
-// server 结构体实现了 gRPC 生成的 DataSourceServer 接口
+// server 结构体现在实现了新版 DataSourceServer 接口
 type server struct {
 	datasourcev1.UnimplementedDataSourceServer
-	manager    port.DataSource
+	manager    port.DataSource // 底层 manager 保持不变，实现了核心业务逻辑
 	pluginName string
 	bizName    string
 }
 
-// GetPluginInfo 方法实现
+// GetPluginInfo 方法实现，现在返回更丰富的能力清单
 func (s *server) GetPluginInfo(ctx context.Context, req *datasourcev1.GetPluginInfoRequest) (*datasourcev1.GetPluginInfoResponse, error) {
 	slog.Info("插件收到 GetPluginInfo 请求")
 	return &datasourcev1.GetPluginInfoResponse{
 		Name:                s.pluginName,
 		Version:             pluginVersion,
-		Type:                "sqlite_plugin",
-		SupportedBizNames:   []string{s.bizName},
+		Type:                "SQL",
 		DescriptionMarkdown: pluginDescription,
+		ContractVersion: &datasourcev1.ApiVersion{
+			Major: 1, // 契约主版本
+			Minor: 0,
+			Patch: 0,
+		},
+		// 明确声明本插件支持的载荷类型
+		SupportedPayloads: []string{
+			_typeUrl(&datasourcev1.DataQueryRequest{}),
+			_typeUrl(&datasourcev1.DataMutateRequest{}),
+			_typeUrl(&datasourcev1.GetSchemaRequest{}),
+		},
+		SupportedCapabilities: []string{"AGGREGATION"}, // 示例能力
 	}, nil
 }
 
-// Query 方法现在处理通用的 gRPC 请求
-func (s *server) Query(ctx context.Context, req *datasourcev1.QueryRequest) (*datasourcev1.QueryResult, error) {
-	queryStruct := req.GetQuery()
-	if queryStruct == nil {
-		return nil, status.Error(codes.InvalidArgument, "查询体 (query) 不能为空")
+// Execute 是新契约下的统一执行入口
+func (s *server) Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error) {
+	slog.Info("插件收到 Execute 请求", "request_id", req.RequestId, "biz", req.BizName, "payload_type", req.Payload.TypeUrl)
+
+	var responsePayload proto.Message
+	var err error
+
+	// 关键：通过检查 Payload 的类型 URL 来决定执行何种操作
+	switch req.Payload.TypeUrl {
+	case _typeUrl(&datasourcev1.DataQueryRequest{}):
+		responsePayload, err = s.handleDataQuery(ctx, req)
+	case _typeUrl(&datasourcev1.DataMutateRequest{}):
+		responsePayload, err = s.handleDataMutate(ctx, req)
+	case _typeUrl(&datasourcev1.GetSchemaRequest{}):
+		responsePayload, err = s.handleGetSchema(ctx, req)
+	default:
+		err = status.Errorf(codes.Unimplemented, "不支持的载荷类型: %s", req.Payload.TypeUrl)
 	}
 
-	// 直接将收到的通用查询对象传递给核心 port.QueryRequest
+	// 根据处理结果构建统一的 ResponseEnvelope
+	if err != nil {
+		slog.Error("插件执行失败", "request_id", req.RequestId, "error", err)
+		st, _ := status.FromError(err)
+		return &datasourcev1.ResponseEnvelope{
+			RequestId: req.RequestId,
+			Status: &datasourcev1.Status{
+				Code:    int32(st.Code()),
+				Message: st.Message(),
+			},
+		}, nil // gRPC层面返回nil错误，业务错误在Status中体现
+	}
+
+	// 将成功的业务结果载荷打包到 Any 中
+	packedPayload, packErr := anypb.New(responsePayload)
+	if packErr != nil {
+		slog.Error("打包响应载荷失败", "request_id", req.RequestId, "error", packErr)
+		return &datasourcev1.ResponseEnvelope{
+			RequestId: req.RequestId,
+			Status: &datasourcev1.Status{
+				Code:    int32(codes.Internal),
+				Message: fmt.Sprintf("打包响应载荷失败: %v", packErr),
+			},
+		}, nil
+	}
+
+	return &datasourcev1.ResponseEnvelope{
+		RequestId: req.RequestId,
+		Status:    &datasourcev1.Status{Code: int32(codes.OK), Message: "Success"},
+		Payload:   packedPayload,
+	}, nil
+}
+
+func (s *server) HealthCheck(ctx context.Context, req *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
+	err := s.manager.HealthCheck(ctx)
+	if err != nil {
+		slog.Warn("插件健康检查失败", "error", err)
+		return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_NOT_SERVING}, nil
+	}
+	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
+}
+
+// =============================================================================
+//  具体载荷处理函数 (从旧的 RPC 方法迁移而来)
+// =============================================================================
+
+func (s *server) handleDataQuery(ctx context.Context, req *datasourcev1.RequestEnvelope) (proto.Message, error) {
+	// 1. 解包
+	var queryReq datasourcev1.DataQueryRequest
+	if err := req.Payload.UnmarshalTo(&queryReq); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "解包 DataQueryRequest 失败: %v", err)
+	}
+
+	// 2. 转换为核心业务请求
 	goReq := port.QueryRequest{
 		BizName: req.BizName,
-		Query:   queryStruct.AsMap(),
+		Query:   queryReq.GetQuery().AsMap(),
 	}
 
-	slog.Info("插件收到 Query 请求", "biz", req.BizName)
+	// 3. 调用核心逻辑
 	result, err := s.manager.Query(ctx, goReq)
 	if err != nil {
-		slog.Error("插件执行 Query 失败", "error", err)
 		return nil, status.Errorf(codes.Internal, "查询数据失败: %v", err)
 	}
 
-	// 将 manager 返回的通用 map 结果包装成 gRPC 的 Struct
+	// 4. 将结果转换为 Protobuf 消息
 	resultData, err := structpb.NewStruct(result.Data)
 	if err != nil {
-		slog.Error("转换查询结果为 structpb.Struct 失败", "error", err)
 		return nil, status.Errorf(codes.Internal, "序列化查询结果失败: %v", err)
 	}
 
-	return &datasourcev1.QueryResult{
-		Data:   resultData,
-		Source: result.Source,
-	}, nil
+	return &datasourcev1.DataQueryResult{Data: resultData}, nil
 }
 
-// Mutate 方法现在处理通用的 gRPC 请求
-func (s *server) Mutate(ctx context.Context, req *datasourcev1.MutateRequest) (*datasourcev1.MutateResult, error) {
-	slog.Info("插件收到 Mutate 请求", "biz", req.BizName, "operation", req.Operation)
-
-	// 直接将收到的通用载荷对象传递给核心 port.MutateRequest
-	goReq := port.MutateRequest{
-		BizName:   req.BizName,
-		Operation: req.Operation,
-		Payload:   req.GetPayload().AsMap(),
+func (s *server) handleDataMutate(ctx context.Context, req *datasourcev1.RequestEnvelope) (proto.Message, error) {
+	// 1. 解包
+	var mutateReq datasourcev1.DataMutateRequest
+	if err := req.Payload.UnmarshalTo(&mutateReq); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "解包 DataMutateRequest 失败: %v", err)
 	}
 
+	// 2. 转换为核心业务请求
+	goReq := port.MutateRequest{
+		BizName:   req.BizName,
+		Operation: mutateReq.Operation,
+		Payload:   mutateReq.GetPayload().AsMap(),
+	}
+
+	// 3. 调用核心逻辑
 	goResult, err := s.manager.Mutate(ctx, goReq)
 	if err != nil {
-		slog.Error("插件执行 Mutate 失败", "error", err)
 		return nil, status.Errorf(codes.Internal, "写操作失败: %v", err)
 	}
 
-	// 将 manager 返回的通用 map 结果包装成 gRPC 的 Struct
+	// 4. 将结果转换为 Protobuf 消息
 	resultData, err := structpb.NewStruct(goResult.Data)
 	if err != nil {
-		slog.Error("转换 Mutate 结果为 structpb.Struct 失败", "error", err)
 		return nil, status.Errorf(codes.Internal, "序列化写操作结果失败: %v", err)
 	}
-
-	return &datasourcev1.MutateResult{
-		Data:   resultData,
-		Source: goResult.Source,
-	}, nil
+	return &datasourcev1.DataMutateResult{Data: resultData}, nil
 }
 
-func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest) (*datasourcev1.SchemaResult, error) {
-	slog.Info("插件收到 GetSchema 请求", "biz", req.BizName)
-	goReq := port.SchemaRequest{BizName: req.BizName, TableName: req.TableName}
-
-	result, err := s.manager.GetSchema(ctx, goReq)
-	if err != nil {
-		return nil, err
+func (s *server) handleGetSchema(ctx context.Context, req *datasourcev1.RequestEnvelope) (proto.Message, error) {
+	// 1. 解包
+	var schemaReq datasourcev1.GetSchemaRequest
+	if err := req.Payload.UnmarshalTo(&schemaReq); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "解包 GetSchemaRequest 失败: %v", err)
 	}
 
+	// 2. 转换为核心业务请求
+	goReq := port.SchemaRequest{
+		BizName:   req.BizName,
+		TableName: schemaReq.TableName,
+	}
+
+	// 3. 调用核心逻辑
+	result, err := s.manager.GetSchema(ctx, goReq)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "获取 Schema 失败: %v", err)
+	}
+
+	// 4. 将结果转换为 Protobuf 消息
 	grpcTables := make(map[string]*datasourcev1.TableSchema)
 	for tableName, tableSchema := range result.Tables {
 		var grpcFields []*datasourcev1.FieldDescription
@@ -140,15 +222,12 @@ func (s *server) GetSchema(ctx context.Context, req *datasourcev1.SchemaRequest)
 	return &datasourcev1.SchemaResult{Tables: grpcTables}, nil
 }
 
-func (s *server) HealthCheck(ctx context.Context, req *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
-	err := s.manager.HealthCheck(ctx)
-	if err != nil {
-		slog.Warn("插件健康检查失败", "error", err)
-		return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_NOT_SERVING}, nil
-	}
-	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
+// _typeUrl 是一个辅助函数，用于获取 Protobuf 消息的类型 URL
+func _typeUrl(m proto.Message) string {
+	return "type.googleapis.com/" + string(m.ProtoReflect().Descriptor().FullName())
 }
 
+// main 函数基本保持不变，只是注册的服务不同
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
 
@@ -164,6 +243,7 @@ func main() {
 	}
 	slog.Info("🔌 插件启动中...", "name", *pluginNameFlag, "version", pluginVersion, "biz", *bizNameFlag, "port", *portFlag)
 
+	// --- 依赖初始化部分保持不变 ---
 	slog.Info("正在初始化依赖...")
 	authDbPath := filepath.Join(*instanceDir, "auth.db")
 	pluginSysDB, err := initAuthDB(authDbPath)
@@ -188,6 +268,7 @@ func main() {
 	}
 	slog.Info("成功初始化业务数据", "biz", *bizNameFlag)
 
+	// --- gRPC 服务启动部分保持不变 ---
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *portFlag))
 	if err != nil {
 		slog.Error("gRPC 服务监听端口失败", "port", *portFlag, "error", err)
@@ -201,13 +282,14 @@ func main() {
 		bizName:    *bizNameFlag,
 	})
 
-	slog.Info("✅ SQLite插件启动成功，开始提供服务...")
+	slog.Info("✅ SQLite插件(v2)启动成功，开始提供服务...")
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("gRPC 服务启动失败", "error", err)
 		os.Exit(1)
 	}
 }
 
+// initAuthDB 函数保持不变
 func initAuthDB(path string) (*sql.DB, error) {
 	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=ON&_synchronous=NORMAL", path)
 	db, err := sql.Open("sqlite", dsn)
