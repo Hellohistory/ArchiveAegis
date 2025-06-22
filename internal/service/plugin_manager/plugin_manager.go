@@ -1,4 +1,4 @@
-// Package plugin_manager file: internal/service/plugin_manager.go
+// Package plugin_manager file: internal/service/plugin_manager/plugin_manager.go
 package plugin_manager
 
 import (
@@ -17,18 +17,17 @@ import (
 )
 
 // PluginManager 负责管理插件的目录、安装和生命周期。
-// 它的具体方法实现被拆分到 plugin_repository.go, plugin_installer.go, 和 plugin_lifecycle.go 中。
 type PluginManager struct {
-	db                 *sql.DB
-	rootDir            string
-	installDir         string
-	repositories       []RepositoryConfig
-	catalog            map[string]domain.PluginManifest
-	downloaders        []downloader.Downloader
-	runningPlugins     map[string]*exec.Cmd
-	dataSourceRegistry map[string]port.DataSource
-	closableAdapters   *[]io.Closer
-	bizToInstanceID    map[string]string
+	db               *sql.DB
+	rootDir          string
+	installDir       string
+	repositories     []RepositoryConfig
+	catalog          map[string]domain.PluginManifest
+	downloaders      []downloader.Downloader
+	runningPlugins   map[string]*exec.Cmd
+	executorRegistry map[string]port.Executor // <--- 重大变更
+	closableAdapters *[]io.Closer
+	bizToInstanceID  map[string]string
 
 	// Mutexes
 	catalogMu        sync.RWMutex
@@ -44,7 +43,7 @@ type RepositoryConfig struct {
 }
 
 // NewPluginManager 创建一个新的插件管理器实例
-func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.DataSource, closers *[]io.Closer) (*PluginManager, error) {
+func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) { // <--- 参数类型变更
 	if db == nil {
 		return nil, errors.New("PluginManager 需要一个有效的数据库连接")
 	}
@@ -63,15 +62,15 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 	}
 
 	return &PluginManager{
-		db:                 db,
-		rootDir:            rootDir,
-		installDir:         installDir,
-		repositories:       repos,
-		catalog:            make(map[string]domain.PluginManifest),
-		downloaders:        supportedDownloaders,
-		runningPlugins:     make(map[string]*exec.Cmd),
-		dataSourceRegistry: registry,
-		closableAdapters:   closers,
-		bizToInstanceID:    make(map[string]string),
+		db:               db,
+		rootDir:          rootDir,
+		installDir:       installDir,
+		repositories:     repos,
+		catalog:          make(map[string]domain.PluginManifest),
+		downloaders:      supportedDownloaders,
+		runningPlugins:   make(map[string]*exec.Cmd),
+		executorRegistry: registry, // <--- 字段赋值变更
+		closableAdapters: closers,
+		bizToInstanceID:  make(map[string]string),
 	}, nil
 }

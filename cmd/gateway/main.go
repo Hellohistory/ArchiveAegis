@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "v1.0.0-alpha5"
+const version = "v1.0.0-alpha7"
 
 // =============================================================================
 // 配置与应用核心结构体
@@ -53,7 +53,7 @@ type Config struct {
 	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"`
 }
 
-// application 结构体作为我们应用的核心容器，持有所有依赖。
+// application 结构体现在持有 Executor 注册表
 type application struct {
 	config             Config
 	db                 *sql.DB
@@ -61,7 +61,7 @@ type application struct {
 	pluginManager      *plugin_manager.PluginManager
 	adminConfigService port.QueryAdminConfigService
 	rateLimiter        *aegmiddleware.BusinessRateLimiter
-	dataSourceRegistry map[string]port.DataSource
+	executorRegistry   map[string]port.Executor
 	closableAdapters   *[]io.Closer
 }
 
@@ -165,9 +165,10 @@ func build() (*application, error) {
 		return nil, err
 	}
 
-	dataSourceRegistry := make(map[string]port.DataSource)
+	executorRegistry := make(map[string]port.Executor) // 初始化新的注册表
 	closableAdapters := make([]io.Closer, 0)
-	pm, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, dataSourceRegistry, &closableAdapters)
+	// 将新的注册表传递给 PluginManager
+	pm, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, executorRegistry, &closableAdapters)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +190,7 @@ func build() (*application, error) {
 		pluginManager:      pm,
 		adminConfigService: adminConfigService,
 		rateLimiter:        rateLimiter,
-		dataSourceRegistry: dataSourceRegistry,
+		executorRegistry:   executorRegistry, // 使用新的注册表
 		closableAdapters:   &closableAdapters,
 	}
 
@@ -221,7 +222,7 @@ func (app *application) run() error {
 	// 创建 HTTP 路由器
 	httpRouter := router.New(
 		router.Dependencies{
-			Registry:           app.dataSourceRegistry,
+			Registry:           app.executorRegistry, // 注入新的注册表
 			AdminConfigService: app.adminConfigService,
 			PluginManager:      app.pluginManager,
 			RateLimiter:        app.rateLimiter,

@@ -1,8 +1,7 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/schema.go
+// file: internal/adapter/datasource/sqlite/manager_schema.go
 package sqlite
 
 import (
-	"ArchiveAegis/internal/core/port"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -15,14 +14,17 @@ import (
 )
 
 const (
-	innerPrefix         = "_archiveaegis_internal_"
+	// innerPrefix 定义了内部保留表的前缀，以避免被扫描
+	innerPrefix = "_archiveaegis_internal_"
+
+	// schemaCacheFilename 定义了物理 schema 缓存文件的名称
 	schemaCacheFilename = "schema_cache.json"
 )
 
 // dbPhysicalSchemaInfo 存储从单个数据库文件探测到的物理结构信息。
 type dbPhysicalSchemaInfo struct {
 	detectedDefaultTable string
-	allTablesAndColumns  map[string][]string
+	allTablesAndColumns  map[string][]string // <--- 修复 'allTablesAndColumns' 未定义的引用
 }
 
 // schemaFile 表示写入磁盘的 schema_cache.json 的整体 JSON 结构
@@ -32,51 +34,8 @@ type schemaFile struct {
 	Libs      map[string]map[string][]string `json:"libs"`   // 每库各表列
 }
 
-// GetSchema 实现 port.DataSource 接口，返回由管理员配置定义的、可供查询的 Schema。
-func (m *Manager) GetSchema(ctx context.Context, req port.SchemaRequest) (*port.SchemaResult, error) {
-	bizConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
-	if err != nil {
-		return nil, fmt.Errorf("获取业务 '%s' 的 schema 配置失败: %w", req.BizName, err)
-	}
-	if bizConfig == nil {
-		return nil, port.ErrBizNotFound
-	}
-
-	schemaTables := make(map[string][]port.FieldDescription)
-
-	for tableName, tableConfig := range bizConfig.Tables {
-		if req.TableName != "" && req.TableName != tableName {
-			continue
-		}
-
-		var fields []port.FieldDescription
-		for _, fieldSetting := range tableConfig.Fields {
-			fields = append(fields, port.FieldDescription{
-				Name:         fieldSetting.FieldName,
-				DataType:     fieldSetting.DataType,
-				IsSearchable: fieldSetting.IsSearchable,
-				IsReturnable: fieldSetting.IsReturnable,
-				IsPrimary:    false, // 暂未实现
-				Description:  "",    // 暂未实现
-			})
-		}
-		sort.Slice(fields, func(i, j int) bool {
-			return fields[i].Name < fields[j].Name
-		})
-		schemaTables[tableName] = fields
-	}
-
-	if req.TableName != "" && len(schemaTables) == 0 {
-		return nil, port.ErrTableNotFoundInBiz
-	}
-
-	return &port.SchemaResult{
-		Tables: schemaTables,
-	}, nil
-}
-
 // loadDBPhysicalSchema 从给定的数据库连接中加载其实际的物理表和列信息。
-func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInfo, error) {
+func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInfo, error) { // <--- 修复 'loadDBPhysicalSchema' 未定义的引用
 	autoDetectedDefaultTable, errDetect := detectTable(db)
 	if errDetect != nil && errDetect != sql.ErrNoRows {
 		log.Printf("警告: [DBManager] loadDBPhysicalSchema: 自动检测默认表失败: %v", errDetect)
@@ -112,7 +71,7 @@ func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInf
 
 // loadOrRefreshSchemaInternal 负责计算并更新 m.schema (业务组物理 Schema 并集缓存)。
 // 调用此方法前必须获取写锁 m.mu.Lock()。
-func (m *Manager) loadOrRefreshSchemaInternal() {
+func (m *Manager) loadOrRefreshSchemaInternal() { // <--- 修复 'loadOrRefreshSchemaInternal' 未定义的引用
 	log.Printf("信息: [DBManager] 开始刷新所有业务的 (物理) schema 并集缓存 (m.schema)...")
 	newCombinedSchemaState := make(map[string]map[string][]string)
 
@@ -177,11 +136,67 @@ func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[stri
 }
 
 // loadOrRefreshSchema 是 loadOrRefreshSchemaInternal 的公开包装器，带锁。
-func (m *Manager) loadOrRefreshSchema() {
+func (m *Manager) loadOrRefreshSchema() { // <--- 修复 'loadOrRefreshSchema' 未定义的引用
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.loadOrRefreshSchemaInternal()
 }
+
+// --- 以下为从 helpers.go 移动过来的 Schema 相关辅助函数 ---
+
+// getTablesSet 返回数据库中所有用户表的集合
+func getTablesSet(db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ?`, innerPrefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	set := make(map[string]struct{})
+	for rows.Next() {
+		var tbl string
+		if err := rows.Scan(&tbl); err != nil {
+			log.Printf("警告: [DBManager] getTablesSet 扫描表名失败: %v", err)
+			continue
+		}
+		set[tbl] = struct{}{}
+	}
+	return set, rows.Err()
+}
+
+// detectTable 尝试检测数据库中的一个 "默认" 用户表
+func detectTable(db *sql.DB) (string, error) {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ? ORDER BY name ASC LIMIT 1`, innerPrefix+"%").Scan(&name)
+	return name, err
+}
+
+// listColumns 返回指定表的所有物理列名
+func listColumns(db *sql.DB, tableName string) ([]string, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%q)`, tableName))
+	if err != nil {
+		return nil, fmt.Errorf("PRAGMA table_info for table %q 失败: %w", tableName, err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var (
+			cid       int
+			colName   string
+			colType   string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &colName, &colType, &notnull, &dfltValue, &pk); err != nil {
+			log.Printf("警告: [DBManager] listColumns for table '%s' 扫描列信息失败: %v", tableName, err)
+			continue
+		}
+		cols = append(cols, colName)
+	}
+	return cols, rows.Err()
+}
+
+// --- 以下为新加入的 Schema 缓存读写函数 ---
 
 // readSchemaCache 读取并反序列化 schema_cache.json。
 func readSchemaCache(bizDir string) (map[string][]string, map[string]map[string][]string, error) {

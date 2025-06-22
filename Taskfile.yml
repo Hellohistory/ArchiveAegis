@@ -2,40 +2,43 @@ version: '3'
 
 vars:
   PROTO_ROOT: proto
-  OUT_DIR: gen/go/proto
+  GO_OUT: gen/go/proto
+  PY_OUT: gen/python/proto
 
 tasks:
-  gen:
-    desc: 生成 Go + gRPC 代码到 {{.OUT_DIR}}/proto 目录
-    deps: [mkdir] # 依赖可以保留，确保根目录存在
+  # —— 1. 确保输出目录存在 ——
+  setup:
+    desc: 创建 Go/Python 输出目录
     cmds:
-      - cmd: |
-          protoc --proto_path={{.PROTO_ROOT}} \
-                 --go_out={{.OUT_DIR}} --go_opt=paths=source_relative \
-                 --go-grpc_out={{.OUT_DIR}} --go-grpc_opt=paths=source_relative \
-                 {{.PROTO_ROOT}}/datasource/v1/datasource.proto
-
-  mkdir:
-    desc: 确保根输出目录存在
-    cmds:
-      - cmd: mkdir -p {{.OUT_DIR}}
+      # macOS / Linux
+      - cmd: mkdir -p {{.GO_OUT}} {{.PY_OUT}}
         platforms: [linux, darwin]
-
-      - cmd: >
-          powershell -NoProfile -Command
-          "if (-not (Test-Path '{{.OUT_DIR}}')) {
-             New-Item -ItemType Directory -Path '{{.OUT_DIR}}' -Force | Out-Null
-           }"
+      # Windows PowerShell，用单引号防止变量被外层解析
+      - cmd: powershell -NoProfile -Command 'foreach ($d in @("{{.GO_OUT}}","{{.PY_OUT}}")) { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }'
         platforms: [windows]
 
-  clean:
-    desc: 清理生成目录
+  # —— 2. 生成 Go + Python gRPC 代码 ——
+  gen:
+    desc: 生成 Go 和 Python gRPC 代码
+    deps: [setup]
     cmds:
-      - cmd: rm -rf {{.OUT_DIR}}
+      # 2.1 Go 部分
+      - cmd: |
+          protoc -I {{.PROTO_ROOT}} \
+                 --go_out={{.GO_OUT}} --go_opt=paths=source_relative \
+                 --go-grpc_out={{.GO_OUT}} --go-grpc_opt=paths=source_relative \
+                 {{.PROTO_ROOT}}/datasource/v1/datasource.proto
+
+      # 2.2 Python 部分（去掉续行符号，保持一行参数）
+      - cmd: python -m grpc_tools.protoc -I {{.PROTO_ROOT}} --python_out={{.PY_OUT}} --grpc_python_out={{.PY_OUT}} {{.PROTO_ROOT}}/datasource/v1/datasource.proto
+
+  # —— 3. 清理生成目录 ——
+  clean:
+    desc: 删除 Go、Python 生成目录
+    cmds:
+      # macOS / Linux
+      - cmd: rm -rf {{.GO_OUT}} {{.PY_OUT}}
         platforms: [linux, darwin]
-      - cmd: >
-          powershell -NoProfile -Command
-          "if (Test-Path '{{.OUT_DIR}}') {
-             Remove-Item -Recurse -Force '{{.OUT_DIR}}' | Out-Null
-           }"
+      # Windows PowerShell，同样一行命令清理
+      - cmd: powershell -NoProfile -Command 'foreach ($d in @("{{.GO_OUT}}","{{.PY_OUT}}")) { if (Test-Path $d) { Remove-Item -Recurse -Force $d | Out-Null } }'
         platforms: [windows]

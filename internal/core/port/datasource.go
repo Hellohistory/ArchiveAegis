@@ -2,6 +2,7 @@
 package port
 
 import (
+	"ArchiveAegis/gen/go/proto/datasource/v1"
 	"context"
 	"errors"
 )
@@ -12,6 +13,17 @@ var (
 	ErrBizNotFound        = errors.New("指定的业务组未找到")
 	ErrTableNotFoundInBiz = errors.New("在当前业务组的配置中未找到指定的表")
 )
+
+type Executor interface {
+	// Execute 是与插件交互的唯一入口。
+	Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error)
+
+	// HealthCheck 检查执行器的健康状况。
+	HealthCheck(ctx context.Context) error
+
+	// Type 返回适配器的类型标识符。
+	Type() string
+}
 
 type QueryRequest struct {
 	BizName string
@@ -34,13 +46,16 @@ type MutateResult struct {
 	Source string
 }
 
-// SchemaRequest 定义获取数据源结构信息的请求
 type SchemaRequest struct {
 	BizName   string
 	TableName string
 }
 
-// FieldDescription 描述了一个字段的元数据 (V1版本)
+// =============================================================================
+//  标准化的业务模型 (与 Protobuf 定义对齐)
+// =============================================================================
+
+// FieldDescription 描述了一个字段的元数据
 type FieldDescription struct {
 	Name         string `json:"name"`
 	DataType     string `json:"data_type"`
@@ -53,22 +68,4 @@ type FieldDescription struct {
 // SchemaResult 定义了数据源结构信息的返回
 type SchemaResult struct {
 	Tables map[string][]FieldDescription `json:"tables"`
-}
-
-// DataSource 接口定义
-type DataSource interface {
-	// Query 执行一次数据查询 (Read)
-	Query(ctx context.Context, req QueryRequest) (*QueryResult, error)
-
-	// Mutate 执行一次数据变更 (Create, Update, Delete)
-	Mutate(ctx context.Context, req MutateRequest) (*MutateResult, error)
-
-	// GetSchema 获取数据源的结构信息
-	GetSchema(ctx context.Context, req SchemaRequest) (*SchemaResult, error)
-
-	// HealthCheck 检查数据源的健康状况
-	HealthCheck(ctx context.Context) error
-
-	// Type 返回适配器的类型标识符
-	Type() string
 }

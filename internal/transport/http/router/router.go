@@ -2,6 +2,7 @@
 package router
 
 import (
+	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/aegobserve"
 	"ArchiveAegis/internal/core/domain"
@@ -20,11 +21,17 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Dependencies 结构体用于将所有依赖项注入到路由器中
+// Dependencies 结构体现在注入新的 port.Executor 注册表
 type Dependencies struct {
-	Registry           map[string]port.DataSource
+	Registry           map[string]port.Executor
 	AdminConfigService port.QueryAdminConfigService
 	PluginManager      *plugin_manager.PluginManager
 	RateLimiter        *aegmiddleware.BusinessRateLimiter
@@ -52,24 +59,24 @@ func New(deps Dependencies) http.Handler {
 
 	authService := service.NewAuthenticator(deps.AuthDB)
 
-	v1 := router.Group("/api/v1")
+	apiV1 := router.Group("/api/v1")
 	{
 		// --- 系统/认证平面 ---
-		authGroup := v1.Group("/auth")
+		authGroup := apiV1.Group("/auth")
 		authGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			authGroup.POST("/login", loginHandler(deps.AuthDB))
 		}
 
-		systemGroup := v1.Group("/system")
+		systemGroup := apiV1.Group("/system")
 		systemGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
 		}
-		v1.GET("/system/status", statusHandler(deps.AuthDB))
+		apiV1.GET("/system/status", statusHandler(deps.AuthDB))
 
 		// --- 元数据/发现平面 ---
-		metaGroup := v1.Group("/meta")
+		metaGroup := apiV1.Group("/meta")
 		metaGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			metaGroup.GET("/biz", bizHandlerV1(deps.Registry))
@@ -77,16 +84,20 @@ func New(deps Dependencies) http.Handler {
 			metaGroup.GET("/presentations", presentationsHandlerV1(deps.AdminConfigService))
 		}
 
-		// --- 数据平面 ---
-		dataGroup := v1.Group("/data")
+		// --- 数据平面 (已重构) ---
+		dataGroup := apiV1.Group("/data")
 		dataGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
+			// 保留旧的端点作为便利的别名
 			dataGroup.POST("/query", queryHandlerV1(deps.Registry))
 			dataGroup.POST("/mutate", mutateHandlerV1(deps.Registry))
+
+			// 新增的统一执行端点
+			dataGroup.POST("/execute", executeHandler(deps.Registry))
 		}
 
 		// --- 控制平面 (Admin) ---
-		adminGroup := v1.Group("/admin")
+		adminGroup := apiV1.Group("/admin")
 		adminGroup.Use(authMiddleware(authService), requireAdmin(), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
 			adminGroup.GET("/metrics", gin.WrapH(aegobserve.Handler()))
@@ -135,7 +146,6 @@ func New(deps Dependencies) http.Handler {
 // Gin 中间件 (Middleware)
 // =============================================================================
 
-// WrapNetHTTP 是一个更简洁、惯用的方式来包装 net/http 中间件给 Gin 使用
 func WrapNetHTTP(middleware func(http.Handler) http.Handler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,57 +182,124 @@ func requireAdmin() gin.HandlerFunc {
 }
 
 // =============================================================================
-//  API 处理器 (Handlers)
+//  API 执行器辅助函数
 // =============================================================================
 
-// --- V1 数据平面处理器 (已更新以适配新协议) ---
+// executeAndRespond 是一个高阶辅助函数，处理通用的执行和响应逻辑
+func executeAndRespond(c *gin.Context, registry map[string]port.Executor, bizName string, reqPayload proto.Message, resPayload proto.Message) {
+	executor, exists := registry[bizName]
+	if !exists {
+		_ = c.Error(port.ErrBizNotFound)
+		return
+	}
 
-// queryHandlerV1 现在处理通用的查询请求
-func queryHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	// 请求体现在直接对应我们核心接口中的 port.QueryRequest
+	packedPayload, err := anypb.New(reqPayload)
+	if err != nil {
+		_ = c.Error(fmt.Errorf("打包请求载荷失败: %w", err))
+		return
+	}
+
+	envelope := &v1.RequestEnvelope{
+		RequestId: uuid.New().String(),
+		BizName:   bizName,
+		Payload:   packedPayload,
+	}
+
+	resEnvelope, err := executor.Execute(c.Request.Context(), envelope)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if resEnvelope.Status.Code != int32(codes.OK) {
+		_ = c.Error(status.Error(codes.Code(resEnvelope.Status.Code), resEnvelope.Status.Message))
+		return
+	}
+
+	var responseData any
+	if resEnvelope.Payload != nil {
+		// 尝试解包到提供的 resPayload 结构体中
+		if err := resEnvelope.Payload.UnmarshalTo(resPayload); err != nil {
+			_ = c.Error(fmt.Errorf("解包响应载荷失败: %w", err))
+			return
+		}
+		// 根据具体类型决定如何转换为JSON
+		switch p := resPayload.(type) {
+		case *v1.DataQueryResult:
+			responseData = p.GetData().AsMap()
+		case *v1.DataMutateResult:
+			responseData = p.GetData().AsMap()
+		default:
+			// 对于像 SchemaResult 这样结构良好的消息，直接让Gin序列化
+			responseData = p
+		}
+	} else {
+		// 如果 payload 为空，但操作成功，返回一个成功的空对象
+		responseData = gin.H{"success": true}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":   responseData,
+		"source": executor.Type(),
+	})
+}
+
+// =============================================================================
+//  数据平面处理器
+// =============================================================================
+
+func queryHandlerV1(registry map[string]port.Executor) gin.HandlerFunc {
 	type RequestBody struct {
 		BizName string                 `json:"biz_name" binding:"required"`
 		Query   map[string]interface{} `json:"query" binding:"required"`
 	}
-
 	return func(c *gin.Context) {
 		var reqBody RequestBody
 		if err := c.ShouldBindJSON(&reqBody); err != nil {
 			_ = c.Error(err)
 			return
 		}
-
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
-			return
-		}
-
-		// 直接构建通用的 port.QueryRequest
-		queryReq := port.QueryRequest{
-			BizName: reqBody.BizName,
-			Query:   reqBody.Query,
-		}
-
-		result, err := dataSource.Query(c.Request.Context(), queryReq)
+		queryStruct, err := structpb.NewStruct(reqBody.Query)
 		if err != nil {
-			slog.Error("queryHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
-			_ = c.Error(err)
+			_ = c.Error(fmt.Errorf("创建 query struct 失败: %w", err))
 			return
 		}
-		// 直接返回插件处理后的通用结果对象
-		c.JSON(http.StatusOK, result)
+		reqPayload := &v1.DataQueryRequest{Query: queryStruct}
+		resPayload := &v1.DataQueryResult{}
+		executeAndRespond(c, registry, reqBody.BizName, reqPayload, resPayload)
 	}
 }
 
-// mutateHandlerV1 现在处理通用的写操作请求
-func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
-	// 请求体现在直接对应我们核心接口中的 port.MutateRequest
+func mutateHandlerV1(registry map[string]port.Executor) gin.HandlerFunc {
 	type RequestBody struct {
 		BizName   string                 `json:"biz_name" binding:"required"`
 		Operation string                 `json:"operation" binding:"required"`
 		Payload   map[string]interface{} `json:"payload" binding:"required"`
 	}
+	return func(c *gin.Context) {
+		var reqBody RequestBody
+		if err := c.ShouldBindJSON(&reqBody); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		slog.Info("审计日志: 收到 Mutate 请求", "user_id", service.ClaimFrom(c.Request).ID, "biz_name", reqBody.BizName, "operation", reqBody.Operation)
+		payloadStruct, err := structpb.NewStruct(reqBody.Payload)
+		if err != nil {
+			_ = c.Error(fmt.Errorf("创建 payload struct 失败: %w", err))
+			return
+		}
+		reqPayload := &v1.DataMutateRequest{Operation: reqBody.Operation, Payload: payloadStruct}
+		resPayload := &v1.DataMutateResult{}
+		executeAndRespond(c, registry, reqBody.BizName, reqPayload, resPayload)
+	}
+}
+
+// executeHandler 是新的统一执行器端点
+func executeHandler(registry map[string]port.Executor) gin.HandlerFunc {
+	type RequestBody struct {
+		BizName string                 `json:"biz_name" binding:"required"`
+		Command string                 `json:"command" binding:"required"`
+		Payload map[string]interface{} `json:"payload"`
+	}
 
 	return func(c *gin.Context) {
 		var reqBody RequestBody
@@ -231,44 +308,47 @@ func mutateHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 			return
 		}
 
-		dataSource, exists := registry[reqBody.BizName]
-		if !exists {
-			_ = c.Error(port.ErrBizNotFound)
+		var reqPayload proto.Message
+		var resPayload proto.Message
+
+		// 根据 Command 字符串，决定创建哪种具体的 Protobuf 消息
+		switch reqBody.Command {
+		case "DataQuery":
+			queryStruct, err := structpb.NewStruct(reqBody.Payload)
+			if err != nil {
+				_ = c.Error(fmt.Errorf("为 DataQuery 创建 payload struct 失败: %w", err))
+				return
+			}
+			reqPayload = &v1.DataQueryRequest{Query: queryStruct}
+			resPayload = &v1.DataQueryResult{}
+		case "DataMutate":
+			op, _ := reqBody.Payload["operation"].(string)
+			data, _ := reqBody.Payload["data"].(map[string]interface{}) // 假设 mutate payload 的数据在 "data" 字段
+			dataStruct, err := structpb.NewStruct(data)
+			if err != nil {
+				_ = c.Error(fmt.Errorf("为 DataMutate 创建 data struct 失败: %w", err))
+				return
+			}
+			reqPayload = &v1.DataMutateRequest{Operation: op, Payload: dataStruct}
+			resPayload = &v1.DataMutateResult{}
+		case "GetSchema":
+			tableName, _ := reqBody.Payload["table_name"].(string)
+			reqPayload = &v1.GetSchemaRequest{TableName: tableName}
+			resPayload = &v1.SchemaResult{}
+		default:
+			_ = c.Error(status.Errorf(codes.Unimplemented, "不支持的命令: %s", reqBody.Command))
 			return
 		}
 
-		slog.Info(
-			"审计日志: 收到 Mutate 请求",
-			"user_id", service.ClaimFrom(c.Request).ID,
-			"biz_name", reqBody.BizName,
-			"operation", reqBody.Operation,
-		)
-
-		// 直接构建通用的 port.MutateRequest
-		mutateReq := port.MutateRequest{
-			BizName:   reqBody.BizName,
-			Operation: reqBody.Operation,
-			Payload:   reqBody.Payload,
-		}
-
-		result, err := dataSource.Mutate(c.Request.Context(), mutateReq)
-		if err != nil {
-			slog.Error("mutateHandlerV1 执行失败", "biz", reqBody.BizName, "error", err)
-			_ = c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, result)
+		executeAndRespond(c, registry, reqBody.BizName, reqPayload, resPayload)
 	}
 }
 
 // =============================================================================
-//  V1 版本的新/重构处理器 (New/Refactored V1 Handlers)
+//  元数据平面处理器
 // =============================================================================
 
-// --- V1 元数据平面处理器 ---
-
-// bizHandlerV1 返回所有已注册的业务组名称
-func bizHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+func bizHandlerV1(registry map[string]port.Executor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizNames := make([]string, 0, len(registry))
 		for name := range registry {
@@ -279,27 +359,15 @@ func bizHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
 	}
 }
 
-// schemaHandlerV1 返回指定业务组的 Schema 信息
-func schemaHandlerV1(registry map[string]port.DataSource) gin.HandlerFunc {
+func schemaHandlerV1(registry map[string]port.Executor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Param("bizName")
-		dataSource, exists := registry[bizName]
-		if !exists {
-			_ = c.Error(fmt.Errorf("业务组 '%s' 未找到或未注册", bizName)) // 使用错误中间件处理
-			return
-		}
-
-		schema, err := dataSource.GetSchema(c.Request.Context(), port.SchemaRequest{BizName: bizName})
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"data": schema})
+		reqPayload := &v1.GetSchemaRequest{TableName: c.Query("tableName")}
+		resPayload := &v1.SchemaResult{}
+		executeAndRespond(c, registry, bizName, reqPayload, resPayload)
 	}
 }
 
-// presentationsHandlerV1 返回指定业务组和表的默认表现层（视图）配置
 func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bizName := c.Query("biz")
@@ -325,7 +393,6 @@ func presentationsHandlerV1(configService port.QueryAdminConfigService) gin.Hand
 //  系统与认证处理器
 // =============================================================================
 
-// statusHandler 返回系统状态，用于前端判断是否需要进入安装流程
 func statusHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if service.UserCount(db) > 0 {
@@ -336,7 +403,6 @@ func statusHandler(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// loginHandler 处理用户登录请求
 func loginHandler(db *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
@@ -349,7 +415,6 @@ func loginHandler(db *sql.DB) gin.HandlerFunc {
 		}
 		id, role, ok := service.CheckUser(db, req.User, req.Pass)
 		if !ok {
-			// 对于登录失败，我们直接返回401，不通过错误中间件
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码无效"})
 			return
 		}
@@ -362,7 +427,6 @@ func loginHandler(db *sql.DB) gin.HandlerFunc {
 	}
 }
 
-// setupHandler 处理首次安装时的管理员创建请求
 func setupHandler(db *sql.DB, token string, deadline time.Time) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodGet {
@@ -616,7 +680,6 @@ func adminUpdateTablePermissionsHandler(configService port.QueryAdminConfigServi
 	}
 }
 
-// listAvailablePluginsHandler 返回所有可供安装的插件列表。
 func listAvailablePluginsHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		availablePlugins := pluginManager.GetAvailablePlugins()
@@ -627,7 +690,6 @@ func listAvailablePluginsHandler(pluginManager *plugin_manager.PluginManager) gi
 	}
 }
 
-// installPluginHandler 处理安装特定版本插件的请求。这是一个简化的接口。
 func installPluginHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	type installPayload struct {
 		PluginID string `json:"plugin_id" binding:"required"`
@@ -647,7 +709,6 @@ func installPluginHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
-// listInstancesHandler 返回所有已配置的插件实例列表。
 func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instances, err := pluginManager.ListInstances()
@@ -662,7 +723,6 @@ func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
-// deleteInstanceHandler 删除一个插件实例的配置。
 func deleteInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
@@ -674,7 +734,6 @@ func deleteInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Hand
 	}
 }
 
-// startInstanceHandler 启动一个已配置的插件实例。
 func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
@@ -686,7 +745,6 @@ func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
-// stopInstanceHandler 停止一个正在运行的插件实例。
 func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
@@ -698,15 +756,14 @@ func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Handle
 	}
 }
 
-// createInstanceHandler 创建一个新的插件实例配置。
 func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
-	type createPayload struct {
-		DisplayName string `json:"display_name" binding:"required"`
-		PluginID    string `json:"plugin_id" binding:"required"`
-		Version     string `json:"version" binding:"required"`
-		BizName     string `json:"biz_name" binding:"required"`
-	}
 	return func(c *gin.Context) {
+		type createPayload struct {
+			DisplayName string `json:"display_name" binding:"required"`
+			PluginID    string `json:"plugin_id" binding:"required"`
+			Version     string `json:"version" binding:"required"`
+			BizName     string `json:"biz_name" binding:"required"`
+		}
 		var payload createPayload
 		if err := c.ShouldBindJSON(&payload); err != nil {
 			_ = c.Error(err)

@@ -154,43 +154,55 @@ func unzip(src, dest string) error {
 	}
 
 	for _, f := range r.File {
-		cleanName := filepath.Clean(f.Name)
-		fpath := filepath.Join(dest, cleanName)
-
-		if relPath, err := filepath.Rel(dest, fpath); err != nil || strings.HasPrefix(relPath, "..") {
-			return fmt.Errorf("检测到潜在非法路径 (文件: %s)", f.Name)
-		}
-
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(fpath, 0755); err != nil {
-				return fmt.Errorf("创建目录失败 (%s): %w", fpath, err)
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
-			return fmt.Errorf("创建文件父目录失败 (%s): %w", fpath, err)
-		}
-
-		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fallbackMode(f.Mode()))
-		if err != nil {
-			return fmt.Errorf("创建文件失败 (%s): %w", fpath, err)
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return fmt.Errorf("打开 zip 内部文件失败 (%s): %w", f.Name, err)
-		}
-
-		_, err = io.Copy(outFile, rc)
-		outFile.Close()
-		rc.Close()
-
-		if err != nil {
-			return fmt.Errorf("写入文件失败 (%s): %w", fpath, err)
+		if err := extractFile(f, dest); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// extractFile 解压单个文件或目录
+func extractFile(f *zip.File, dest string) error {
+	cleanName := filepath.Clean(f.Name)
+	fpath := filepath.Join(dest, cleanName)
+
+	// 防止 Zip Slip 攻击（路径穿越）
+	if relPath, err := filepath.Rel(dest, fpath); err != nil || strings.HasPrefix(relPath, "..") {
+		return fmt.Errorf("检测到潜在非法路径 (文件: %s)", f.Name)
+	}
+
+	// 目录处理
+	if f.FileInfo().IsDir() {
+		if err := os.MkdirAll(fpath, 0755); err != nil {
+			return fmt.Errorf("创建目录失败 (%s): %w", fpath, err)
+		}
+		return nil
+	}
+
+	// 确保目标文件父目录存在
+	if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
+		return fmt.Errorf("创建文件父目录失败 (%s): %w", fpath, err)
+	}
+
+	// 打开目标文件
+	outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fallbackMode(f.Mode()))
+	if err != nil {
+		return fmt.Errorf("创建文件失败 (%s): %w", fpath, err)
+	}
+	defer outFile.Close()
+
+	// 打开 zip 中的源文件
+	rc, err := f.Open()
+	if err != nil {
+		return fmt.Errorf("打开 zip 内部文件失败 (%s): %w", f.Name, err)
+	}
+	defer rc.Close()
+
+	// 拷贝文件内容
+	if _, err := io.Copy(outFile, rc); err != nil {
+		return fmt.Errorf("写入文件失败 (%s): %w", fpath, err)
+	}
+
 	return nil
 }
 
