@@ -6,6 +6,7 @@ import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -20,62 +21,128 @@ import (
 )
 
 // CreateInstance 在数据库中创建插件实例的配置。
-func (pm *PluginManager) CreateInstance(displayName, pluginID, version, bizName string) (string, error) {
+func (pm *PluginManager) CreateInstance(
+	displayName, pluginID, version, bizName string,
+) (string, error) {
+
 	var count int
-	if err := pm.db.QueryRow("SELECT COUNT(*) FROM plugin_instances WHERE biz_name = ?", bizName).Scan(&count); err != nil {
+	if err := pm.db.
+		QueryRow("SELECT COUNT(*) FROM plugin_instances WHERE biz_name = ?", bizName).
+		Scan(&count); err != nil {
 		return "", fmt.Errorf("检查 biz_name 时数据库出错: %w", err)
 	}
 	if count > 0 {
 		return "", fmt.Errorf("业务组名称 (biz_name) '%s' 已被其他插件实例占用", bizName)
 	}
 
-	port, err := findFreePort()
+	freePort, err := findFreePort()
 	if err != nil {
 		return "", fmt.Errorf("寻找可用端口失败: %w", err)
 	}
 
 	instanceID := uuid.New().String()
-	query := `INSERT INTO plugin_instances (instance_id, display_name, plugin_id, version, biz_name, Port) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = pm.db.Exec(query, instanceID, displayName, pluginID, version, bizName, port)
-	if err != nil {
+	const insert = `
+        INSERT INTO plugin_instances
+            (instance_id, display_name, plugin_id, version, biz_name, port)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `
+	if _, err := pm.db.Exec(
+		insert, instanceID, displayName, pluginID, version, bizName, freePort,
+	); err != nil {
 		return "", fmt.Errorf("创建插件实例配置失败: %w", err)
 	}
 
-	log.Printf("✅ [PluginManager] 已成功创建插件实例 '%s' (ID: %s)，绑定到业务组 '%s'。", displayName, instanceID, bizName)
+	log.Printf(
+		"✅ [PluginManager] 已成功创建插件实例 '%s' (ID: %s)，绑定到业务组 '%s'。",
+		displayName, instanceID, bizName,
+	)
 	return instanceID, nil
 }
 
-// ListInstances 从数据库查询所有已配置的插件实例列表，并校准状态
-func (pm *PluginManager) ListInstances() ([]domain.PluginInstance, error) {
-	rows, err := pm.db.Query(`SELECT instance_id, display_name, plugin_id, version, biz_name, port, status, enabled, created_at, last_started_at FROM plugin_instances`)
+// ListInstances 查询所有插件实例并校准状态。
+// 返回值 error 将综合 rows.Err() 与 rows.Close() 的错误。
+func (pm *PluginManager) ListInstances() (_ []domain.PluginInstance, retErr error) {
+	// ---- 1. 查询数据库 ----
+	const q = `SELECT instance_id, display_name, plugin_id, version,
+	                  biz_name, port, status, enabled, created_at, last_started_at
+	             FROM plugin_instances`
+	rows, err := pm.db.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("查询插件实例列表失败: %w", err)
 	}
-	defer rows.Close()
+
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && retErr == nil { // 若主流程未出错
+			retErr = fmt.Errorf("关闭 rows 失败: %w", cerr)
+		}
+	}()
+
+	runningSet := pm.snapshotRunning()
 
 	var instances []domain.PluginInstance
 	for rows.Next() {
-		var p domain.PluginInstance
-		if err := rows.Scan(&p.InstanceID, &p.DisplayName, &p.PluginID, &p.Version, &p.BizName, &p.Port, &p.Status, &p.Enabled, &p.CreatedAt, &p.LastStartedAt); err != nil {
+		var inst domain.PluginInstance
+		if err := rows.Scan(
+			&inst.InstanceID, &inst.DisplayName, &inst.PluginID, &inst.Version,
+			&inst.BizName, &inst.Port, &inst.Status, &inst.Enabled,
+			&inst.CreatedAt, &inst.LastStartedAt,
+		); err != nil {
 			log.Printf("⚠️ [PluginManager] 扫描插件实例行失败，已跳过: %v", err)
 			continue
 		}
-
-		pm.runningPluginsMu.Lock()
-		if _, isRunning := pm.runningPlugins[p.InstanceID]; isRunning {
-			p.Status = "RUNNING"
-		} else if p.Status == "RUNNING" {
-			p.Status = "STOPPED"
-			_, errDb := pm.db.Exec(`UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?`, p.InstanceID)
-			if errDb != nil {
-				log.Printf("⚠️ [PluginManager] 插件实例状态修正失败 (实例: %s): %v", p.InstanceID, errDb)
-			}
-		}
-		pm.runningPluginsMu.Unlock()
-		instances = append(instances, p)
+		pm.reconcileStatus(&inst, runningSet)
+		instances = append(instances, inst)
 	}
 
-	return instances, rows.Err()
+	if errIter := rows.Err(); errIter != nil {
+		return nil, errIter // retErr 仍为 nil，defer 可继续覆盖
+	}
+
+	return instances, nil
+}
+
+/*
+snapshotRunning 拷贝一份当前正在运行实例的集合，避免在主循环内反复加锁。
+集合类型用 map[string]struct{}，查找 O(1)。
+*/
+func (pm *PluginManager) snapshotRunning() map[string]struct{} {
+	pm.runningPluginsMu.Lock()
+	defer pm.runningPluginsMu.Unlock()
+
+	clone := make(map[string]struct{}, len(pm.runningPlugins))
+	for id := range pm.runningPlugins {
+		clone[id] = struct{}{}
+	}
+	return clone
+}
+
+/*
+reconcileStatus 根据运行快照修正单条实例的状态，并在必要时回写数据库。
+*/
+func (pm *PluginManager) reconcileStatus(
+	inst *domain.PluginInstance, running map[string]struct{},
+) {
+	const (
+		statusRunning = "RUNNING"
+		statusStopped = "STOPPED"
+	)
+
+	if _, ok := running[inst.InstanceID]; ok {
+		inst.Status = statusRunning
+		return
+	}
+
+	// 数据库存的是 RUNNING，但实际上进程不在 → 自动修正为 STOPPED
+	if inst.Status == statusRunning {
+		inst.Status = statusStopped
+		if _, err := pm.db.Exec(
+			`UPDATE plugin_instances SET status = ? WHERE instance_id = ?`,
+			statusStopped, inst.InstanceID,
+		); err != nil {
+			log.Printf("⚠️ [PluginManager] 插件实例状态修正失败 (实例: %s): %v",
+				inst.InstanceID, err)
+		}
+	}
 }
 
 // DeleteInstance 从数据库中删除一个插件实例的配置。
@@ -285,56 +352,83 @@ func (pm *PluginManager) checkPluginHealth(bizName string, ds port.DataSource) {
 
 // registerAndMonitorPlugin 连接到新启动的插件，将其注册到网关，并监控其生命周期。
 func (pm *PluginManager) registerAndMonitorPlugin(cmd *exec.Cmd, instanceID, address, bizName string) {
-	var adapter *grpc_client.ClientAdapter
-	var err error
-	maxRetries := 5
-	retryDelay := 2 * time.Second
-
-	for i := 0; i < maxRetries; i++ {
-		log.Printf("ℹ️ [PluginManager] 正在尝试连接到实例 '%s' (%s), 第 %d/%d 次...", instanceID, address, i+1, maxRetries)
-		adapter, err = grpc_client.New(address)
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_, err = adapter.GetPluginInfo(ctx)
-			cancel()
-			if err == nil {
-				log.Printf("✅ [PluginManager] 成功连接到实例 '%s'!", instanceID)
-				break
-			}
-		}
-		if i < maxRetries-1 {
-			time.Sleep(retryDelay)
-		}
-	}
+	adapter, err := pm.tryConnectPlugin(address, instanceID)
 	if err != nil {
-		log.Printf("⚠️ [PluginManager] 在 %d 次尝试后，仍无法连接到实例 '%s' 并获取信息: %v", maxRetries, instanceID, err)
+		log.Printf("⚠️ [PluginManager] 插件 '%s' 无法连接: %v", instanceID, err)
 		_ = pm.Stop(instanceID)
 		return
 	}
 
+	pm.registerPlugin(instanceID, bizName, adapter)
+
+	// 异步监控插件生命周期，避免阻塞主流程
+	go pm.monitorPlugin(cmd, instanceID)
+}
+
+// tryConnectPlugin 尝试连接插件服务，最多重试 5 次，采用指数退避策略。
+func (pm *PluginManager) tryConnectPlugin(address, instanceID string) (*grpc_client.ClientAdapter, error) {
+	var adapter *grpc_client.ClientAdapter
+	var err error
+	baseDelay := time.Second
+
+	for i := 0; i < 5; i++ {
+		log.Printf("ℹ️ [PluginManager] 尝试连接插件 '%s' (%s)，第 %d 次...", instanceID, address, i+1)
+
+		adapter, err = grpc_client.New(address)
+		if err == nil {
+			// 使用超时上下文验证服务存活
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = adapter.GetPluginInfo(ctx)
+			cancel()
+			if err == nil {
+				log.Printf("✅ [PluginManager] 成功连接插件 '%s'", instanceID)
+				return adapter, nil
+			}
+		}
+
+		// 指数退避延迟（1s, 2s, 4s, 8s, 16s）
+		time.Sleep(baseDelay << i)
+	}
+
+	return nil, fmt.Errorf("连接插件 '%s' 失败（%v）", instanceID, err)
+}
+
+// registerPlugin 将插件适配器注册进插件管理器内部注册表。
+func (pm *PluginManager) registerPlugin(instanceID, bizName string, adapter *grpc_client.ClientAdapter) {
 	pm.registryMu.Lock()
+	defer pm.registryMu.Unlock()
+
 	pm.dataSourceRegistry[bizName] = adapter
 	pm.bizToInstanceID[bizName] = instanceID
 	*pm.closableAdapters = append(*pm.closableAdapters, adapter)
-	pm.registryMu.Unlock()
 
-	log.Printf("✅ [PluginManager] 实例 '%s' 现已在地址 '%s' 上运行，并为业务组 '%s' 提供服务。", instanceID, address, bizName)
+	log.Printf("✅ [PluginManager] 插件 '%s' 注册完成，业务组 '%s' 正在使用。", instanceID, bizName)
+}
 
-	err = cmd.Wait()
-	log.Printf("🔌 [PluginManager] 检测到实例 '%s' 进程已退出，错误: %v。", instanceID, err)
+// monitorPlugin 监控插件进程，检测退出后做清理。
+func (pm *PluginManager) monitorPlugin(cmd *exec.Cmd, instanceID string) {
+	err := cmd.Wait()
+	log.Printf("🔌 [PluginManager] 插件 '%s' 进程已退出，错误: %v", instanceID, err)
 	_ = pm.Stop(instanceID)
 }
 
-// findFreePort 查找一个可用的 TCP 端口
-func findFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+// findFreePort 查找一个可用的 TCP 端口。
+// 仅返回端口号，存在被他人抢占的竞态风险；保持向后兼容不做接口扩展。
+func findFreePort() (port int, err error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("监听端口失败: %w", err)
 	}
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
+
+	defer func() {
+		if cerr := l.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("关闭监听器失败: %w", cerr)
+		}
+	}()
+
+	tcpAddr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0, errors.New("监听地址不是 *net.TCPAddr")
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return tcpAddr.Port, nil
 }
