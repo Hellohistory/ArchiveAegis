@@ -4,25 +4,27 @@ package downloader
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 )
 
-// Downloader 是所有下载器都必须实现的接口。
+// Downloader =============================================================================
+//
+//	Downloader 接口 —— 各协议下载器统一规格
+//
+// =============================================================================
 type Downloader interface {
-	// SupportsScheme 支持的协议 (e.g., "http", "https", "file")
 	SupportsScheme(scheme string) bool
-	// Download 执行下载，返回一个可读取文件内容的对象
 	Download(sourceURL *url.URL) (io.ReadCloser, error)
 }
 
+// HTTPDownloader =============================================================================
+//
+//	HTTPDownloader —— 处理 http / https 协议
+//
 // =============================================================================
-// HTTPDownloader —— 支持 http/https 协议的下载器实现
-// =============================================================================
-
 type HTTPDownloader struct {
 	Client *http.Client
 }
@@ -36,32 +38,30 @@ func (d *HTTPDownloader) Download(sourceURL *url.URL) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("HTTP请求失败: %w", err)
 	}
-
-	// 非 200 响应处理
 	if resp.StatusCode != http.StatusOK {
-		defer func() {
-			if err := resp.Body.Close(); err != nil {
-				log.Printf("警告: 关闭非200响应的Body失败: %v", err)
-			}
-		}()
+		defer resp.Body.Close()
 
 		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
 		if readErr != nil {
-			return nil, fmt.Errorf("HTTP请求失败: 状态码 %d，URL: %s，读取响应体失败: %v",
-				resp.StatusCode, sourceURL.String(), readErr)
+			return nil, fmt.Errorf(
+				"HTTP请求失败: 状态码 %d，URL: %s，读取响应体失败: %v",
+				resp.StatusCode, sourceURL.String(), readErr,
+			)
 		}
-		return nil, fmt.Errorf("HTTP请求失败: 状态码 %d，URL: %s，响应内容: %s",
-			resp.StatusCode, sourceURL.String(), string(bodyBytes))
+		return nil, fmt.Errorf(
+			"HTTP请求失败: 状态码 %d，URL: %s，响应内容: %s",
+			resp.StatusCode, sourceURL.String(), string(bodyBytes),
+		)
 	}
-
-	// 调用方应自行 Close resp.Body
+	// 👉 调用方负责 Close
 	return resp.Body, nil
 }
 
+// FileDownloader =============================================================================
+//
+//	FileDownloader —— 处理 file:// 协议
+//
 // =============================================================================
-// FileDownloader —— 支持 file:// 协议的下载器实现（本地文件复制）
-// =============================================================================
-
 type FileDownloader struct{}
 
 func (d *FileDownloader) SupportsScheme(scheme string) bool {
@@ -69,7 +69,7 @@ func (d *FileDownloader) SupportsScheme(scheme string) bool {
 }
 
 func (d *FileDownloader) Download(sourceURL *url.URL) (io.ReadCloser, error) {
-	path := resolveLocalFilePath(sourceURL)
+	path := ResolveLocalFilePath(sourceURL)
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("无法打开本地文件 '%s': %w", path, err)
@@ -77,12 +77,20 @@ func (d *FileDownloader) Download(sourceURL *url.URL) (io.ReadCloser, error) {
 	return file, nil
 }
 
-// resolveLocalFilePath 将 file:// URL 转换为本地操作系统路径（兼容 Windows）
-func resolveLocalFilePath(sourceURL *url.URL) string {
+// ResolveLocalFilePath =============================================================================
+//
+//	ResolveLocalFilePath —— 【导出】file:// → 本地路径（跨平台）
+//	  - Windows:  file:///C:/dir/file.zip  ->  C:\dir\file.zip
+//	  - Unix   :  file:///home/a/b.zip     ->  /home/a/b.zip
+//
+// =============================================================================
+func ResolveLocalFilePath(sourceURL *url.URL) string {
+	// url.Path 已经做过 %XX 解码
 	path := filepath.FromSlash(sourceURL.Path)
 
-	// Windows 情况下可能为 /C:/xxx，需要移除前导斜杠
+	// Windows 处理：去掉「/C:/」开头的多余斜杠
 	if len(path) > 0 && path[0] == filepath.Separator {
+		// 判断第二个字符是否是盘符冒号
 		if len(path) > 2 && path[2] == ':' {
 			path = path[1:]
 		}
