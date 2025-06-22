@@ -20,6 +20,12 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	statusRunning = "RUNNING"
+	statusStopped = "STOPPED"
+	statusError   = "ERROR"
+)
+
 // CreateInstance 在数据库中创建插件实例的配置。
 func (pm *PluginManager) CreateInstance(
 	displayName, pluginID, version, bizName string,
@@ -122,11 +128,6 @@ reconcileStatus 根据运行快照修正单条实例的状态，并在必要时�
 func (pm *PluginManager) reconcileStatus(
 	inst *domain.PluginInstance, running map[string]struct{},
 ) {
-	const (
-		statusRunning = "RUNNING"
-		statusStopped = "STOPPED"
-	)
-
 	if _, ok := running[inst.InstanceID]; ok {
 		inst.Status = statusRunning
 		return
@@ -236,7 +237,9 @@ func (pm *PluginManager) Start(instanceID string) error {
 	log.Printf("🚀 [PluginManager] 插件实例 '%s' (%s) 进程已启动 (PID: %d)", inst.DisplayName, instanceID, cmd.Process.Pid)
 
 	go func() {
-		if _, err := pm.db.Exec("UPDATE plugin_instances SET status = 'RUNNING', last_started_at = ? WHERE instance_id = ?", time.Now(), instanceID); err != nil {
+		if _, err := pm.db.Exec(
+			"UPDATE plugin_instances SET status = ?, last_started_at = ? WHERE instance_id = ?",
+			statusRunning, time.Now(), instanceID); err != nil {
 			log.Printf("⚠️ [PluginManager] 更新插件实例 '%s' 状态到 RUNNING 失败: %v", instanceID, err)
 		}
 	}()
@@ -252,7 +255,7 @@ func (pm *PluginManager) Stop(instanceID string) error {
 
 	cmd, isRunning := pm.runningPlugins[instanceID]
 	if !isRunning {
-		_, _ = pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", instanceID)
+		_, _ = pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
 		return fmt.Errorf("插件实例 '%s' 并未在运行中", instanceID)
 	}
 
@@ -277,7 +280,7 @@ func (pm *PluginManager) Stop(instanceID string) error {
 	pm.registryMu.Unlock()
 
 	log.Printf("👋 [PluginManager] 插件实例 '%s' 已停止。", instanceID)
-	_, err := pm.db.Exec("UPDATE plugin_instances SET status = 'STOPPED' WHERE instance_id = ?", instanceID)
+	_, err := pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
 	return err
 }
 
@@ -320,7 +323,7 @@ func (pm *PluginManager) performAllHealthChecks() {
 
 // checkPluginHealth 负责检查单个插件的健康状况并处理结果
 func (pm *PluginManager) checkPluginHealth(bizName string, ds port.DataSource) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // 设置5秒超时
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := ds.HealthCheck(ctx); err != nil {
@@ -336,13 +339,11 @@ func (pm *PluginManager) checkPluginHealth(bizName string, ds port.DataSource) {
 			return
 		}
 
-		// 将数据库中的状态更新为 ERROR
-		_, dbErr := pm.db.Exec("UPDATE plugin_instances SET status = 'ERROR' WHERE instance_id = ?", instanceID)
+		_, dbErr := pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusError, instanceID)
 		if dbErr != nil {
 			log.Printf("⚠️ [PluginManager] 更新不健康插件 '%s' 状态到 ERROR 失败: %v", instanceID, dbErr)
 		}
 
-		// 采取断然措施：直接停止并清理这个有问题的插件进程
 		log.Printf("- [PluginManager] 正在停止不健康的插件实例 '%s'...", instanceID)
 		if stopErr := pm.Stop(instanceID); stopErr != nil {
 			log.Printf("⚠️ [PluginManager] 停止不健康插件 '%s' 时发生错误: %v", instanceID, stopErr)
@@ -410,10 +411,9 @@ func (pm *PluginManager) monitorPlugin(cmd *exec.Cmd, instanceID string) {
 	err := cmd.Wait()
 	log.Printf("🔌 [PluginManager] 插件 '%s' 进程已退出，错误: %v", instanceID, err)
 
-	// 判断：只有当前状态为 RUNNING 才调用 Stop()，防止状态覆盖
 	var status string
 	_ = pm.db.QueryRow("SELECT status FROM plugin_instances WHERE instance_id = ?", instanceID).Scan(&status)
-	if status == "RUNNING" {
+	if status == statusRunning {
 		_ = pm.Stop(instanceID)
 	}
 }
