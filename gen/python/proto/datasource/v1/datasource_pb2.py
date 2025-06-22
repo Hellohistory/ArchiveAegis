@@ -22,10 +22,11 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import any_pb2 as google_dot_protobuf_dot_any__pb2
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x64\x61tasource/v1/datasource.proto\x12\rdatasource.v1\x1a\x1cgoogle/protobuf/struct.proto\"H\n\x0cQueryRequest\x12\x10\n\x08\x62iz_name\x18\x01 \x01(\t\x12&\n\x05query\x18\x02 \x01(\x0b\x32\x17.google.protobuf.Struct\"D\n\x0bQueryResult\x12%\n\x04\x64\x61ta\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\x12\x0e\n\x06source\x18\x02 \x01(\t\"^\n\rMutateRequest\x12\x10\n\x08\x62iz_name\x18\x01 \x01(\t\x12\x11\n\toperation\x18\x02 \x01(\t\x12(\n\x07payload\x18\x03 \x01(\x0b\x32\x17.google.protobuf.Struct\"E\n\x0cMutateResult\x12%\n\x04\x64\x61ta\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\x12\x0e\n\x06source\x18\x02 \x01(\t\"\x16\n\x14GetPluginInfoRequest\"\x7f\n\x15GetPluginInfoResponse\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\x12\x1b\n\x13supported_biz_names\x18\x04 \x03(\t\x12\x1c\n\x14\x64\x65scription_markdown\x18\x05 \x01(\t\"5\n\rSchemaRequest\x12\x10\n\x08\x62iz_name\x18\x01 \x01(\t\x12\x12\n\ntable_name\x18\x02 \x01(\t\"\x8a\x01\n\x10\x46ieldDescription\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tdata_type\x18\x02 \x01(\t\x12\x15\n\ris_searchable\x18\x03 \x01(\x08\x12\x15\n\ris_returnable\x18\x04 \x01(\x08\x12\x12\n\nis_primary\x18\x05 \x01(\x08\x12\x13\n\x0b\x64\x65scription\x18\x06 \x01(\t\"\x92\x01\n\x0cSchemaResult\x12\x37\n\x06tables\x18\x01 \x03(\x0b\x32\'.datasource.v1.SchemaResult.TablesEntry\x1aI\n\x0bTablesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12)\n\x05value\x18\x02 \x01(\x0b\x32\x1a.datasource.v1.TableSchema:\x02\x38\x01\">\n\x0bTableSchema\x12/\n\x06\x66ields\x18\x01 \x03(\x0b\x32\x1f.datasource.v1.FieldDescription\"\x14\n\x12HealthCheckRequest\"\x93\x01\n\x13HealthCheckResponse\x12@\n\x06status\x18\x01 \x01(\x0e\x32\x30.datasource.v1.HealthCheckResponse.ServingStatus\":\n\rServingStatus\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07SERVING\x10\x01\x12\x0f\n\x0bNOT_SERVING\x10\x02\x32\x8d\x03\n\nDataSource\x12Z\n\rGetPluginInfo\x12#.datasource.v1.GetPluginInfoRequest\x1a$.datasource.v1.GetPluginInfoResponse\x12@\n\x05Query\x12\x1b.datasource.v1.QueryRequest\x1a\x1a.datasource.v1.QueryResult\x12\x43\n\x06Mutate\x12\x1c.datasource.v1.MutateRequest\x1a\x1b.datasource.v1.MutateResult\x12\x46\n\tGetSchema\x12\x1c.datasource.v1.SchemaRequest\x1a\x1b.datasource.v1.SchemaResult\x12T\n\x0bHealthCheck\x12!.datasource.v1.HealthCheckRequest\x1a\".datasource.v1.HealthCheckResponseB#Z!gen/go/datasource/v1;datasourcev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x64\x61tasource/v1/datasource.proto\x12\ndatasource\x1a\x19google/protobuf/any.proto\x1a\x1cgoogle/protobuf/struct.proto\"\xcc\x01\n\x0fRequestEnvelope\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x10\n\x08\x62iz_name\x18\x02 \x01(\t\x12;\n\x08metadata\x18\x03 \x03(\x0b\x32).datasource.RequestEnvelope.MetadataEntry\x12%\n\x07payload\x18\x04 \x01(\x0b\x32\x14.google.protobuf.Any\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"q\n\x10ResponseEnvelope\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\"\n\x06status\x18\x02 \x01(\x0b\x32\x12.datasource.Status\x12%\n\x07payload\x18\x03 \x01(\x0b\x32\x14.google.protobuf.Any\"Q\n\x06Status\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\x0f\n\x07message\x18\x02 \x01(\t\x12(\n\x07\x64\x65tails\x18\x03 \x01(\x0b\x32\x17.google.protobuf.Struct\"\x16\n\x14GetPluginInfoRequest\"\xd0\x01\n\x15GetPluginInfoResponse\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\x12\x1c\n\x14\x64\x65scription_markdown\x18\x04 \x01(\t\x12\x30\n\x10\x63ontract_version\x18\x05 \x01(\x0b\x32\x16.datasource.ApiVersion\x12\x1a\n\x12supported_payloads\x18\x06 \x03(\t\x12\x1e\n\x16supported_capabilities\x18\x07 \x03(\t\"9\n\nApiVersion\x12\r\n\x05major\x18\x01 \x01(\x05\x12\r\n\x05minor\x18\x02 \x01(\x05\x12\r\n\x05patch\x18\x03 \x01(\x05\":\n\x10\x44\x61taQueryRequest\x12&\n\x05query\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\"8\n\x0f\x44\x61taQueryResult\x12%\n\x04\x64\x61ta\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\"P\n\x11\x44\x61taMutateRequest\x12\x11\n\toperation\x18\x01 \x01(\t\x12(\n\x07payload\x18\x02 \x01(\x0b\x32\x17.google.protobuf.Struct\"9\n\x10\x44\x61taMutateResult\x12%\n\x04\x64\x61ta\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\"&\n\x10GetSchemaRequest\x12\x12\n\ntable_name\x18\x01 \x01(\t\"\x8c\x01\n\x0cSchemaResult\x12\x34\n\x06tables\x18\x01 \x03(\x0b\x32$.datasource.SchemaResult.TablesEntry\x1a\x46\n\x0bTablesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12&\n\x05value\x18\x02 \x01(\x0b\x32\x17.datasource.TableSchema:\x02\x38\x01\";\n\x0bTableSchema\x12,\n\x06\x66ields\x18\x01 \x03(\x0b\x32\x1c.datasource.FieldDescription\"\x8a\x01\n\x10\x46ieldDescription\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tdata_type\x18\x02 \x01(\t\x12\x15\n\ris_searchable\x18\x03 \x01(\x08\x12\x15\n\ris_returnable\x18\x04 \x01(\x08\x12\x12\n\nis_primary\x18\x05 \x01(\x08\x12\x13\n\x0b\x64\x65scription\x18\x06 \x01(\t\"I\n\x1aUpdateConfigurationRequest\x12+\n\nnew_config\x18\x01 \x01(\x0b\x32\x17.google.protobuf.Struct\",\n\x19UpdateConfigurationResult\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x14\n\x12HealthCheckRequest\"\x90\x01\n\x13HealthCheckResponse\x12=\n\x06status\x18\x01 \x01(\x0e\x32-.datasource.HealthCheckResponse.ServingStatus\":\n\rServingStatus\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07SERVING\x10\x01\x12\x0f\n\x0bNOT_SERVING\x10\x02\x32\xf8\x01\n\nDataSource\x12T\n\rGetPluginInfo\x12 .datasource.GetPluginInfoRequest\x1a!.datasource.GetPluginInfoResponse\x12\x44\n\x07\x45xecute\x12\x1b.datasource.RequestEnvelope\x1a\x1c.datasource.ResponseEnvelope\x12N\n\x0bHealthCheck\x12\x1e.datasource.HealthCheckRequest\x1a\x1f.datasource.HealthCheckResponseB#Z!gen/go/datasource/v1;datasourcev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,36 +34,52 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'datasource.v1.datasource_pb
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z!gen/go/datasource/v1;datasourcev1'
+  _globals['_REQUESTENVELOPE_METADATAENTRY']._loaded_options = None
+  _globals['_REQUESTENVELOPE_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_SCHEMARESULT_TABLESENTRY']._loaded_options = None
   _globals['_SCHEMARESULT_TABLESENTRY']._serialized_options = b'8\001'
-  _globals['_QUERYREQUEST']._serialized_start=79
-  _globals['_QUERYREQUEST']._serialized_end=151
-  _globals['_QUERYRESULT']._serialized_start=153
-  _globals['_QUERYRESULT']._serialized_end=221
-  _globals['_MUTATEREQUEST']._serialized_start=223
-  _globals['_MUTATEREQUEST']._serialized_end=317
-  _globals['_MUTATERESULT']._serialized_start=319
-  _globals['_MUTATERESULT']._serialized_end=388
-  _globals['_GETPLUGININFOREQUEST']._serialized_start=390
-  _globals['_GETPLUGININFOREQUEST']._serialized_end=412
-  _globals['_GETPLUGININFORESPONSE']._serialized_start=414
-  _globals['_GETPLUGININFORESPONSE']._serialized_end=541
-  _globals['_SCHEMAREQUEST']._serialized_start=543
-  _globals['_SCHEMAREQUEST']._serialized_end=596
-  _globals['_FIELDDESCRIPTION']._serialized_start=599
-  _globals['_FIELDDESCRIPTION']._serialized_end=737
-  _globals['_SCHEMARESULT']._serialized_start=740
-  _globals['_SCHEMARESULT']._serialized_end=886
-  _globals['_SCHEMARESULT_TABLESENTRY']._serialized_start=813
-  _globals['_SCHEMARESULT_TABLESENTRY']._serialized_end=886
-  _globals['_TABLESCHEMA']._serialized_start=888
-  _globals['_TABLESCHEMA']._serialized_end=950
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=952
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=972
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=975
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1122
-  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_start=1064
-  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_end=1122
-  _globals['_DATASOURCE']._serialized_start=1125
-  _globals['_DATASOURCE']._serialized_end=1522
+  _globals['_REQUESTENVELOPE']._serialized_start=104
+  _globals['_REQUESTENVELOPE']._serialized_end=308
+  _globals['_REQUESTENVELOPE_METADATAENTRY']._serialized_start=261
+  _globals['_REQUESTENVELOPE_METADATAENTRY']._serialized_end=308
+  _globals['_RESPONSEENVELOPE']._serialized_start=310
+  _globals['_RESPONSEENVELOPE']._serialized_end=423
+  _globals['_STATUS']._serialized_start=425
+  _globals['_STATUS']._serialized_end=506
+  _globals['_GETPLUGININFOREQUEST']._serialized_start=508
+  _globals['_GETPLUGININFOREQUEST']._serialized_end=530
+  _globals['_GETPLUGININFORESPONSE']._serialized_start=533
+  _globals['_GETPLUGININFORESPONSE']._serialized_end=741
+  _globals['_APIVERSION']._serialized_start=743
+  _globals['_APIVERSION']._serialized_end=800
+  _globals['_DATAQUERYREQUEST']._serialized_start=802
+  _globals['_DATAQUERYREQUEST']._serialized_end=860
+  _globals['_DATAQUERYRESULT']._serialized_start=862
+  _globals['_DATAQUERYRESULT']._serialized_end=918
+  _globals['_DATAMUTATEREQUEST']._serialized_start=920
+  _globals['_DATAMUTATEREQUEST']._serialized_end=1000
+  _globals['_DATAMUTATERESULT']._serialized_start=1002
+  _globals['_DATAMUTATERESULT']._serialized_end=1059
+  _globals['_GETSCHEMAREQUEST']._serialized_start=1061
+  _globals['_GETSCHEMAREQUEST']._serialized_end=1099
+  _globals['_SCHEMARESULT']._serialized_start=1102
+  _globals['_SCHEMARESULT']._serialized_end=1242
+  _globals['_SCHEMARESULT_TABLESENTRY']._serialized_start=1172
+  _globals['_SCHEMARESULT_TABLESENTRY']._serialized_end=1242
+  _globals['_TABLESCHEMA']._serialized_start=1244
+  _globals['_TABLESCHEMA']._serialized_end=1303
+  _globals['_FIELDDESCRIPTION']._serialized_start=1306
+  _globals['_FIELDDESCRIPTION']._serialized_end=1444
+  _globals['_UPDATECONFIGURATIONREQUEST']._serialized_start=1446
+  _globals['_UPDATECONFIGURATIONREQUEST']._serialized_end=1519
+  _globals['_UPDATECONFIGURATIONRESULT']._serialized_start=1521
+  _globals['_UPDATECONFIGURATIONRESULT']._serialized_end=1565
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=1567
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=1587
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=1590
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=1734
+  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_start=1676
+  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_end=1734
+  _globals['_DATASOURCE']._serialized_start=1737
+  _globals['_DATASOURCE']._serialized_end=1985
 # @@protoc_insertion_point(module_scope)

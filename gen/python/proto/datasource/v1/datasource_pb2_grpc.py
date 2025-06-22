@@ -26,12 +26,7 @@ if _version_not_supported:
 
 
 class DataSourceStub(object):
-    """--- 服务定义 ---
-
-    DataSource v1 (Revised for Long-Term Support)
-    这是数据源插件必须实现的 gRPC 服务接口。
-    它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -40,71 +35,39 @@ class DataSourceStub(object):
             channel: A grpc.Channel.
         """
         self.GetPluginInfo = channel.unary_unary(
-                '/datasource.v1.DataSource/GetPluginInfo',
+                '/datasource.DataSource/GetPluginInfo',
                 request_serializer=datasource_dot_v1_dot_datasource__pb2.GetPluginInfoRequest.SerializeToString,
                 response_deserializer=datasource_dot_v1_dot_datasource__pb2.GetPluginInfoResponse.FromString,
                 _registered_method=True)
-        self.Query = channel.unary_unary(
-                '/datasource.v1.DataSource/Query',
-                request_serializer=datasource_dot_v1_dot_datasource__pb2.QueryRequest.SerializeToString,
-                response_deserializer=datasource_dot_v1_dot_datasource__pb2.QueryResult.FromString,
-                _registered_method=True)
-        self.Mutate = channel.unary_unary(
-                '/datasource.v1.DataSource/Mutate',
-                request_serializer=datasource_dot_v1_dot_datasource__pb2.MutateRequest.SerializeToString,
-                response_deserializer=datasource_dot_v1_dot_datasource__pb2.MutateResult.FromString,
-                _registered_method=True)
-        self.GetSchema = channel.unary_unary(
-                '/datasource.v1.DataSource/GetSchema',
-                request_serializer=datasource_dot_v1_dot_datasource__pb2.SchemaRequest.SerializeToString,
-                response_deserializer=datasource_dot_v1_dot_datasource__pb2.SchemaResult.FromString,
+        self.Execute = channel.unary_unary(
+                '/datasource.DataSource/Execute',
+                request_serializer=datasource_dot_v1_dot_datasource__pb2.RequestEnvelope.SerializeToString,
+                response_deserializer=datasource_dot_v1_dot_datasource__pb2.ResponseEnvelope.FromString,
                 _registered_method=True)
         self.HealthCheck = channel.unary_unary(
-                '/datasource.v1.DataSource/HealthCheck',
+                '/datasource.DataSource/HealthCheck',
                 request_serializer=datasource_dot_v1_dot_datasource__pb2.HealthCheckRequest.SerializeToString,
                 response_deserializer=datasource_dot_v1_dot_datasource__pb2.HealthCheckResponse.FromString,
                 _registered_method=True)
 
 
 class DataSourceServicer(object):
-    """--- 服务定义 ---
-
-    DataSource v1 (Revised for Long-Term Support)
-    这是数据源插件必须实现的 gRPC 服务接口。
-    它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def GetPluginInfo(self, request, context):
-        """GetPluginInfo 用于网关发现和识别插件的基本信息。
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def Query(self, request, context):
-        """Query 是一个通用的只读操作接口。
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def Mutate(self, request, context):
-        """Mutate 是一个通用的写操作接口 (Create, Update, Delete)。
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetSchema(self, request, context):
-        """GetSchema 用于获取数据源的结构信息，对于前端UI构建和API探索很有用。
-        """
+    def Execute(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def HealthCheck(self, request, context):
-        """HealthCheck 用于网关对插件进行健康检查，以实现自愈和监控。
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -117,20 +80,10 @@ def add_DataSourceServicer_to_server(servicer, server):
                     request_deserializer=datasource_dot_v1_dot_datasource__pb2.GetPluginInfoRequest.FromString,
                     response_serializer=datasource_dot_v1_dot_datasource__pb2.GetPluginInfoResponse.SerializeToString,
             ),
-            'Query': grpc.unary_unary_rpc_method_handler(
-                    servicer.Query,
-                    request_deserializer=datasource_dot_v1_dot_datasource__pb2.QueryRequest.FromString,
-                    response_serializer=datasource_dot_v1_dot_datasource__pb2.QueryResult.SerializeToString,
-            ),
-            'Mutate': grpc.unary_unary_rpc_method_handler(
-                    servicer.Mutate,
-                    request_deserializer=datasource_dot_v1_dot_datasource__pb2.MutateRequest.FromString,
-                    response_serializer=datasource_dot_v1_dot_datasource__pb2.MutateResult.SerializeToString,
-            ),
-            'GetSchema': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetSchema,
-                    request_deserializer=datasource_dot_v1_dot_datasource__pb2.SchemaRequest.FromString,
-                    response_serializer=datasource_dot_v1_dot_datasource__pb2.SchemaResult.SerializeToString,
+            'Execute': grpc.unary_unary_rpc_method_handler(
+                    servicer.Execute,
+                    request_deserializer=datasource_dot_v1_dot_datasource__pb2.RequestEnvelope.FromString,
+                    response_serializer=datasource_dot_v1_dot_datasource__pb2.ResponseEnvelope.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -139,19 +92,14 @@ def add_DataSourceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'datasource.v1.DataSource', rpc_method_handlers)
+            'datasource.DataSource', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('datasource.v1.DataSource', rpc_method_handlers)
+    server.add_registered_method_handlers('datasource.DataSource', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
 class DataSource(object):
-    """--- 服务定义 ---
-
-    DataSource v1 (Revised for Long-Term Support)
-    这是数据源插件必须实现的 gRPC 服务接口。
-    它被设计为高度通用，以支持任何类型的数据源，无论是SQL数据库、搜索引擎还是其他API。
-    """
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
     def GetPluginInfo(request,
@@ -167,7 +115,7 @@ class DataSource(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/datasource.v1.DataSource/GetPluginInfo',
+            '/datasource.DataSource/GetPluginInfo',
             datasource_dot_v1_dot_datasource__pb2.GetPluginInfoRequest.SerializeToString,
             datasource_dot_v1_dot_datasource__pb2.GetPluginInfoResponse.FromString,
             options,
@@ -181,7 +129,7 @@ class DataSource(object):
             _registered_method=True)
 
     @staticmethod
-    def Query(request,
+    def Execute(request,
             target,
             options=(),
             channel_credentials=None,
@@ -194,63 +142,9 @@ class DataSource(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/datasource.v1.DataSource/Query',
-            datasource_dot_v1_dot_datasource__pb2.QueryRequest.SerializeToString,
-            datasource_dot_v1_dot_datasource__pb2.QueryResult.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def Mutate(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/datasource.v1.DataSource/Mutate',
-            datasource_dot_v1_dot_datasource__pb2.MutateRequest.SerializeToString,
-            datasource_dot_v1_dot_datasource__pb2.MutateResult.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetSchema(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/datasource.v1.DataSource/GetSchema',
-            datasource_dot_v1_dot_datasource__pb2.SchemaRequest.SerializeToString,
-            datasource_dot_v1_dot_datasource__pb2.SchemaResult.FromString,
+            '/datasource.DataSource/Execute',
+            datasource_dot_v1_dot_datasource__pb2.RequestEnvelope.SerializeToString,
+            datasource_dot_v1_dot_datasource__pb2.ResponseEnvelope.FromString,
             options,
             channel_credentials,
             insecure,
@@ -275,7 +169,7 @@ class DataSource(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/datasource.v1.DataSource/HealthCheck',
+            '/datasource.DataSource/HealthCheck',
             datasource_dot_v1_dot_datasource__pb2.HealthCheckRequest.SerializeToString,
             datasource_dot_v1_dot_datasource__pb2.HealthCheckResponse.FromString,
             options,
