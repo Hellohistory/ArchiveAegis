@@ -195,13 +195,7 @@ func (pm *PluginManager) Start(instanceID string) error {
 		return fmt.Errorf("插件 '%s' 的清单信息未在目录中找到", inst.PluginID)
 	}
 
-	var targetVersion *domain.PluginVersion
-	for i := range manifest.Versions {
-		if manifest.Versions[i].VersionString == inst.Version {
-			targetVersion = &manifest.Versions[i]
-			break
-		}
-	}
+	targetVersion := findVersion(manifest.Versions, inst.Version)
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的已安装版本 '%s' 的清单信息未找到", inst.PluginID, inst.Version)
 	}
@@ -437,4 +431,15 @@ func findFreePort() (port int, err error) {
 		return 0, errors.New("监听地址不是 *net.TCPAddr")
 	}
 	return tcpAddr.Port, nil
+}
+
+// findVersion 用于从版本清单中查找匹配的版本指针。
+// 未找到时返回 nil。
+func findVersion(versions []domain.PluginVersion, versionStr string) *domain.PluginVersion {
+	for i := range versions {
+		if versions[i].VersionString == versionStr {
+			return &versions[i]
+		}
+	}
+	return nil
 }
