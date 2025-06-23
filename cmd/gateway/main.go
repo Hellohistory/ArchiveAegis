@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "v1.0.0-alpha8"
+const version = "v1.0.0-alpha9"
 
 // =============================================================================
 // 配置与应用核心结构体
