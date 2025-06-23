@@ -1,4 +1,4 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/manager_schema.go
+// file: internal/adapter/datasource/sqlite/manager_schema.go
 package sqlite
 
 import (
@@ -111,7 +111,6 @@ func (m *Manager) getSchemaInternal(ctx context.Context, req port.SchemaRequest)
 	return &port.SchemaResult{Tables: schemaTables}, nil
 }
 
-// loadDBPhysicalSchema 从给定的数据库连接中加载其实际的物理表和列信息。
 func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInfo, error) {
 	autoDetectedDefaultTable, errDetect := detectTable(db)
 	if errDetect != nil && errDetect != sql.ErrNoRows {
@@ -178,12 +177,12 @@ func (m *Manager) loadOrRefreshSchemaInternal() {
 }
 
 // computeSchemaUnionForBiz 为单个业务组计算其下所有库的Schema并集。
-func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[string]*sql.DB) (map[string][]string, map[string]map[string][]string) {
+func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[string]*dbInstance) (map[string][]string, map[string]map[string][]string) { // <--- [修复] 参数类型与 manager.go 中的 group 定义保持一致
 	union := make(map[string]map[string]struct{})
 	perLib := make(map[string]map[string][]string)
 
-	for libName, dbConn := range libsMapInBiz {
-		phySchema, found := m.dbSchemaCache[dbConn]
+	for libName, instance := range libsMapInBiz { // <--- [修复] 循环变量为 instance
+		phySchema, found := m.dbSchemaCache[instance.conn] // <--- [修复] 使用 instance.conn 进行查找
 		if !found || phySchema == nil {
 			log.Printf("错误: [DBManager] 业务 '%s' 库 '%s' 的物理 schema 未在缓存中找到。", bizName, libName)
 			continue

@@ -174,8 +174,9 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 
 	g.Go(func() error {
 		countGroup, countCtx := errgroup.WithContext(queryCtx)
-		for _, db := range dbInstancesInBiz {
-			currentDB := db
+
+		for _, instance := range dbInstancesInBiz {
+			currentDB := instance.conn
 			countGroup.Go(func() error {
 				countSQL, countArgs, errBuild := buildCountSQL(targetTableName, validatedQueryParams)
 				if errBuild != nil {
@@ -199,9 +200,10 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 		dataGroup, dataCtx := errgroup.WithContext(queryCtx)
 		sem := make(chan struct{}, runtime.NumCPU())
 
-		for libName, dbConn := range dbInstancesInBiz {
+		for libName, instance := range dbInstancesInBiz {
 			m.mu.RLock()
-			physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[dbConn]
+
+			physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
 			m.mu.RUnlock()
 			if !hasPhysicalSchema || physicalSchemaInfo == nil {
 				continue
@@ -210,7 +212,7 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args struct
 				continue
 			}
 
-			currentLibName, currentDBConn := libName, dbConn
+			currentLibName, currentDBConn := libName, instance.conn
 			dataGroup.Go(func() error {
 				select {
 				case sem <- struct{}{}:

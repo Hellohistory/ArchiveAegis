@@ -111,8 +111,9 @@ func (m *Manager) mutateInternal(ctx context.Context, req port.MutateRequest) (*
 	}
 
 	var totalRowsAffected int64
-	for libName, db := range dbInstances {
-		res, execErr := db.ExecContext(ctx, sqlStmt, args...)
+	for libName, instance := range dbInstances {
+
+		res, execErr := instance.conn.ExecContext(ctx, sqlStmt, args...)
 		if execErr != nil {
 			errMsg := fmt.Errorf("操作在库 '%s' 上失败并已中止。错误: %w", libName, execErr)
 			slog.Error("[DBManager Mutate]", "error", errMsg)
@@ -136,6 +137,7 @@ func parseFiltersFromPayload(payload map[string]interface{}) ([]queryParam, erro
 	var filters []queryParam
 	rawFilters, ok := payload["filters"].([]interface{})
 	if !ok {
+		// 允许 filters 为空
 		return filters, nil
 	}
 	for i, f := range rawFilters {

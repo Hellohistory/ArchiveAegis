@@ -26,13 +26,19 @@ const (
 	debounceDuration = 2 * time.Second
 )
 
+// dbInstance 封装了单个数据库连接及其元数据
+type dbInstance struct {
+	conn *sql.DB
+	path string // 数据库文件的绝对路径
+}
+
 // Manager 是 SQLite 数据源适配器的核心结构体。
 // 它现在实现了 port.Executor 接口，通过统一的 Execute 方法处理所有请求。
 type Manager struct {
 	mu sync.RWMutex
 
 	root          string
-	group         map[string]map[string]*sql.DB
+	group         map[string]map[string]*dbInstance // 使用 dbInstance 结构体
 	dbSchemaCache map[*sql.DB]*dbPhysicalSchemaInfo
 	schema        map[string]map[string][]string
 	eventTimers   map[string]*time.Timer
@@ -46,7 +52,7 @@ func NewManager(cfgService port.QueryAdminConfigService) *Manager {
 		log.Fatal("[DBManager] 致命错误: QueryAdminConfigService 实例不能为 nil。")
 	}
 	m := &Manager{
-		group:         make(map[string]map[string]*sql.DB),
+		group:         make(map[string]map[string]*dbInstance),
 		dbSchemaCache: make(map[*sql.DB]*dbPhysicalSchemaInfo),
 		schema:        make(map[string]map[string][]string),
 		eventTimers:   make(map[string]*time.Timer),
@@ -70,6 +76,8 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 		responsePayload, err = m.handleDataMutate(ctx, req)
 	case _typeUrl(&v1.GetSchemaRequest{}):
 		responsePayload, err = m.handleGetSchema(ctx, req)
+	case _typeUrl(&v1.TriggerBackupRequest{}):
+		responsePayload, err = m.handleTriggerBackup(ctx, req)
 	default:
 		err = status.Errorf(codes.Unimplemented, "内置 SQLite 执行器不支持的载荷类型: %s", req.Payload.TypeUrl)
 	}
@@ -84,6 +92,14 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 				Code:    int32(st.Code()),
 				Message: st.Message(),
 			},
+		}, nil
+	}
+
+	// 如果操作成功但没有响应载荷 (例如，某些 mutate 操作)，创建一个空的成功响应
+	if responsePayload == nil {
+		return &v1.ResponseEnvelope{
+			RequestId: req.RequestId,
+			Status:    &v1.Status{Code: int32(codes.OK), Message: "Success"},
 		}, nil
 	}
 
@@ -113,8 +129,8 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 	var firstErr error
 	for bizName, libs := range m.group {
-		for libName, db := range libs {
-			if err := db.Close(); err != nil {
+		for libName, instance := range libs {
+			if err := instance.conn.Close(); err != nil {
 				log.Printf("ERROR: Closing database %s/%s failed: %v", bizName, libName, err)
 				if firstErr == nil {
 					firstErr = err
@@ -122,7 +138,7 @@ func (m *Manager) Close() error {
 			}
 		}
 	}
-	m.group = make(map[string]map[string]*sql.DB)
+	m.group = make(map[string]map[string]*dbInstance)
 	m.dbSchemaCache = make(map[*sql.DB]*dbPhysicalSchemaInfo)
 	return firstErr
 }
