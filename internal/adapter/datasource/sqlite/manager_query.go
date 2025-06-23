@@ -6,10 +6,11 @@ package sqlite
 import (
 	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
+	"container/heap"
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sort"
 	"sync/atomic"
 
@@ -19,6 +20,77 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// =============================================================================
+//  多路归并排序所需的数据结构 (k-way merge) - 接收器已统一
+// =============================================================================
+
+// heapItem 代表从一个数据库分片流中取出的一个数据项。
+type heapItem struct {
+	Data        map[string]any // 查询到的一行数据
+	StreamIndex int            // 它来自哪个数据库实例（分片）的流
+}
+
+// PriorityQueue 是一个实现了 heap.Interface 的最小堆，用于多路归并。
+type PriorityQueue []*heapItem
+
+// Len 方法为指针接收器
+func (pq *PriorityQueue) Len() int { return len(*pq) }
+
+// Less 方法为指针接收器
+func (pq *PriorityQueue) Less(i, j int) bool {
+	// 内部逻辑保持不变，但通过指针访问切片元素
+	valI, iExists := (*pq)[i].Data["id"]
+	valJ, jExists := (*pq)[j].Data["id"]
+
+	if !iExists || valI == nil {
+		return false
+	}
+	if !jExists || valJ == nil {
+		return true
+	}
+
+	switch vI := valI.(type) {
+	case int64:
+		if vJ, ok := valJ.(int64); ok {
+			return vI < vJ
+		}
+	case float64:
+		if vJ, ok := valJ.(float64); ok {
+			return vI < vJ
+		}
+	case string:
+		if vJ, ok := valJ.(string); ok {
+			return vI < vJ
+		}
+	}
+	// Fallback
+	return fmt.Sprintf("%v", valI) < fmt.Sprintf("%v", valJ)
+}
+
+// Swap 方法为指针接收器
+func (pq *PriorityQueue) Swap(i, j int) {
+	(*pq)[i], (*pq)[j] = (*pq)[j], (*pq)[i]
+}
+
+// Push 方法已经是正确的指针接收器
+func (pq *PriorityQueue) Push(x any) {
+	*pq = append(*pq, x.(*heapItem))
+}
+
+// Pop 方法已经是正确的指针接收器
+func (pq *PriorityQueue) Pop() any {
+	old := *pq
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	*pq = old[0 : n-1]
+	return item
+}
+
+// =============================================================================
+//  查询逻辑实现
+// =============================================================================
 
 type queryParam struct {
 	Field string
@@ -115,7 +187,7 @@ func (m *Manager) handleDataQuery(ctx context.Context, req *v1.RequestEnvelope) 
 	return &v1.DataQueryResult{Data: resultData}, nil
 }
 
-// queryInternal 现在负责在获取所有结果后，于内存中进行健壮的、类型安全的排序和分页。
+// queryInternal 被重构为使用多路归并排序，以解决内存溢出问题。
 func (m *Manager) queryInternal(ctx context.Context, bizName string, args rawQueryArgs) ([]map[string]any, int64, error) {
 	validatedParams, err := m.validateQueryRequest(ctx, bizName, args)
 	if err != nil {
@@ -129,51 +201,62 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args rawQue
 		return []map[string]any{}, 0, nil
 	}
 
-	allAggregatedResults, totalCount, err := m.executeConcurrentQuery(ctx, bizName, dbInstancesInBiz, validatedParams)
+	// 1. 并发获取所有分片的有序数据流（迭代器）和总数
+	iterators, totalCount, err := m.executeConcurrentQueryAndGetIterators(ctx, bizName, dbInstancesInBiz, validatedParams)
 	if err != nil {
-		return nil, totalCount, err
+		return nil, 0, err
 	}
-
-	sort.SliceStable(allAggregatedResults, func(i, j int) bool {
-		valI, iExists := allAggregatedResults[i]["id"]
-		valJ, jExists := allAggregatedResults[j]["id"]
-
-		if !iExists || valI == nil {
-			return false
-		}
-		if !jExists || valJ == nil {
-			return true
-		}
-
-		switch vI := valI.(type) {
-		case int64:
-			if vJ, ok := valJ.(int64); ok {
-				return vI < vJ
-			}
-		case float64:
-			if vJ, ok := valJ.(float64); ok {
-				return vI < vJ
-			}
-		case string:
-			if vJ, ok := valJ.(string); ok {
-				return vI < vJ
+	defer func() {
+		for _, it := range iterators {
+			if it != nil {
+				it.Close()
 			}
 		}
+	}()
 
-		return fmt.Sprintf("%v", valI) < fmt.Sprintf("%v", valJ)
-	})
+	// 2. 初始化最小堆
+	pq := make(PriorityQueue, 0, len(iterators))
+	heap.Init(&pq)
 
-	start := (validatedParams.page - 1) * validatedParams.size
-	if start < 0 || start > len(allAggregatedResults) {
-		return []map[string]any{}, totalCount, nil
+	// 3. 从每个数据流中取出第一个元素，放入堆中进行初始化
+	for i, iter := range iterators {
+		if iter.Next() {
+			data, err := scanToMap(iter)
+			if err != nil {
+				return nil, totalCount, fmt.Errorf("初始化堆时扫描行失败: %w", err)
+			}
+			heap.Push(&pq, &heapItem{Data: data, StreamIndex: i})
+		}
 	}
 
-	end := start + validatedParams.size
-	if end > len(allAggregatedResults) {
-		end = len(allAggregatedResults)
+	// 4. 开始归并处理
+	results := make([]map[string]any, 0, validatedParams.size)
+	offset := (validatedParams.page - 1) * validatedParams.size
+	limit := validatedParams.size
+	currentIndex := 0
+
+	for pq.Len() > 0 && len(results) < limit {
+		// a. 从堆顶取出当前全局最小的元素
+		item := heap.Pop(&pq).(*heapItem)
+
+		// b. 处理分页逻辑
+		if currentIndex >= offset {
+			results = append(results, item.Data)
+		}
+		currentIndex++
+
+		// c. 从刚才弹出元素的那个流中，补充下一个元素到堆里
+		streamIdx := item.StreamIndex
+		if iterators[streamIdx].Next() {
+			data, err := scanToMap(iterators[streamIdx])
+			if err != nil {
+				return nil, totalCount, fmt.Errorf("归并过程中扫描行失败: %w", err)
+			}
+			heap.Push(&pq, &heapItem{Data: data, StreamIndex: streamIdx})
+		}
 	}
 
-	return allAggregatedResults[start:end], totalCount, nil
+	return results, totalCount, nil
 }
 
 // validateQueryRequest 负责所有查询前的权限和参数校验。
@@ -245,10 +328,10 @@ func (m *Manager) validateQueryRequest(ctx context.Context, bizName string, args
 	}, nil
 }
 
-// executeConcurrentQuery 负责并发地从多个数据库实例中获取数据和总数。
-func (m *Manager) executeConcurrentQuery(ctx context.Context, bizName string, dbInstances map[string]*dbInstance, params *validatedQueryParams) ([]map[string]any, int64, error) {
+// executeConcurrentQueryAndGetIterators 负责并发地获取迭代器和总数。
+func (m *Manager) executeConcurrentQueryAndGetIterators(ctx context.Context, bizName string, dbInstances map[string]*dbInstance, params *validatedQueryParams) ([]*sql.Rows, int64, error) {
 	var totalCount int64
-	resultsChannel := make(chan []map[string]any, len(dbInstances))
+	iterChan := make(chan *sql.Rows, len(dbInstances))
 	g, queryCtx := errgroup.WithContext(ctx)
 
 	// 并发计算总数
@@ -283,13 +366,11 @@ func (m *Manager) executeConcurrentQuery(ctx context.Context, bizName string, db
 		return countGroup.Wait()
 	})
 
-	// 并发获取数据
+	// 并发获取数据迭代器
 	g.Go(func() error {
-		defer close(resultsChannel)
+		defer close(iterChan)
 		dataGroup, dataCtx := errgroup.WithContext(queryCtx)
-		sem := make(chan struct{}, runtime.NumCPU())
-
-		for libName, instance := range dbInstances {
+		for _, instance := range dbInstances {
 			m.mu.RLock()
 			physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
 			m.mu.RUnlock()
@@ -300,78 +381,65 @@ func (m *Manager) executeConcurrentQuery(ctx context.Context, bizName string, db
 				continue
 			}
 
-			currentLibName, currentDBConn := libName, instance.conn
+			currentDBConn := instance.conn
 			dataGroup.Go(func() error {
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-dataCtx.Done():
-					return dataCtx.Err()
-				}
-
 				sqlQuery, queryArgs, errBuild := buildQuerySQL(params.tableName, params.selectFields, params.queryParams)
 				if errBuild != nil {
-					slog.Error("[DBManager Query] 构建SQL失败，已跳过此库", "error", errBuild)
+					slog.Error("[DBManager Query] 构建SQL失败", "error", errBuild)
 					return nil
 				}
 
 				rows, errExec := currentDBConn.QueryContext(dataCtx, sqlQuery, queryArgs...)
 				if errExec != nil {
-					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", bizName, currentLibName, params.tableName, errExec)
-				}
-				defer rows.Close()
-
-				actualReturnedColumns, err := rows.Columns()
-				if err != nil {
-					return fmt.Errorf("获取列名失败: %w", err)
+					return fmt.Errorf("查询库 '%s' 表 '%s' 失败: %w", bizName, params.tableName, errExec)
 				}
 
-				var libResults []map[string]any
-				for rows.Next() {
-					scanDest := make([]any, len(actualReturnedColumns))
-					scanDestPtrs := make([]any, len(actualReturnedColumns))
-					for i := range scanDest {
-						scanDestPtrs[i] = &scanDest[i]
-					}
-					if err := rows.Scan(scanDestPtrs...); err != nil {
-						slog.Warn("[DBManager Query] 扫描库行数据失败，跳过此行", "biz", bizName, "lib", currentLibName, "error", err)
-						continue
-					}
-					rowData := map[string]any{"__lib": currentLibName}
-					for i, colName := range actualReturnedColumns {
-						if bytes, ok := scanDest[i].([]byte); ok {
-							rowData[colName] = string(bytes)
-						} else {
-							rowData[colName] = scanDest[i]
-						}
-					}
-					libResults = append(libResults, rowData)
-				}
-
-				if err := rows.Err(); err != nil {
-					return fmt.Errorf("迭代库 '%s/%s' 表 '%s' 行数据时发生错误: %w", bizName, currentLibName, params.tableName, err)
-				}
-
-				if len(libResults) > 0 {
-					resultsChannel <- libResults
-				}
+				iterChan <- rows
 				return nil
 			})
 		}
 		return dataGroup.Wait()
 	})
 
-	// 聚合所有结果
-	var allAggregatedResults []map[string]any
-	for resSlice := range resultsChannel {
-		allAggregatedResults = append(allAggregatedResults, resSlice...)
+	var iterators []*sql.Rows
+	for iter := range iterChan {
+		iterators = append(iterators, iter)
 	}
 
 	if err := g.Wait(); err != nil {
-		slog.Error("[DBManager Query] 查询中发生错误", "biz", bizName, "table", params.tableName, "error", err)
-		return allAggregatedResults, totalCount, fmt.Errorf("查询业务 '%s' 的表 '%s' 时发生部分错误: %w", bizName, params.tableName, err)
+		for _, it := range iterators {
+			it.Close()
+		}
+		return nil, 0, err
 	}
 
-	// 返回全部聚合结果，分页由调用方(queryInternal)处理
-	return allAggregatedResults, totalCount, nil
+	return iterators, totalCount, nil
+}
+
+// scanToMap 是一个辅助函数，用于将 sql.Rows 的当前行扫描到 map 中。
+func scanToMap(rows *sql.Rows) (map[string]any, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	values := make([]any, len(columns))
+	scanArgs := make([]any, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	if err = rows.Scan(scanArgs...); err != nil {
+		return nil, err
+	}
+
+	rowData := make(map[string]any)
+	for i, colName := range columns {
+		if bytes, ok := values[i].([]byte); ok {
+			rowData[colName] = string(bytes)
+		} else {
+			rowData[colName] = values[i]
+		}
+	}
+	return rowData, nil
 }
