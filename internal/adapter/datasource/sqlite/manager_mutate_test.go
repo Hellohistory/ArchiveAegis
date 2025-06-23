@@ -15,7 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// getDBForTest 辅助函数保持不变，但现在被每个子测试独立调用。
 func getDBForTest(t *testing.T, manager *Manager, bizName, libName string) *sql.DB {
 	t.Helper()
 	bizGroup := manager.group[bizName]

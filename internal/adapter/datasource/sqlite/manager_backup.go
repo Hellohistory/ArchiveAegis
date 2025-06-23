@@ -44,7 +44,7 @@ func (m *Manager) handleTriggerBackup(ctx context.Context, req *v1.RequestEnvelo
 	for _, instance := range dbInstances {
 		dbPaths = append(dbPaths, instance.path)
 	}
-	m.mu.RUnlock() // 尽快释放锁
+	m.mu.RUnlock()
 
 	zipFile, err := os.Create(finalBackupPath)
 	if err != nil {
@@ -53,14 +53,19 @@ func (m *Manager) handleTriggerBackup(ctx context.Context, req *v1.RequestEnvelo
 	defer zipFile.Close()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
 
 	for _, path := range dbPaths {
 		if err := addFileToZip(zipWriter, path); err != nil {
+			zipWriter.Close() // 如果出错，也尝试关闭
 			return nil, status.Errorf(codes.Internal, "添加文件 '%s' 到备份中失败: %v", path, err)
 		}
 	}
 
+	if err := zipWriter.Close(); err != nil {
+		return nil, status.Errorf(codes.Internal, "关闭 zip writer 失败: %v", err)
+	}
+
+	// 现在 zipFile 已经包含了所有数据，可以安全地获取其状态
 	info, err := zipFile.Stat()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "获取备份文件信息失败: %v", err)
