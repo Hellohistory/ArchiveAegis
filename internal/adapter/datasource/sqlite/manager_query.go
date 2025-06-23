@@ -187,7 +187,7 @@ func (m *Manager) handleDataQuery(ctx context.Context, req *v1.RequestEnvelope) 
 	return &v1.DataQueryResult{Data: resultData}, nil
 }
 
-// queryInternal 被重构为使用多路归并排序，以解决内存溢出问题。
+// queryInternal 使用最终的、健壮的并发模型和多路归并算法。
 func (m *Manager) queryInternal(ctx context.Context, bizName string, args rawQueryArgs) ([]map[string]any, int64, error) {
 	validatedParams, err := m.validateQueryRequest(ctx, bizName, args)
 	if err != nil {
@@ -201,62 +201,50 @@ func (m *Manager) queryInternal(ctx context.Context, bizName string, args rawQue
 		return []map[string]any{}, 0, nil
 	}
 
-	// 1. 并发获取所有分片的有序数据流（迭代器）和总数
-	iterators, totalCount, err := m.executeConcurrentQueryAndGetIterators(ctx, bizName, dbInstancesInBiz, validatedParams)
+	// 并发执行查询，获取每个分片的“已排序结果切片”和总数
+	sortedSlices, totalCount, err := m.executeConcurrentQuery(ctx, bizName, dbInstancesInBiz, validatedParams)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() {
-		for _, it := range iterators {
-			if it != nil {
-				it.Close()
-			}
-		}
-	}()
 
-	// 2. 初始化最小堆
-	pq := make(PriorityQueue, 0, len(iterators))
+	// 初始化用于多路归并的最小堆
+	pq := make(PriorityQueue, 0, len(sortedSlices))
 	heap.Init(&pq)
 
-	// 3. 从每个数据流中取出第一个元素，放入堆中进行初始化
-	for i, iter := range iterators {
-		if iter.Next() {
-			data, err := scanToMap(iter)
-			if err != nil {
-				return nil, totalCount, fmt.Errorf("初始化堆时扫描行失败: %w", err)
-			}
-			heap.Push(&pq, &heapItem{Data: data, StreamIndex: i})
+	// 将每个“已排序切片”的第一个元素放入堆中
+	sliceCursors := make([]int, len(sortedSlices)) // 记录每个切片的当前处理位置
+	for i, slice := range sortedSlices {
+		if len(slice) > 0 {
+			heap.Push(&pq, &heapItem{Data: slice[0], StreamIndex: i})
+			sliceCursors[i] = 1 // 指向下一个元素
 		}
 	}
 
-	// 4. 开始归并处理
-	results := make([]map[string]any, 0, validatedParams.size)
-	offset := (validatedParams.page - 1) * validatedParams.size
-	limit := validatedParams.size
-	currentIndex := 0
-
-	for pq.Len() > 0 && len(results) < limit {
-		// a. 从堆顶取出当前全局最小的元素
+	// 开始归并处理
+	allAggregatedResults := make([]map[string]any, 0, validatedParams.size)
+	for pq.Len() > 0 {
 		item := heap.Pop(&pq).(*heapItem)
+		allAggregatedResults = append(allAggregatedResults, item.Data)
 
-		// b. 处理分页逻辑
-		if currentIndex >= offset {
-			results = append(results, item.Data)
-		}
-		currentIndex++
-
-		// c. 从刚才弹出元素的那个流中，补充下一个元素到堆里
 		streamIdx := item.StreamIndex
-		if iterators[streamIdx].Next() {
-			data, err := scanToMap(iterators[streamIdx])
-			if err != nil {
-				return nil, totalCount, fmt.Errorf("归并过程中扫描行失败: %w", err)
-			}
-			heap.Push(&pq, &heapItem{Data: data, StreamIndex: streamIdx})
+		if sliceCursors[streamIdx] < len(sortedSlices[streamIdx]) {
+			nextItem := sortedSlices[streamIdx][sliceCursors[streamIdx]]
+			heap.Push(&pq, &heapItem{Data: nextItem, StreamIndex: streamIdx})
+			sliceCursors[streamIdx]++
 		}
 	}
 
-	return results, totalCount, nil
+	// 在最终的、完全有序的结果上进行内存分页
+	start := (validatedParams.page - 1) * validatedParams.size
+	if start < 0 || start > len(allAggregatedResults) {
+		return []map[string]any{}, totalCount, nil
+	}
+	end := start + validatedParams.size
+	if end > len(allAggregatedResults) {
+		end = len(allAggregatedResults)
+	}
+
+	return allAggregatedResults[start:end], totalCount, nil
 }
 
 // validateQueryRequest 负责所有查询前的权限和参数校验。
@@ -328,35 +316,33 @@ func (m *Manager) validateQueryRequest(ctx context.Context, bizName string, args
 	}, nil
 }
 
-// executeConcurrentQueryAndGetIterators 负责并发地获取迭代器和总数。
-func (m *Manager) executeConcurrentQueryAndGetIterators(ctx context.Context, bizName string, dbInstances map[string]*dbInstance, params *validatedQueryParams) ([]*sql.Rows, int64, error) {
+// executeConcurrentQuery 使用简化的并发模型，返回“结果切片的切片”。
+func (m *Manager) executeConcurrentQuery(ctx context.Context, bizName string, dbInstances map[string]*dbInstance, params *validatedQueryParams) ([][]map[string]any, int64, error) {
 	var totalCount int64
-	iterChan := make(chan *sql.Rows, len(dbInstances))
+	resultsChan := make(chan []map[string]any, len(dbInstances))
 	g, queryCtx := errgroup.WithContext(ctx)
 
-	// 并发计算总数
+	// 并发计算总数 (逻辑不变，但确保了并发安全)
 	g.Go(func() error {
 		countGroup, countCtx := errgroup.WithContext(queryCtx)
 		for _, instance := range dbInstances {
-			m.mu.RLock()
-			physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
-			m.mu.RUnlock()
-			if !hasPhysicalSchema || physicalSchemaInfo == nil {
-				continue
-			}
-			if _, tablePhysicallyExists := physicalSchemaInfo.allTablesAndColumns[params.tableName]; !tablePhysicallyExists {
-				continue
-			}
-
-			currentDB := instance.conn
+			instance := instance // 正确捕获循环变量
 			countGroup.Go(func() error {
-				countSQL, countArgs, errBuild := buildCountSQL(params.tableName, params.queryParams)
-				if errBuild != nil {
-					return fmt.Errorf("构建COUNT查询失败: %w", errBuild)
+				m.mu.RLock()
+				physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
+				m.mu.RUnlock()
+				if !hasPhysicalSchema || !physicalSchemaInfo.tableExists(params.tableName) {
+					return nil
 				}
+
+				countSQL, countArgs, err := buildCountSQL(params.tableName, params.queryParams)
+				if err != nil {
+					return err
+				}
+
 				var localCount int64
-				if err := currentDB.QueryRowContext(countCtx, countSQL, countArgs...).Scan(&localCount); err != nil {
-					slog.Warn("[DBManager Query] 计算总数时部分库查询失败", "error", err)
+				if err := instance.conn.QueryRowContext(countCtx, countSQL, countArgs...).Scan(&localCount); err != nil {
+					slog.WarnContext(countCtx, "[DBManager Query] 计算总数时部分库查询失败", "error", err)
 					return nil
 				}
 				atomic.AddInt64(&totalCount, localCount)
@@ -366,80 +352,90 @@ func (m *Manager) executeConcurrentQueryAndGetIterators(ctx context.Context, biz
 		return countGroup.Wait()
 	})
 
-	// 并发获取数据迭代器
+	// 并发获取所有数据行
 	g.Go(func() error {
-		defer close(iterChan)
+		defer close(resultsChan)
 		dataGroup, dataCtx := errgroup.WithContext(queryCtx)
-		for _, instance := range dbInstances {
-			m.mu.RLock()
-			physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
-			m.mu.RUnlock()
-			if !hasPhysicalSchema || physicalSchemaInfo == nil {
-				continue
-			}
-			if _, tablePhysicallyExists := physicalSchemaInfo.allTablesAndColumns[params.tableName]; !tablePhysicallyExists {
-				continue
-			}
+		for libName, instance := range dbInstances {
+			libName := libName // 正确捕获循环变量
+			instance := instance
 
-			currentDBConn := instance.conn
 			dataGroup.Go(func() error {
-				sqlQuery, queryArgs, errBuild := buildQuerySQL(params.tableName, params.selectFields, params.queryParams)
-				if errBuild != nil {
-					slog.Error("[DBManager Query] 构建SQL失败", "error", errBuild)
+				m.mu.RLock()
+				physicalSchemaInfo, hasPhysicalSchema := m.dbSchemaCache[instance.conn]
+				m.mu.RUnlock()
+				if !hasPhysicalSchema || !physicalSchemaInfo.tableExists(params.tableName) {
 					return nil
 				}
 
-				rows, errExec := currentDBConn.QueryContext(dataCtx, sqlQuery, queryArgs...)
-				if errExec != nil {
-					return fmt.Errorf("查询库 '%s' 表 '%s' 失败: %w", bizName, params.tableName, errExec)
+				sqlQuery, queryArgs, err := buildQuerySQL(params.tableName, params.selectFields, params.queryParams)
+				if err != nil {
+					slog.ErrorContext(dataCtx, "[DBManager Query] 构建SQL失败", "error", err)
+					return nil
 				}
 
-				iterChan <- rows
+				rows, err := instance.conn.QueryContext(dataCtx, sqlQuery, queryArgs...)
+				if err != nil {
+					return fmt.Errorf("查询库 '%s/%s' 表 '%s' 失败: %w", bizName, libName, params.tableName, err)
+				}
+				defer rows.Close()
+
+				libResults, err := scanAllRowsToMap(rows, libName)
+				if err != nil {
+					return fmt.Errorf("扫描库 '%s/%s' 数据失败: %w", bizName, libName, err)
+				}
+
+				if len(libResults) > 0 {
+					resultsChan <- libResults
+				}
 				return nil
 			})
 		}
 		return dataGroup.Wait()
 	})
 
-	var iterators []*sql.Rows
-	for iter := range iterChan {
-		iterators = append(iterators, iter)
+	var allSlices [][]map[string]any
+	for slice := range resultsChan {
+		allSlices = append(allSlices, slice)
 	}
 
 	if err := g.Wait(); err != nil {
-		for _, it := range iterators {
-			it.Close()
-		}
 		return nil, 0, err
 	}
 
-	return iterators, totalCount, nil
+	return allSlices, totalCount, nil
 }
 
-// scanToMap 是一个辅助函数，用于将 sql.Rows 的当前行扫描到 map 中。
-func scanToMap(rows *sql.Rows) (map[string]any, error) {
+// scanAllRowsToMap 是一个辅助函数，它扫描一个 *sql.Rows 中的所有行，并注入 __lib 字段。
+func scanAllRowsToMap(rows *sql.Rows, libName string) ([]map[string]any, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, err
 	}
 
-	values := make([]any, len(columns))
-	scanArgs := make([]any, len(values))
-	for i := range values {
-		scanArgs[i] = &values[i]
-	}
-
-	if err = rows.Scan(scanArgs...); err != nil {
-		return nil, err
-	}
-
-	rowData := make(map[string]any)
-	for i, colName := range columns {
-		if bytes, ok := values[i].([]byte); ok {
-			rowData[colName] = string(bytes)
-		} else {
-			rowData[colName] = values[i]
+	var results []map[string]any
+	for rows.Next() {
+		values := make([]any, len(columns))
+		scanArgs := make([]any, len(values))
+		for i := range values {
+			scanArgs[i] = &values[i]
 		}
+
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, err
+		}
+
+		rowData := make(map[string]any)
+		rowData["__lib"] = libName
+		for i, colName := range columns {
+			if bytes, ok := values[i].([]byte); ok {
+				rowData[colName] = string(bytes)
+			} else {
+				rowData[colName] = values[i]
+			}
+		}
+		results = append(results, rowData)
 	}
-	return rowData, nil
+
+	return results, rows.Err()
 }

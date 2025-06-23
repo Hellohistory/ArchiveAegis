@@ -81,7 +81,7 @@ func _typeUrl(m proto.Message) string {
 	return "type.googleapis.com/" + string(m.ProtoReflect().Descriptor().FullName())
 }
 
-// main 函数现在将 sqlite.Manager (一个 Executor) 注入到 server 中
+// main 函数将 sqlite.Manager (一个 Executor) 注入到 server 中
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
 
@@ -138,14 +138,13 @@ func main() {
 		bizName:    *bizNameFlag,
 	})
 
-	slog.Info("✅ SQLite插件(v2 最终版)启动成功，开始提供服务...")
+	slog.Info("✅ SQLite插件启动成功，开始提供服务...")
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("gRPC 服务启动失败", "error", err)
 		os.Exit(1)
 	}
 }
 
-// initAuthDB 函数保持不变
 func initAuthDB(path string) (*sql.DB, error) {
 	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=ON&_synchronous=NORMAL", path)
 	db, err := sql.Open("sqlite", dsn)
