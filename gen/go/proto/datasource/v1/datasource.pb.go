@@ -1018,6 +1018,110 @@ func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
 	return HealthCheckResponse_UNKNOWN
 }
 
+type TriggerBackupRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	BackupDestinationDir string                 `protobuf:"bytes,1,opt,name=backup_destination_dir,json=backupDestinationDir,proto3" json:"backup_destination_dir,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *TriggerBackupRequest) Reset() {
+	*x = TriggerBackupRequest{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriggerBackupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriggerBackupRequest) ProtoMessage() {}
+
+func (x *TriggerBackupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriggerBackupRequest.ProtoReflect.Descriptor instead.
+func (*TriggerBackupRequest) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *TriggerBackupRequest) GetBackupDestinationDir() string {
+	if x != nil {
+		return x.BackupDestinationDir
+	}
+	return ""
+}
+
+type TriggerBackupResult struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	FinalBackupPath string                 `protobuf:"bytes,1,opt,name=final_backup_path,json=finalBackupPath,proto3" json:"final_backup_path,omitempty"`
+	FileSize        int64                  `protobuf:"varint,2,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
+	DbFilesCount    int32                  `protobuf:"varint,3,opt,name=db_files_count,json=dbFilesCount,proto3" json:"db_files_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *TriggerBackupResult) Reset() {
+	*x = TriggerBackupResult{}
+	mi := &file_datasource_v1_datasource_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriggerBackupResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriggerBackupResult) ProtoMessage() {}
+
+func (x *TriggerBackupResult) ProtoReflect() protoreflect.Message {
+	mi := &file_datasource_v1_datasource_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriggerBackupResult.ProtoReflect.Descriptor instead.
+func (*TriggerBackupResult) Descriptor() ([]byte, []int) {
+	return file_datasource_v1_datasource_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *TriggerBackupResult) GetFinalBackupPath() string {
+	if x != nil {
+		return x.FinalBackupPath
+	}
+	return ""
+}
+
+func (x *TriggerBackupResult) GetFileSize() int64 {
+	if x != nil {
+		return x.FileSize
+	}
+	return 0
+}
+
+func (x *TriggerBackupResult) GetDbFilesCount() int32 {
+	if x != nil {
+		return x.DbFilesCount
+	}
+	return 0
+}
+
 var File_datasource_v1_datasource_proto protoreflect.FileDescriptor
 
 const file_datasource_v1_datasource_proto_rawDesc = "" +
@@ -1094,7 +1198,13 @@ const file_datasource_v1_datasource_proto_rawDesc = "" +
 	"\rServingStatus\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aSERVING\x10\x01\x12\x0f\n" +
-	"\vNOT_SERVING\x10\x022\xf8\x01\n" +
+	"\vNOT_SERVING\x10\x02\"L\n" +
+	"\x14TriggerBackupRequest\x124\n" +
+	"\x16backup_destination_dir\x18\x01 \x01(\tR\x14backupDestinationDir\"\x84\x01\n" +
+	"\x13TriggerBackupResult\x12*\n" +
+	"\x11final_backup_path\x18\x01 \x01(\tR\x0ffinalBackupPath\x12\x1b\n" +
+	"\tfile_size\x18\x02 \x01(\x03R\bfileSize\x12$\n" +
+	"\x0edb_files_count\x18\x03 \x01(\x05R\fdbFilesCount2\xf8\x01\n" +
 	"\n" +
 	"DataSource\x12T\n" +
 	"\rGetPluginInfo\x12 .datasource.GetPluginInfoRequest\x1a!.datasource.GetPluginInfoResponse\x12D\n" +
@@ -1114,7 +1224,7 @@ func file_datasource_v1_datasource_proto_rawDescGZIP() []byte {
 }
 
 var file_datasource_v1_datasource_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_datasource_v1_datasource_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_datasource_v1_datasource_proto_goTypes = []any{
 	(HealthCheckResponse_ServingStatus)(0), // 0: datasource.HealthCheckResponse.ServingStatus
 	(*RequestEnvelope)(nil),                // 1: datasource.RequestEnvelope
@@ -1135,25 +1245,27 @@ var file_datasource_v1_datasource_proto_goTypes = []any{
 	(*UpdateConfigurationResult)(nil),      // 16: datasource.UpdateConfigurationResult
 	(*HealthCheckRequest)(nil),             // 17: datasource.HealthCheckRequest
 	(*HealthCheckResponse)(nil),            // 18: datasource.HealthCheckResponse
-	nil,                                    // 19: datasource.RequestEnvelope.MetadataEntry
-	nil,                                    // 20: datasource.SchemaResult.TablesEntry
-	(*anypb.Any)(nil),                      // 21: google.protobuf.Any
-	(*structpb.Struct)(nil),                // 22: google.protobuf.Struct
+	(*TriggerBackupRequest)(nil),           // 19: datasource.TriggerBackupRequest
+	(*TriggerBackupResult)(nil),            // 20: datasource.TriggerBackupResult
+	nil,                                    // 21: datasource.RequestEnvelope.MetadataEntry
+	nil,                                    // 22: datasource.SchemaResult.TablesEntry
+	(*anypb.Any)(nil),                      // 23: google.protobuf.Any
+	(*structpb.Struct)(nil),                // 24: google.protobuf.Struct
 }
 var file_datasource_v1_datasource_proto_depIdxs = []int32{
-	19, // 0: datasource.RequestEnvelope.metadata:type_name -> datasource.RequestEnvelope.MetadataEntry
-	21, // 1: datasource.RequestEnvelope.payload:type_name -> google.protobuf.Any
+	21, // 0: datasource.RequestEnvelope.metadata:type_name -> datasource.RequestEnvelope.MetadataEntry
+	23, // 1: datasource.RequestEnvelope.payload:type_name -> google.protobuf.Any
 	3,  // 2: datasource.ResponseEnvelope.status:type_name -> datasource.Status
-	21, // 3: datasource.ResponseEnvelope.payload:type_name -> google.protobuf.Any
-	22, // 4: datasource.Status.details:type_name -> google.protobuf.Struct
+	23, // 3: datasource.ResponseEnvelope.payload:type_name -> google.protobuf.Any
+	24, // 4: datasource.Status.details:type_name -> google.protobuf.Struct
 	6,  // 5: datasource.GetPluginInfoResponse.contract_version:type_name -> datasource.ApiVersion
-	22, // 6: datasource.DataQueryRequest.query:type_name -> google.protobuf.Struct
-	22, // 7: datasource.DataQueryResult.data:type_name -> google.protobuf.Struct
-	22, // 8: datasource.DataMutateRequest.payload:type_name -> google.protobuf.Struct
-	22, // 9: datasource.DataMutateResult.data:type_name -> google.protobuf.Struct
-	20, // 10: datasource.SchemaResult.tables:type_name -> datasource.SchemaResult.TablesEntry
+	24, // 6: datasource.DataQueryRequest.query:type_name -> google.protobuf.Struct
+	24, // 7: datasource.DataQueryResult.data:type_name -> google.protobuf.Struct
+	24, // 8: datasource.DataMutateRequest.payload:type_name -> google.protobuf.Struct
+	24, // 9: datasource.DataMutateResult.data:type_name -> google.protobuf.Struct
+	22, // 10: datasource.SchemaResult.tables:type_name -> datasource.SchemaResult.TablesEntry
 	14, // 11: datasource.TableSchema.fields:type_name -> datasource.FieldDescription
-	22, // 12: datasource.UpdateConfigurationRequest.new_config:type_name -> google.protobuf.Struct
+	24, // 12: datasource.UpdateConfigurationRequest.new_config:type_name -> google.protobuf.Struct
 	0,  // 13: datasource.HealthCheckResponse.status:type_name -> datasource.HealthCheckResponse.ServingStatus
 	13, // 14: datasource.SchemaResult.TablesEntry.value:type_name -> datasource.TableSchema
 	4,  // 15: datasource.DataSource.GetPluginInfo:input_type -> datasource.GetPluginInfoRequest
@@ -1180,7 +1292,7 @@ func file_datasource_v1_datasource_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_datasource_v1_datasource_proto_rawDesc), len(file_datasource_v1_datasource_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

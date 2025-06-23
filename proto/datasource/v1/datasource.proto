@@ -108,3 +108,13 @@ message HealthCheckResponse {
   }
   ServingStatus status = 1;
 }
+
+message TriggerBackupRequest {
+  string backup_destination_dir = 1;
+}
+
+message TriggerBackupResult {
+  string final_backup_path = 1;
+  int64 file_size = 2;
+  int32 db_files_count = 3;
+}
