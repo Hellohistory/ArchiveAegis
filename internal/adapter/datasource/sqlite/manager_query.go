@@ -85,8 +85,14 @@ func (m *Manager) handleDataQuery(ctx context.Context, req *v1.RequestEnvelope) 
 		return nil, status.Errorf(codes.Internal, "查询数据失败: %v", err)
 	}
 
+	// 在序列化前，将 []map[string]any 转换为 []interface{}
+	itemsAsInterface := make([]interface{}, len(results))
+	for i, item := range results {
+		itemsAsInterface[i] = item
+	}
+
 	resultData, err := structpb.NewStruct(map[string]interface{}{
-		"items": results,
+		"items": itemsAsInterface, // 使用转换后的切片
 		"total": total,
 	})
 	if err != nil {

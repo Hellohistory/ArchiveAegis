@@ -86,12 +86,12 @@ func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 
 // getSourceReader 根据 URL scheme 选择合适的下载器
 func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
-	// ---------------------- ① Windows 绝对路径 ----------------------------
+	//  Windows 绝对路径
 	if runtime.GOOS == "windows" && isWindowsAbsPath(rawURL) {
 		return os.Open(rawURL)
 	}
 
-	// ---------------------- ② 解析成 URL ---------------------------------
+	// 解析成 URL
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		// 解析失败，则按「相对路径」处理（加入 rootDir）
@@ -99,19 +99,19 @@ func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
 		return os.Open(abs)
 	}
 
-	// ---------------------- ③ 无 scheme：相对 / Unix 绝对路径 -------------
+	// 无 scheme：相对 / Unix 绝对路径
 	if u.Scheme == "" {
 		abs := filepath.Join(pm.rootDir, u.Path)
 		return os.Open(abs)
 	}
 
-	// ---------------------- ④ file:// 协议 --------------------------------
+	// file:// 协议
 	if u.Scheme == "file" {
 		localPath := downloader.ResolveLocalFilePath(u)
 		return os.Open(localPath)
 	}
 
-	// ---------------------- ⑤ 其它协议（http/https…） ----------------------
+	// 其它协议（http/https…）
 	for _, d := range pm.downloaders {
 		if d.SupportsScheme(u.Scheme) {
 			return d.Download(u)

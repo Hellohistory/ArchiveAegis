@@ -8,60 +8,74 @@ import (
 	"strings"
 )
 
-// buildQuerySQL 根据管理员配置动态构建数据查询的 SQL 语句
-func buildQuerySQL(
-	tableName string,
-	selectDBFields []string,
-	queryParams []queryParam,
-	page int,
-	size int,
-) (string, []any, error) {
-	if tableName == "" || len(selectDBFields) == 0 {
-		return "", nil, errors.New("表名和查询字段不能为空 (buildQuerySQL)")
-	}
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 2000 {
-		size = 50
+// buildQuerySQL 构建用于获取数据的 SQL 查询，包含筛选、排序和分页。
+func buildQuerySQL(tableName string, fields []string, params []queryParam, page, size int) (string, []any, error) {
+	var queryBuilder strings.Builder
+	var args []any
+
+	// 保证字段顺序
+	sort.Strings(fields)
+
+	queryBuilder.WriteString("SELECT ")
+	queryBuilder.WriteString(strings.Join(fields, ", "))
+	queryBuilder.WriteString(" FROM ")
+	queryBuilder.WriteString(tableName)
+
+	if len(params) > 0 {
+		queryBuilder.WriteString(" WHERE ")
+		for i, p := range params {
+			if i > 0 {
+				queryBuilder.WriteString(" AND ")
+			}
+			queryBuilder.WriteString(p.Field)
+			if p.Fuzzy {
+				queryBuilder.WriteString(" LIKE ?")
+			} else {
+				queryBuilder.WriteString(" = ?")
+			}
+			args = append(args, p.Value)
+		}
 	}
 
-	selectClause := `"` + strings.Join(selectDBFields, `", "`) + `"`
-	whereClause, whereArgs, err := buildWhereClause(queryParams)
-	if err != nil {
-		return "", nil, err
+	// 添加固定的排序，确保分页结果的稳定性
+	queryBuilder.WriteString(" ORDER BY id ASC")
+
+	// 添加分页
+	if page > 0 && size > 0 {
+		queryBuilder.WriteString(" LIMIT ? OFFSET ?")
+		args = append(args, size, (page-1)*size)
 	}
 
-	var sb strings.Builder
-	sb.WriteString("SELECT ")
-	sb.WriteString(selectClause)
-	sb.WriteString(fmt.Sprintf(" FROM %q", tableName))
-	if whereClause != "" {
-		sb.WriteString(" ")
-		sb.WriteString(whereClause)
-	}
-	sb.WriteString(" LIMIT ? OFFSET ?")
-
-	args := append(whereArgs, size, (page-1)*size)
-	return sb.String(), args, nil
+	return queryBuilder.String(), args, nil
 }
 
-// buildCountSQL 用于构建计算总数的SQL查询
-func buildCountSQL(tableName string, queryParams []queryParam) (string, []any, error) {
-	if tableName == "" {
-		return "", nil, errors.New("表名不能为空 (buildCountSQL)")
+// buildCountSQL 构建用于计算总行数的 SQL 查询。
+func buildCountSQL(tableName string, params []queryParam) (string, []any, error) {
+	var queryBuilder strings.Builder
+	var args []any
+
+	queryBuilder.WriteString("SELECT COUNT(*) FROM ")
+	queryBuilder.WriteString(tableName)
+
+	if len(params) > 0 {
+		queryBuilder.WriteString(" WHERE ")
+		for i, p := range params {
+			if i > 0 {
+				// 默认使用 AND 逻辑
+				queryBuilder.WriteString(" AND ")
+			}
+			// 字段名不应被引号包围，以避免 SQL 语法错误
+			queryBuilder.WriteString(p.Field)
+			if p.Fuzzy {
+				queryBuilder.WriteString(" LIKE ?")
+			} else {
+				queryBuilder.WriteString(" = ?")
+			}
+			args = append(args, p.Value)
+		}
 	}
-	whereClause, whereArgs, err := buildWhereClause(queryParams)
-	if err != nil {
-		return "", nil, err
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("SELECT COUNT(*) FROM %q", tableName))
-	if whereClause != "" {
-		sb.WriteString(" ")
-		sb.WriteString(whereClause)
-	}
-	return sb.String(), whereArgs, nil
+
+	return queryBuilder.String(), args, nil
 }
 
 // buildInsertSQL 安全地构建 INSERT 语句
