@@ -8,74 +8,97 @@ import (
 	"strings"
 )
 
-// buildQuerySQL 构建用于获取数据的 SQL 查询，包含筛选、排序和分页。
-func buildQuerySQL(tableName string, fields []string, params []queryParam, page, size int) (string, []any, error) {
-	var queryBuilder strings.Builder
-	var args []any
-
-	// 保证字段顺序
-	sort.Strings(fields)
-
-	queryBuilder.WriteString("SELECT ")
-	queryBuilder.WriteString(strings.Join(fields, ", "))
-	queryBuilder.WriteString(" FROM ")
-	queryBuilder.WriteString(tableName)
-
-	if len(params) > 0 {
-		queryBuilder.WriteString(" WHERE ")
-		for i, p := range params {
-			if i > 0 {
-				queryBuilder.WriteString(" AND ")
-			}
-			queryBuilder.WriteString(p.Field)
-			if p.Fuzzy {
-				queryBuilder.WriteString(" LIKE ?")
-			} else {
-				queryBuilder.WriteString(" = ?")
-			}
-			args = append(args, p.Value)
-		}
+// buildQuerySQL 构建用于获取数据的 SQL 查询
+func buildQuerySQL(tableName string, fields []string, params []queryParam) (string, []any, error) { // <--- 移除 page, size 参数
+	if tableName == "" || len(fields) == 0 {
+		return "", nil, errors.New("表名和查询字段不能为空 (buildQuerySQL)")
 	}
 
-	// 添加固定的排序，确保分页结果的稳定性
+	quotedFields := make([]string, len(fields))
+	sort.Strings(fields)
+	for i, f := range fields {
+		quotedFields[i] = fmt.Sprintf("%q", f)
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT ")
+	queryBuilder.WriteString(strings.Join(quotedFields, ", "))
+	queryBuilder.WriteString(fmt.Sprintf(" FROM %q", tableName))
+
+	whereClause, whereArgs, err := buildWhereClause(params)
+	if err != nil {
+		return "", nil, err
+	}
+	if whereClause != "" {
+		queryBuilder.WriteString(" ")
+		queryBuilder.WriteString(whereClause)
+	}
+
 	queryBuilder.WriteString(" ORDER BY id ASC")
 
-	// 添加分页
-	if page > 0 && size > 0 {
-		queryBuilder.WriteString(" LIMIT ? OFFSET ?")
-		args = append(args, size, (page-1)*size)
-	}
-
-	return queryBuilder.String(), args, nil
+	return queryBuilder.String(), whereArgs, nil
 }
 
-// buildCountSQL 构建用于计算总行数的 SQL 查询。
+// buildCountSQL 构建用于计算总行数的 SQL 查询
 func buildCountSQL(tableName string, params []queryParam) (string, []any, error) {
-	var queryBuilder strings.Builder
-	var args []any
-
-	queryBuilder.WriteString("SELECT COUNT(*) FROM ")
-	queryBuilder.WriteString(tableName)
-
-	if len(params) > 0 {
-		queryBuilder.WriteString(" WHERE ")
-		for i, p := range params {
-			if i > 0 {
-				// 默认使用 AND 逻辑
-				queryBuilder.WriteString(" AND ")
-			}
-			// 字段名不应被引号包围，以避免 SQL 语法错误
-			queryBuilder.WriteString(p.Field)
-			if p.Fuzzy {
-				queryBuilder.WriteString(" LIKE ?")
-			} else {
-				queryBuilder.WriteString(" = ?")
-			}
-			args = append(args, p.Value)
-		}
+	if tableName == "" {
+		return "", nil, errors.New("表名不能为空 (buildCountSQL)")
 	}
 
-	return queryBuilder.String(), args, nil
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(fmt.Sprintf("SELECT COUNT(*) FROM %q", tableName))
+
+	whereClause, whereArgs, err := buildWhereClause(params)
+	if err != nil {
+		return "", nil, err
+	}
+	if whereClause != "" {
+		queryBuilder.WriteString(" ")
+		queryBuilder.WriteString(whereClause)
+	}
+
+	return queryBuilder.String(), whereArgs, nil
+}
+
+// buildWhereClause 是一个功能完善的、用于构建 WHERE 子句的通用辅助函数
+func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
+	if len(filters) == 0 {
+		return "", make([]interface{}, 0), nil
+	}
+
+	var conditions []string
+	var args []interface{}
+
+	for i, p := range filters {
+		quotedField := fmt.Sprintf("%q", p.Field)
+		var operator, value string
+
+		if p.Fuzzy {
+			operator = "LIKE"
+			// 对 LIKE 的值进行转义，并包裹通配符
+			escapedValue := strings.ReplaceAll(p.Value, `\`, `\\`)
+			escapedValue = strings.ReplaceAll(escapedValue, `%`, `\%`)
+			escapedValue = strings.ReplaceAll(escapedValue, `_`, `\_`)
+			value = "%" + escapedValue + "%"
+		} else {
+			operator = "="
+			value = p.Value
+		}
+		conditions = append(conditions, fmt.Sprintf("%s %s ?", quotedField, operator))
+		args = append(args, value)
+
+		// 处理 AND / OR 逻辑连接符
+		if i < len(filters)-1 {
+			// 默认使用 AND，除非下一个 filter 明确指定了 OR
+			nextLogic := strings.ToUpper(filters[i+1].Logic)
+			if nextLogic == "OR" {
+				conditions = append(conditions, "OR")
+			} else {
+				conditions = append(conditions, "AND")
+			}
+		}
+	}
+	return "WHERE " + strings.Join(conditions, " "), args, nil
 }
 
 // buildInsertSQL 安全地构建 INSERT 语句
@@ -119,6 +142,9 @@ func buildUpdateSQL(tableName string, data map[string]interface{}, filters []que
 	if err != nil {
 		return "", nil, err
 	}
+	if whereClause == "" {
+		return "", nil, errors.New("出于安全考虑，不允许无条件的UPDATE操作")
+	}
 	args = append(args, whereArgs...)
 	query := fmt.Sprintf("UPDATE %q SET %s %s", tableName, strings.Join(setClauses, ", "), whereClause)
 	return query, args, nil
@@ -135,39 +161,4 @@ func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface
 	}
 	query := fmt.Sprintf("DELETE FROM %q %s", tableName, whereClause)
 	return query, whereArgs, nil
-}
-
-// buildWhereClause 是一个用于构建 WHERE 子句的通用辅助函数
-func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
-	if len(filters) == 0 {
-		return "", make([]interface{}, 0), nil
-	}
-
-	var conditions []string
-	args := make([]interface{}, 0, len(filters))
-
-	for i, p := range filters {
-		var operator, value string
-		if p.Fuzzy {
-			operator = "LIKE"
-			likeValue := strings.ReplaceAll(p.Value, `\`, `\\`)
-			likeValue = strings.ReplaceAll(likeValue, `%`, `\%`)
-			likeValue = strings.ReplaceAll(likeValue, `_`, `\_`)
-			value = "%" + likeValue + "%"
-		} else {
-			operator = "="
-			value = p.Value
-		}
-		conditions = append(conditions, fmt.Sprintf("%q %s ?", p.Field, operator))
-		args = append(args, value)
-		if i < len(filters)-1 {
-			logic := strings.ToUpper(p.Logic)
-			if logic == "AND" || logic == "OR" {
-				conditions = append(conditions, logic)
-			} else if logic != "" {
-				return "", nil, fmt.Errorf("无效的逻辑操作符: %s", p.Logic)
-			}
-		}
-	}
-	return "WHERE " + strings.Join(conditions, " "), args, nil
 }

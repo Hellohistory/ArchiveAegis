@@ -276,7 +276,7 @@ func TestHandleDataQuery(t *testing.T) {
 				query: map[string]interface{}{
 					"table": "test_table",
 					"filters": []interface{}{
-						map[string]interface{}{"field": "email", "value": "%@example.com", "fuzzy": true},
+						map[string]interface{}{"field": "email", "value": "@example.com", "fuzzy": true},
 					},
 				},
 				expectedTotal: 3,
@@ -294,7 +294,9 @@ func TestHandleDataQuery(t *testing.T) {
 					"size":  2,
 				},
 				expectedTotal: 3,
-				expectedItems: []map[string]interface{}{},
+				expectedItems: []map[string]interface{}{
+					{"__lib": "lib2", "id": float64(3), "name": "user_c", "email": "c@example.com", "dept_id": float64(101)},
+				},
 			},
 			{
 				name:          "查询无结果",
