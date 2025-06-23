@@ -3,7 +3,7 @@
 package aegmiddleware_test
 
 import (
-	"ArchiveAegis/internal/aegmiddleware" // 导入被测试的包
+	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/service"
 	"bytes"
@@ -15,11 +15,6 @@ import (
 	"time"
 )
 
-// ============================================================================
-//  测试替身 (Test Doubles) / 模拟对象 (Mocks)
-// ============================================================================
-
-// mockAdminConfigService 是 port.QueryAdminConfigService 接口的一个测试替身。
 type mockAdminConfigService struct {
 	GetIPLimitSettingsFunc      func(ctx context.Context) (*domain.IPLimitSetting, error)
 	GetUserLimitSettingsFunc    func(ctx context.Context, userID int64) (*domain.UserLimitSetting, error)
@@ -44,6 +39,8 @@ func (m *mockAdminConfigService) GetBizRateLimitSettings(ctx context.Context, bi
 	}
 	return nil, nil
 }
+
+// 其余方法在当前测试无关紧要，直接返回零值。
 func (m *mockAdminConfigService) GetBizQueryConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
 	return nil, nil
 }
@@ -83,115 +80,126 @@ func (m *mockAdminConfigService) UpdateBizRateLimitSettings(ctx context.Context,
 func (m *mockAdminConfigService) InvalidateCacheForBiz(bizName string) {}
 func (m *mockAdminConfigService) InvalidateAllCaches()                 {}
 
-// ============================================================================
-//  测试辅助函数 (Test Helpers)
-// ============================================================================
-
+// 一个最小化的处理器，便于验证限流行为。
 var testHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 })
 
+// 将 Claim 嵌入请求上下文的辅助函数。
 func addClaimToContext(r *http.Request, claim *service.Claim) *http.Request {
 	ctx := context.WithValue(r.Context(), service.ClaimKey, claim)
 	return r.WithContext(ctx)
 }
 
-// ============================================================================
-//  测试用例 (Test Cases)
-// ============================================================================
+// Global（全局）限流
 
 func TestBusinessRateLimiter_Global(t *testing.T) {
 	mockService := &mockAdminConfigService{}
 	limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 2, 2)
 	middleware := limiter.Global(testHandler)
 
-	t.Run("should allow initial requests", func(t *testing.T) {
+	t.Run("允许初始请求", func(t *testing.T) {
 		for i := 0; i < 2; i++ {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			rr := httptest.NewRecorder()
+
 			middleware.ServeHTTP(rr, req)
+
 			if status := rr.Code; status != http.StatusOK {
-				t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+				t.Errorf("第 %d 次请求返回状态码错误: 得到 %v, 期望 %v", i+1, status, http.StatusOK)
 			}
 		}
 	})
 
-	t.Run("should block subsequent requests", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/", nil)
+	t.Run("超过限额后阻止", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rr := httptest.NewRecorder()
+
 		middleware.ServeHTTP(rr, req)
+
 		if status := rr.Code; status != http.StatusTooManyRequests {
-			t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusTooManyRequests)
+			t.Errorf("超额请求应被阻止: 得到 %v, 期望 %v", status, http.StatusTooManyRequests)
 		}
 	})
 
-	t.Run("should allow requests again after delay", func(t *testing.T) {
+	t.Run("时间窗口过后重新放行", func(t *testing.T) {
 		time.Sleep(1 * time.Second)
-		req := httptest.NewRequest("GET", "/", nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rr := httptest.NewRecorder()
+
 		middleware.ServeHTTP(rr, req)
+
 		if status := rr.Code; status != http.StatusOK {
-			t.Errorf("handler returned wrong status code after delay: got %v want %v", status, http.StatusOK)
+			t.Errorf("窗口结束后请求应放行: 得到 %v, 期望 %v", status, http.StatusOK)
 		}
 	})
 }
+
+// PerIP（按 IP）限流
 
 func TestBusinessRateLimiter_PerIP(t *testing.T) {
 	limiter := aegmiddleware.NewBusinessRateLimiter(nil, 100, 100)
-	limiter.SetIPDefaultRateForTest(1, 1)
+	limiter.SetIPDefaultRateForTest(1, 1) // 设置更严的默认值，方便触发
 	middleware := limiter.PerIP(testHandler)
 
-	t.Run("should limit requests from the same IP", func(t *testing.T) {
-		req1 := httptest.NewRequest("GET", "/", nil)
+	t.Run("同一 IP 被限流", func(t *testing.T) {
+		req1 := httptest.NewRequest(http.MethodGet, "/", nil)
 		req1.RemoteAddr = "192.0.2.1:12345"
 		rr1 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr1, req1)
+
 		if rr1.Code != http.StatusOK {
-			t.Fatal("First request from IP 1 should be allowed")
+			t.Fatalf("第一次请求应通过, 得到 %d", rr1.Code)
 		}
 
-		req2 := httptest.NewRequest("GET", "/", nil)
+		req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 		req2.RemoteAddr = "192.0.2.1:12345"
 		rr2 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr2, req2)
+
 		if rr2.Code != http.StatusTooManyRequests {
-			t.Errorf("Second request from IP 1 should be blocked, got %d", rr2.Code)
+			t.Errorf("第二次请求应被限流, 得到 %d", rr2.Code)
 		}
 	})
 
-	t.Run("should not affect requests from a different IP", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/", nil)
+	t.Run("不同 IP 互不影响", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.RemoteAddr = "192.0.2.2:54321"
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
+
 		if status := rr.Code; status != http.StatusOK {
-			t.Errorf("Request from IP 2 should be allowed, but got %v", status)
+			t.Errorf("另一 IP 的请求应通过, 得到 %d", status)
 		}
 	})
 }
+
+// PerUser（按用户）限流
 
 func TestBusinessRateLimiter_PerUser(t *testing.T) {
 	claimUser1 := &service.Claim{ID: 1, Role: "user"}
 	claimUser2 := &service.Claim{ID: 2, Role: "user"}
 
-	t.Run("should use default limit for user without specific settings", func(t *testing.T) {
+	t.Run("使用默认限额的用户", func(t *testing.T) {
 		mockService := &mockAdminConfigService{}
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
 
 		for i := 0; i < 5; i++ {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req = addClaimToContext(req, claimUser1)
 			rr := httptest.NewRecorder()
 			middleware.ServeHTTP(rr, req)
+
 			if rr.Code != http.StatusOK {
-				t.Fatalf("Request %d for user 1 should be allowed, got %d", i+1, rr.Code)
+				t.Fatalf("第 %d 次请求应通过, 得到 %d", i+1, rr.Code)
 			}
 		}
 	})
 
-	t.Run("should use specific limit for user with settings", func(t *testing.T) {
+	t.Run("使用专属限额的用户", func(t *testing.T) {
 		mockService := &mockAdminConfigService{}
 		mockService.GetUserLimitSettingsFunc = func(ctx context.Context, userID int64) (*domain.UserLimitSetting, error) {
 			if userID == 2 {
@@ -199,45 +207,54 @@ func TestBusinessRateLimiter_PerUser(t *testing.T) {
 			}
 			return nil, nil
 		}
+
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
 
-		req1 := httptest.NewRequest("GET", "/", nil)
+		// 第一请求应通过
+		req1 := httptest.NewRequest(http.MethodGet, "/", nil)
 		req1 = addClaimToContext(req1, claimUser2)
 		rr1 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr1, req1)
+
 		if rr1.Code != http.StatusOK {
-			t.Fatal("First request for user 2 should be allowed")
+			t.Fatal("第一次请求应通过")
 		}
 
-		req2 := httptest.NewRequest("GET", "/", nil)
+		// 第二请求应被限流
+		req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 		req2 = addClaimToContext(req2, claimUser2)
 		rr2 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr2, req2)
+
 		if rr2.Code != http.StatusTooManyRequests {
-			t.Errorf("Second request for user 2 should be blocked, got %d", rr2.Code)
+			t.Errorf("第二次请求应被限流, 得到 %d", rr2.Code)
 		}
 	})
 
-	t.Run("should not limit unauthenticated users", func(t *testing.T) {
+	t.Run("未认证用户不受影响", func(t *testing.T) {
 		mockService := &mockAdminConfigService{}
 		limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 		middleware := limiter.PerUser(testHandler)
 
-		req := httptest.NewRequest("GET", "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
+
 		if rr.Code != http.StatusOK {
-			t.Errorf("Unauthenticated request should pass, got %d", rr.Code)
+			t.Errorf("未认证请求应通过, 得到 %d", rr.Code)
 		}
 	})
 }
+
+// PerBiz（按业务线）限流
 
 func TestBusinessRateLimiter_PerBiz(t *testing.T) {
 	mockService := &mockAdminConfigService{}
 	limiter := aegmiddleware.NewBusinessRateLimiter(mockService, 100, 100)
 	middleware := limiter.PerBiz(testHandler)
 
+	// 为 "sales" 与 "inventory" 注入专属限流策略
 	mockService.GetBizRateLimitSettingsFunc = func(ctx context.Context, bizName string) (*domain.BizRateLimitSetting, error) {
 		if bizName == "sales" || bizName == "inventory" {
 			return &domain.BizRateLimitSetting{RateLimitPerSecond: 1.0, BurstSize: 1}, nil
@@ -245,59 +262,67 @@ func TestBusinessRateLimiter_PerBiz(t *testing.T) {
 		return nil, nil
 	}
 
-	t.Run("should limit biz from JSON body", func(t *testing.T) {
+	t.Run("从 JSON Body 中提取 biz", func(t *testing.T) {
 		jsonBody, _ := json.Marshal(map[string]string{"biz_name": "sales"})
-		req1 := httptest.NewRequest("POST", "/data/query", bytes.NewBuffer(jsonBody))
+
+		// 第一次请求应通过
+		req1 := httptest.NewRequest(http.MethodPost, "/data/query", bytes.NewBuffer(jsonBody))
 		req1.Header.Set("Content-Type", "application/json")
 		rr1 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr1, req1)
+
 		if rr1.Code != http.StatusOK {
-			t.Fatalf("First request for biz 'sales' should be allowed, got %d", rr1.Code)
+			t.Fatalf("第一次请求应通过, 得到 %d", rr1.Code)
 		}
 
-		jsonBody, _ = json.Marshal(map[string]string{"biz_name": "sales"})
-		req2 := httptest.NewRequest("POST", "/data/query", bytes.NewBuffer(jsonBody))
+		// 第二次请求应被限流
+		req2 := httptest.NewRequest(http.MethodPost, "/data/query", bytes.NewBuffer(jsonBody))
 		req2.Header.Set("Content-Type", "application/json")
 		rr2 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr2, req2)
+
 		if rr2.Code != http.StatusTooManyRequests {
-			t.Errorf("Second request for biz 'sales' should be blocked, got %d", rr2.Code)
+			t.Errorf("第二次请求应被限流, 得到 %d", rr2.Code)
 		}
 	})
 
-	t.Run("should limit biz from URL query", func(t *testing.T) {
-		req1 := httptest.NewRequest("GET", "/some_path?biz=inventory", nil)
+	t.Run("从 URL Query 中提取 biz", func(t *testing.T) {
+		req1 := httptest.NewRequest(http.MethodGet, "/some_path?biz=inventory", nil)
 		rr1 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr1, req1)
+
 		if rr1.Code != http.StatusOK {
-			t.Fatal("First GET request for biz 'inventory' should be allowed")
+			t.Fatal("第一次请求应通过")
 		}
 
-		req2 := httptest.NewRequest("GET", "/some_path?biz=inventory", nil)
+		req2 := httptest.NewRequest(http.MethodGet, "/some_path?biz=inventory", nil)
 		rr2 := httptest.NewRecorder()
 		middleware.ServeHTTP(rr2, req2)
+
 		if rr2.Code != http.StatusTooManyRequests {
-			t.Errorf("Second GET request for biz 'inventory' should be blocked, got %d", rr2.Code)
+			t.Errorf("第二次请求应被限流, 得到 %d", rr2.Code)
 		}
 	})
 
-	t.Run("should not affect other biz", func(t *testing.T) {
+	t.Run("无关业务线不受影响", func(t *testing.T) {
 		jsonBody, _ := json.Marshal(map[string]string{"biz_name": "marketing"})
-		req := httptest.NewRequest("POST", "/data/query", bytes.NewBuffer(jsonBody))
+		req := httptest.NewRequest(http.MethodPost, "/data/query", bytes.NewBuffer(jsonBody))
 		req.Header.Set("Content-Type", "application/json")
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
+
 		if rr.Code != http.StatusOK {
-			t.Errorf("Request for biz 'marketing' should be allowed, got %d", rr.Code)
+			t.Errorf("不在限流列表中的 biz 应通过, 得到 %d", rr.Code)
 		}
 	})
 
-	t.Run("should pass if no biz name is provided", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/no_biz_path", nil)
+	t.Run("未提供 biz 时直接放行", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/no_biz_path", nil)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
+
 		if rr.Code != http.StatusOK {
-			t.Errorf("Request without biz name should pass, got %d", rr.Code)
+			t.Errorf("未指定 biz 的请求应通过, 得到 %d", rr.Code)
 		}
 	})
 }

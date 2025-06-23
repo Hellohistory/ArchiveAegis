@@ -74,8 +74,8 @@ func New(deps Dependencies) http.Handler {
 		systemGroup.Use(WrapNetHTTP(deps.RateLimiter.LightweightChain))
 		{
 			systemGroup.Any("/setup", setupHandler(deps.AuthDB, deps.SetupToken, deps.SetupTokenDeadline))
+			systemGroup.GET("/status", statusHandler(deps.AuthDB))
 		}
-		apiV1.GET("/system/status", statusHandler(deps.AuthDB))
 
 		// --- 元数据/发现平面 ---
 		metaGroup := apiV1.Group("/meta")

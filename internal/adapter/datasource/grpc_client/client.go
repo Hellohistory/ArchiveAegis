@@ -22,7 +22,7 @@ type ClientAdapter struct {
 	conn   *grpc.ClientConn
 }
 
-// New 创建一个新的gRPC客户端适配器实例。
+// New 创建一个gRPC客户端适配器实例。
 func New(pluginAddress string) (*ClientAdapter, error) {
 	conn, err := grpc.NewClient(pluginAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -36,19 +36,18 @@ func New(pluginAddress string) (*ClientAdapter, error) {
 	}, nil
 }
 
-// Execute 方法现在极度简化，它直接将请求信封转发给插件。
+// Execute 直接将请求信封转发给插件。
 func (a *ClientAdapter) Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error) {
 	slog.Debug("gRPC适配器: 正在将 Execute 请求转发到插件", "request_id", req.RequestId, "biz", req.BizName)
 	return a.client.Execute(ctx, req)
 }
 
-// GetPluginInfo 方法保持不变，用于插件发现。
+// GetPluginInfo 用于插件发现。
 func (a *ClientAdapter) GetPluginInfo(ctx context.Context) (*datasourcev1.GetPluginInfoResponse, error) {
 	slog.Debug("gRPC适配器: 正在向插件发送 GetPluginInfo 请求...")
 	return a.client.GetPluginInfo(ctx, &datasourcev1.GetPluginInfoRequest{})
 }
 
-// HealthCheck 方法的实现保持不变。
 func (a *ClientAdapter) HealthCheck(ctx context.Context) error {
 	slog.Debug("gRPC适配器: 正在将 HealthCheck 请求转发到插件...")
 

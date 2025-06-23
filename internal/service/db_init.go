@@ -48,9 +48,9 @@ func initSystemFeaturesTable(db *sql.DB) error {
 
 	// 默认为关闭
 	insertQuery := `
-	INSERT OR IGNORE INTO system_features (feature_id, enabled) VALUES
-		('io.archiveaegis.system.observability', FALSE);
-	`
+    INSERT OR IGNORE INTO system_features (feature_id, enabled) VALUES
+       ('io.archiveaegis.system.observability', FALSE);
+    `
 	_, err := db.Exec(insertQuery)
 	return err
 }
@@ -88,18 +88,19 @@ func initPermissionTables(db *sql.DB) error {
 		return fmt.Errorf("创建 'biz_overall_settings' 表失败: %w", err)
 	}
 
-	// 创建表级权限配置表 (包含新的写权限字段)
-	queryTablePerms := `
+	// 创建表级配置表。该表现在是核心，同时管理可搜索状态和写权限。
+	queryTableConfig := `
     CREATE TABLE IF NOT EXISTS biz_searchable_tables (
         biz_name TEXT NOT NULL,
         table_name TEXT NOT NULL,
+        is_searchable BOOLEAN DEFAULT FALSE NOT NULL,
         allow_create BOOLEAN DEFAULT FALSE NOT NULL,
         allow_update BOOLEAN DEFAULT FALSE NOT NULL,
         allow_delete BOOLEAN DEFAULT FALSE NOT NULL,
         PRIMARY KEY (biz_name, table_name),
         FOREIGN KEY (biz_name) REFERENCES biz_overall_settings(biz_name) ON DELETE CASCADE
     );`
-	if _, err := db.Exec(queryTablePerms); err != nil {
+	if _, err := db.Exec(queryTableConfig); err != nil {
 		return fmt.Errorf("创建 'biz_searchable_tables' 表失败: %w", err)
 	}
 

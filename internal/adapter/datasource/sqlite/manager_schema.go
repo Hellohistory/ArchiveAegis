@@ -33,6 +33,15 @@ type dbPhysicalSchemaInfo struct {
 	allTablesAndColumns  map[string][]string
 }
 
+// tableExists 是一个辅助方法，用于检查物理 schema 中是否存在指定的表。
+func (info *dbPhysicalSchemaInfo) tableExists(tableName string) bool {
+	if info == nil {
+		return false
+	}
+	_, ok := info.allTablesAndColumns[tableName]
+	return ok
+}
+
 // schemaFile 表示写入磁盘的 schema_cache.json 的整体 JSON 结构
 type schemaFile struct {
 	UpdatedAt time.Time                      `json:"updated_at"`

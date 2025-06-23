@@ -9,7 +9,7 @@ import (
 )
 
 // buildQuerySQL 构建用于获取数据的 SQL 查询
-func buildQuerySQL(tableName string, fields []string, params []queryParam) (string, []any, error) { // <--- 移除 page, size 参数
+func buildQuerySQL(tableName string, fields []string, params []queryParam) (string, []any, error) {
 	if tableName == "" || len(fields) == 0 {
 		return "", nil, errors.New("表名和查询字段不能为空 (buildQuerySQL)")
 	}

@@ -61,7 +61,8 @@ def terminate_existing_gateway_processes():
     if sys.platform == "win32":
         try:
             # /F 强制终止进程，/IM 指定镜像名称
-            subprocess.run(["taskkill", "/F", "/IM", os.path.basename(GATEWAY_EXE_PATH)], check=False, capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", os.path.basename(GATEWAY_EXE_PATH)], check=False,
+                           capture_output=True)
             print_info(f"已尝试终止 '{os.path.basename(GATEWAY_EXE_PATH)}' 进程。")
         except FileNotFoundError:
             print_info("taskkill 命令未找到，可能不是 Windows 系统或 PATH 配置有问题。")
@@ -300,7 +301,8 @@ def run_api_tests(session):
             {"field_name": "sale_amount", "is_searchable": True, "is_returnable": True, "data_type": "real"},
             {"field_name": "sale_date", "is_searchable": True, "is_returnable": True, "data_type": "text"},
         ]
-        resp = session.put(f"{BASE_URL}/admin/biz-config/sales_data/tables/sales_records/fields", json=field_settings_payload)
+        resp = session.put(f"{BASE_URL}/admin/biz-config/sales_data/tables/sales_records/fields",
+                           json=field_settings_payload)
         resp.raise_for_status()
         print_status("表 'sales_records' 字段设置成功。")
 
@@ -311,18 +313,29 @@ def run_api_tests(session):
             "allow_update": True,
             "allow_delete": True
         }
-        resp = session.put(f"{BASE_URL}/admin/biz-config/sales_data/tables/sales_records/permissions", json=permissions_payload)
+        resp = session.put(f"{BASE_URL}/admin/biz-config/sales_data/tables/sales_records/permissions",
+                           json=permissions_payload)
         resp.raise_for_status()
         print_status("表 'sales_records' 写权限配置成功。")
-
 
         # 步骤 7: 验证数据查询 API (最终检验)
         print_step(7, "验证数据查询 API (最终检验)")
         query_payload = {"biz_name": "sales_data", "query": {"table": "sales_records"}}
         resp = session.post(f"{BASE_URL}/data/query", json=query_payload)
         resp.raise_for_status()
-        query_data = resp.json()['data']
-        assert len(query_data) == 5
+
+        response_data_wrapper = resp.json().get('data', {})
+        query_data = []
+        if isinstance(response_data_wrapper, list):
+            query_data = response_data_wrapper
+        elif isinstance(response_data_wrapper, dict):
+            for key, value in response_data_wrapper.items():
+                if isinstance(value, list):
+                    query_data = value
+                    print_info(f"在响应的 'data' 对象中找到列表，键名为 '{key}'")
+                    break
+
+        assert len(query_data) == 5, f"期望获取5条数据，实际获取到 {len(query_data)} 条"
         print_status(f"数据查询成功！成功从动态启动的插件中获取到 {len(query_data)} 条数据。")
         print_info("查询结果预览: " + json.dumps(query_data[0], ensure_ascii=False))
 

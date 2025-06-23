@@ -2,13 +2,12 @@
 package admin_config
 
 import (
+	"ArchiveAegis/internal/core/domain"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
-
-	"ArchiveAegis/internal/core/domain"
 )
 
 // UpdateTableWritePermissions 更新指定表的写权限设置。
@@ -61,15 +60,18 @@ func (s *AdminConfigServiceImpl) UpdateTableWritePermissions(ctx context.Context
 		}
 	}
 
-	// UPSERT 权限信息：插入或更新表的写权限。
+	// 在 ON CONFLICT 的 UPDATE 子句中，必须显式地保留 is_searchable 的值。
+	// 否则，它可能会被隐式重置为数据库的默认值 (FALSE)，导致权限检查失败。
+	// 使用 excluded.is_searchable 会从 VALUES 子句中获取读到的 isSearchable 值。
 	upsertQuery := `
-        INSERT INTO biz_searchable_tables 
+        INSERT INTO biz_searchable_tables
         (biz_name, table_name, is_searchable, allow_create, allow_update, allow_delete)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(biz_name, table_name) DO UPDATE SET
             allow_create = excluded.allow_create,
             allow_update = excluded.allow_update,
-            allow_delete = excluded.allow_delete`
+            allow_delete = excluded.allow_delete,
+            is_searchable = excluded.is_searchable;`
 	if _, err = tx.ExecContext(ctx, upsertQuery,
 		bizName, tableName, isSearchable, // 使用从数据库读取或默认的 isSearchable
 		perms.AllowCreate, perms.AllowUpdate, perms.AllowDelete); err != nil {
