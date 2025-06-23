@@ -130,7 +130,7 @@ func TestResolveLocalFilePath(t *testing.T) {
 		{
 			rawURL:  "file:///C:/dir/file.zip",
 			wantWin: `C:\dir\file.zip`,
-			wantNix: `/C:/dir/file.zip`,
+			wantNix: `C:/dir/file.zip`,
 		},
 		{
 			rawURL:  "file:///home/user/data.bin",
@@ -146,17 +146,15 @@ func TestResolveLocalFilePath(t *testing.T) {
 		}
 		got := ResolveLocalFilePath(u)
 
-		switch runtime.GOOS {
-		case "windows":
-			want := filepath.Clean(tt.wantWin)
-			if got != want {
-				t.Errorf("Windows 解析错误: %q -> %q, 期望 %q", tt.rawURL, got, want)
-			}
-		default: // Unix-like
-			want := filepath.Clean(tt.wantNix)
-			if got != want {
-				t.Errorf("Unix 解析错误: %q -> %q, 期望 %q", tt.rawURL, got, want)
-			}
+		var want string
+		if runtime.GOOS == "windows" {
+			want = filepath.Clean(tt.wantWin)
+		} else {
+			want = filepath.Clean(tt.wantNix)
+		}
+
+		if got != want {
+			t.Errorf("%s 解析错误: for %q -> got %q, want %q", runtime.GOOS, tt.rawURL, got, want)
 		}
 	}
 }
