@@ -46,14 +46,12 @@ func (m *Manager) StartWatcher(rootDir string) error {
 		}
 	}()
 
-	// Add root directory to watch for new biz folders
 	if err := watcher.Add(m.root); err != nil {
 		log.Printf("错误: [DBManager] 添加根目录 '%s' 到监视器失败: %v", m.root, err)
 	} else {
 		log.Printf("信息: [DBManager] 已成功添加根目录 '%s' 到监视器。", m.root)
 	}
 
-	// Add existing biz directories
 	m.mu.RLock()
 	for bizName := range m.group {
 		bizPath := filepath.Join(m.root, bizName)
@@ -70,7 +68,6 @@ func (m *Manager) StartWatcher(rootDir string) error {
 func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	cleanPath := filepath.Clean(event.Name)
 
-	// Handle new directory creation (potentially a new biz group)
 	if event.Op.Has(fsnotify.Create) {
 		if info, err := os.Stat(cleanPath); err == nil && info.IsDir() {
 			if err := watcher.Add(cleanPath); err == nil {

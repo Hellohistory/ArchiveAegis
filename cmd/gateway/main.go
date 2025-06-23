@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "v1.0.0-alpha7"
+const version = "v1.0.0-alpha8"
 
 // =============================================================================
 // 配置与应用核心结构体
@@ -165,9 +165,8 @@ func build() (*application, error) {
 		return nil, err
 	}
 
-	executorRegistry := make(map[string]port.Executor) // 初始化新的注册表
+	executorRegistry := make(map[string]port.Executor)
 	closableAdapters := make([]io.Closer, 0)
-	// 将新的注册表传递给 PluginManager
 	pm, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, executorRegistry, &closableAdapters)
 	if err != nil {
 		return nil, err
@@ -175,12 +174,10 @@ func build() (*application, error) {
 
 	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
 
-	// --- 按需启用监控 ---
 	if enabledFeatures["io.archiveaegis.system.observability"] {
 		aegobserve.EnablePprof("0.0.0.0:6060")
 	}
-	aegobserve.Register()
-	slog.Info("监控: metrics 已注册。")
+	slog.Info("监控: metrics 已通过包初始化自动注册。")
 
 	// --- 组装 application 实例 ---
 	app := &application{

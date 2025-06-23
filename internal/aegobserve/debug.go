@@ -2,13 +2,12 @@
 package aegobserve
 
 import (
-	"log/slog" // 使用新的 logger
+	"log/slog"
 	"net/http"
-	_ "net/http/pprof" // 自动注册 pprof
+	_ "net/http/pprof"
 )
 
 // EnablePprof 在指定地址上暴露 /debug/pprof 端点。
-// 例如 addr 可以是 "localhost:6060" 或 ":6060"
 func EnablePprof(addr string) {
 	if addr == "" {
 		slog.Info("pprof endpoint is disabled because address is empty")

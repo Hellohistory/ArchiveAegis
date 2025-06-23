@@ -11,8 +11,10 @@ import (
 	"ArchiveAegis/internal/service/plugin_manager"
 	"ArchiveAegis/internal/transport/http/middleware"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/encoding/protojson"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -293,7 +295,7 @@ func mutateHandlerV1(registry map[string]port.Executor) gin.HandlerFunc {
 	}
 }
 
-// executeHandler 是新的统一执行器端点
+// executeHandler 是统一执行器端点
 func executeHandler(registry map[string]port.Executor) gin.HandlerFunc {
 	type RequestBody struct {
 		BizName string                 `json:"biz_name" binding:"required"`
@@ -311,33 +313,35 @@ func executeHandler(registry map[string]port.Executor) gin.HandlerFunc {
 		var reqPayload proto.Message
 		var resPayload proto.Message
 
-		// 根据 Command 字符串，决定创建哪种具体的 Protobuf 消息
 		switch reqBody.Command {
 		case "DataQuery":
-			queryStruct, err := structpb.NewStruct(reqBody.Payload)
-			if err != nil {
-				_ = c.Error(fmt.Errorf("为 DataQuery 创建 payload struct 失败: %w", err))
-				return
-			}
-			reqPayload = &v1.DataQueryRequest{Query: queryStruct}
+			reqPayload = &v1.DataQueryRequest{}
 			resPayload = &v1.DataQueryResult{}
 		case "DataMutate":
-			op, _ := reqBody.Payload["operation"].(string)
-			data, _ := reqBody.Payload["data"].(map[string]interface{}) // 假设 mutate payload 的数据在 "data" 字段
-			dataStruct, err := structpb.NewStruct(data)
-			if err != nil {
-				_ = c.Error(fmt.Errorf("为 DataMutate 创建 data struct 失败: %w", err))
-				return
-			}
-			reqPayload = &v1.DataMutateRequest{Operation: op, Payload: dataStruct}
+			reqPayload = &v1.DataMutateRequest{}
 			resPayload = &v1.DataMutateResult{}
 		case "GetSchema":
-			tableName, _ := reqBody.Payload["table_name"].(string)
-			reqPayload = &v1.GetSchemaRequest{TableName: tableName}
+			reqPayload = &v1.GetSchemaRequest{}
 			resPayload = &v1.SchemaResult{}
+		case "TriggerBackup":
+			reqPayload = &v1.TriggerBackupRequest{}
+			resPayload = &v1.TriggerBackupResult{}
 		default:
 			_ = c.Error(status.Errorf(codes.Unimplemented, "不支持的命令: %s", reqBody.Command))
 			return
+		}
+
+		if reqBody.Payload != nil {
+			jsonBytes, err := json.Marshal(reqBody.Payload)
+			if err != nil {
+				_ = c.Error(fmt.Errorf("无法序列化载荷以进行映射: %w", err))
+				return
+			}
+
+			if err := protojson.Unmarshal(jsonBytes, reqPayload); err != nil {
+				_ = c.Error(fmt.Errorf("无法将载荷映射到命令 '%s' 的结构: %w", reqBody.Command, err))
+				return
+			}
 		}
 
 		executeAndRespond(c, registry, reqBody.BizName, reqPayload, resPayload)

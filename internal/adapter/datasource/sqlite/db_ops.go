@@ -48,8 +48,7 @@ func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string
 	return nil
 }
 
-// openDBInternal 是打开单个数据库文件、加载其物理schema并更新Manager内部状态的私有方法。
-// 调用前必须获取写锁。
+// openDBInternal 方法现在保存 dbInstance 结构体，其中包含连接和路径。
 func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	rel, errRel := filepath.Rel(m.root, path)
 	if errRel != nil {
@@ -81,9 +80,13 @@ func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	}
 
 	if m.group[bizName] == nil {
-		m.group[bizName] = make(map[string]*sql.DB)
+		m.group[bizName] = make(map[string]*dbInstance)
 	}
-	m.group[bizName][libName] = db
+
+	m.group[bizName][libName] = &dbInstance{
+		conn: db,
+		path: path,
+	}
 	m.dbSchemaCache[db] = phySchema
 
 	log.Printf("信息: [DBManager] 成功打开并加载数据库: %s/%s", bizName, libName)
@@ -114,9 +117,9 @@ func (m *Manager) closeDB(path string) {
 	libName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 
 	if bizGroup, bizExists := m.group[bizName]; bizExists {
-		if db, libExists := bizGroup[libName]; libExists {
-			delete(m.dbSchemaCache, db)
-			if errClose := db.Close(); errClose != nil {
+		if instance, libExists := bizGroup[libName]; libExists {
+			delete(m.dbSchemaCache, instance.conn)
+			if errClose := instance.conn.Close(); errClose != nil {
 				log.Printf("警告: [DBManager] 关闭数据库 %s/%s 时发生错误: %v", bizName, libName, errClose)
 			} else {
 				log.Printf("信息: [DBManager] 成功关闭数据库: %s/%s", bizName, libName)
@@ -130,7 +133,7 @@ func (m *Manager) closeDB(path string) {
 	}
 }
 
-// HealthCheck 实现 port.DataSource.HealthCheck
+// HealthCheck 实现 port.Executor.HealthCheck
 func (m *Manager) HealthCheck(ctx context.Context) error {
 	db, err := m.getAnyDB()
 	if err != nil {
@@ -145,9 +148,9 @@ func (m *Manager) getAnyDB() (*sql.DB, error) {
 	defer m.mu.RUnlock()
 
 	for _, libsInBiz := range m.group {
-		for _, dbConn := range libsInBiz {
-			if dbConn != nil {
-				return dbConn, nil
+		for _, instance := range libsInBiz {
+			if instance != nil && instance.conn != nil {
+				return instance.conn, nil
 			}
 		}
 	}
