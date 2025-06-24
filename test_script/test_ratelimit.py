@@ -3,17 +3,20 @@
 
 from __future__ import annotations
 
+import io
 import os
 import signal
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 BASE_URL: str = os.getenv("AEGIS_BASE_URL", "http://localhost:10224/api/v1")
 
