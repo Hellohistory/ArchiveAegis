@@ -26,13 +26,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Ensure Unix line endings
-        if: runner.os != 'Windows'
+      - name: Install dos2unix on Linux
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y dos2unix
-          # 转换所有脚本和 CI 生成脚本
-          find . -type f -name '*.sh' -o -name '*.yaml' | xargs dos2unix || true
+
+      - name: Install dos2unix on macOS
+        if: runner.os == 'macOS'
+        run: brew install dos2unix
+
+      - name: Ensure Unix line endings
+        if: runner.os != 'Windows'
+        # 使用-print0和xargs -0来安全处理带空格等特殊字符的文件名
+        run: find . -type f \( -name '*.sh' -o -name '*.yaml' \) -print0 | xargs -0 dos2unix || true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -121,6 +128,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         run: |
           PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
+                 | sed 's|\\|/|g' \
                  | xargs -n1 dirname \
                  | sort -u \
                  | sed 's|^|./|')
