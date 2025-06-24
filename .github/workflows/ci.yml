@@ -1,11 +1,10 @@
-# .github/workflows/ci.yml
 name: Build & Test (Multi-OS)
 
 on:
   push:
-    branches: [master, main]
+    branches: [ master, main ]
   pull_request:
-    branches: [master, main]
+    branches: [ master, main ]
 
 jobs:
   build-test:
@@ -13,130 +12,149 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
 
     env:
       GOMODCACHE: ${{ github.workspace }}/.cache/go-mod
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 0 }
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23
+          cache: false
 
-    - uses: actions/setup-go@v5
-      with: { go-version: '1.23', cache: false }
+      - name: Cache Go modules & build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ env.GOMODCACHE }}
+          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
 
-    - uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ${{ env.GOMODCACHE }}
-        key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          go-${{ runner.os }}-
+      - name: Download Go modules
+        run: go mod download
 
-    - run: go mod download
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Install Task
-      uses: arduino/setup-task@v2
-      with: { repo-token: ${{ secrets.GITHUB_TOKEN }} }
+      - name: Cache protoc
+        id: cache-protoc
+        uses: actions/cache@v4
+        with:
+          path: ~/protoc
+          key: protoc-25.3-${{ runner.os }}
 
-    - name: Cache protoc
-      id: cache-protoc
-      uses: actions/cache@v4
-      with:
-        path: ~/protoc
-        key: protoc-25.3-${{ runner.os }}
+      - name: Install Protobuf Compiler
+        if: steps.cache-protoc.outputs.cache-hit != 'true'
+        uses: arduino/setup-protoc@v2
+        with:
+          version: 25.3
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Install Protobuf Compiler
-      if: steps.cache-protoc.outputs.cache-hit != 'true'
-      uses: arduino/setup-protoc@v2
-      with:
-        version: '25.3'
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Go protobuf plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "${HOME}/go/bin" >> $GITHUB_PATH
 
-    - run: |
-        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-        echo "${HOME}/go/bin" >> $GITHUB_PATH
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            test_script/requirements-ci.txt
 
-    - uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
-        cache: 'pip'
-        cache-dependency-path: |
-          requirements-ci.txt
-          test_script/requirements-ci.txt
+      - name: Install Python deps
+        shell: bash
+        run: |
+          python -m pip install -q --upgrade pip
+          if [[ -f requirements-ci.txt ]]; then
+            python -m pip install -q -r requirements-ci.txt
+          elif [[ -f test_script/requirements-ci.txt ]]; then
+            python -m pip install -q -r test_script/requirements-ci.txt
+          else
+            python -m pip install -q grpcio grpcio-tools requests
 
-    - name: Install Python deps
-      shell: bash
-      run: |
-        python -m pip install -q --upgrade pip
-        if [[ -f requirements-ci.txt ]]; then
-          python -m pip install -q -r requirements-ci.txt
-        elif [[ -f test_script/requirements-ci.txt ]]; then
-          python -m pip install -q -r test_script/requirements-ci.txt
-        else
-          echo "requirements-ci.txt not found; installing inline deps"
-          python -m pip install -q grpcio grpcio-tools requests
-        fi
+      - name: Generate protobuf files
+        run: task gen
 
-    - run: task gen
+      - name: Run go vet & govulncheck
+        run: |
+          go vet ./...
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-    - run: |
-        go vet ./...
-        go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Find changed Go/proto files
+        id: changed
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            **/*.go
+            **/*.proto
 
-    - id: changed
-      uses: tj-actions/changed-files@v44
-      with:
-        files: |
-          **/*.go
-          **/*.proto
+      - name: Run unit tests (affected packages)
+        if: steps.changed.outputs.any_changed == 'true'
+        shell: bash
+        run: |
+          PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
+                 | xargs -n1 dirname \
+                 | sort -u \
+                 | sed 's|^|./|')
+          echo "Packages to test: $PKGS"
+          if [[ -n "$PKGS" ]]; then
+            go test -v -race -failfast $PKGS
+          else
+            echo "No affected packages."
 
-    - if: steps.changed.outputs.any_changed == 'true'
-      shell: bash
-      run: |
-        PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
-               | xargs -n1 dirname \
-               | sort -u \
-               | sed 's|^|./|')
-        echo "Packages to test: $PKGS"
-        [[ -n "$PKGS" ]] && go test -v -race -failfast $PKGS || echo "No affected packages."
+      - name: Build ArchiveAegisCore
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p AegisBuild
+          EXT=$([[ "${{ runner.os }}" == "Windows" ]] && echo ".exe" || echo "")
+          detect_target() {
+            for p in ./cmd/core ./cmd/ArchiveAegisCore ./cmd ./ ; do
+              if [[ -f "$p/main.go" ]]; then
+                echo "$p"; return
+              fi
+            done
+            echo "::error::未找到入口包 main.go" >&2
+            exit 1
+          }
+          TARGET=$(detect_target)
+          echo "Detected entry package: $TARGET"
+          go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
 
-    - name: Build ArchiveAegisCore
-      shell: bash
-      run: |
-        set -euo pipefail
-        mkdir -p AegisBuild
-        EXT=$([[ "${{ runner.os }}" == "Windows" ]] && echo ".exe" || echo "")
-        detect_target() {
-          for p in ./cmd/core ./cmd/ArchiveAegisCore ./cmd ./ ; do
-            [[ -f "$p/main.go" ]] && echo "$p" && return
-          done
-          echo "::error::未找到入口包 main.go" >&2
-          exit 1
-        }
-        TARGET=$(detect_target)
-        echo "Detected entry package: $TARGET"
-        go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
+      - name: Run e2e rate-limit test
+        shell: bash
+        env:
+          AEGIS_BIN: ${{ github.workspace }}/AegisBuild/ArchiveAegisCore${{ runner.os == 'Windows' && '.exe' || '' }}
+          AEGIS_BASE_URL: http://localhost:10224/api/v1
+        run: python test_script/test_ratelimit.py
 
-    - name: Run e2e rate-limit test
-      shell: bash
-      env:
-        AEGIS_BIN: ${{ github.workspace }}/AegisBuild/ArchiveAegisCore${{ runner.os == 'Windows' && '.exe' || '' }}
-        AEGIS_BASE_URL: http://localhost:10224/api/v1
-      run: python test_script/test_ratelimit.py
+      - name: Check for uncommitted generated files
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
+            echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
+            git --no-pager diff
+            exit 1
+          else
+            echo "✅ Protobuf 文件已是最新，无需提交。"
 
-    - name: Check for uncommitted generated files
-      shell: bash
-      run: |
-        if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
-          echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
-          git --no-pager diff
-          exit 1
-        else
-          echo "✅ Protobuf 文件已是最新，无需提交。"
-        fi
-
-    - run: echo "✅🎉 全平台 CI 全部通过！"
+      - name: All checks passed
+        run: echo "✅🎉 全平台 CI 全部通过！"
