@@ -137,13 +137,20 @@ type setupInfo struct {
 func setupTestManager(t *testing.T, bizName string, libs []setupInfo) (*Manager, func()) {
 	t.Helper()
 
+	sysDB, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("无法创建内存中的系统数据库: %v", err)
+	}
+
 	tempDir, err := os.MkdirTemp("", "aegis_test_")
 	if err != nil {
+		sysDB.Close() // 如果后续步骤失败，也要确保关闭已创建的连接
 		t.Fatalf("无法创建临时目录: %v", err)
 	}
 
 	bizDir := filepath.Join(tempDir, bizName)
 	if err := os.Mkdir(bizDir, 0755); err != nil {
+		sysDB.Close()
 		t.Fatalf("无法创建业务目录: %v", err)
 	}
 
@@ -151,16 +158,19 @@ func setupTestManager(t *testing.T, bizName string, libs []setupInfo) (*Manager,
 		dbPath := filepath.Join(bizDir, lib.LibName+".db")
 		db, err := sql.Open("sqlite", "file:"+dbPath)
 		if err != nil {
+			sysDB.Close()
 			t.Fatalf("无法打开数据库 '%s': %v", dbPath, err)
 		}
 
 		if _, err = db.Exec(lib.Schema); err != nil {
 			db.Close()
+			sysDB.Close()
 			t.Fatalf("无法在 '%s' 中创建表: %v", dbPath, err)
 		}
 		for _, insert := range lib.Inserts {
 			if _, err = db.Exec(insert); err != nil {
 				db.Close()
+				sysDB.Close()
 				t.Fatalf("无法在 '%s' 中插入数据: %v", dbPath, err)
 			}
 		}
@@ -168,14 +178,14 @@ func setupTestManager(t *testing.T, bizName string, libs []setupInfo) (*Manager,
 	}
 
 	mockCfgSvc := newMockAdminConfigService()
-	manager := NewManager(mockCfgSvc)
-	manager.configService = mockCfgSvc
+	manager := NewManager(mockCfgSvc, sysDB)
 
 	if err := manager.InitForBiz(context.Background(), tempDir, bizName); err != nil {
+		sysDB.Close()
 		t.Fatalf("InitForBiz 失败: %v", err)
 	}
-
 	cleanup := func() {
+		sysDB.Close()
 		os.RemoveAll(tempDir)
 	}
 
