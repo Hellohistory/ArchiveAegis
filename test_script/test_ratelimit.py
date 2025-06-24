@@ -59,10 +59,10 @@ def launch_gateway(bin_path: Path) -> Generator[subprocess.Popen, None, None]:
             proc.kill()
         if proc.stdout:
             try:
-                lines = proc.stdout.readlines()[-20:]
+                lines = proc.stdout.readlines()
                 tail = "".join(line.decode("utf-8", errors="ignore") for line in lines).strip()
                 if tail:
-                    log("LOG", f"核心日志尾部 ↓\n{tail}")
+                    log("LOG", f"完整的核心日志 ↓\n{tail}")
             except Exception as e:
                 log("WARN", f"日志读取失败: {e}")
 
