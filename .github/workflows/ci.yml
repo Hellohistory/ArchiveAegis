@@ -69,6 +69,7 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
           echo "${HOME}/go/bin" >> $GITHUB_PATH
+        shell: bash
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -140,6 +141,24 @@ jobs:
           echo "Detected entry package: $TARGET"
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
 
+      - name: Configure Windows Environment for Test
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          echo "Disabling Windows Defender real-time monitoring..."
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          echo "Adding firewall rule for port 10224..."
+          New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
+
+      - name: Increase test timeout on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "Increasing Python test script timeout to 120 seconds for Windows runner..."
+          sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
+          echo "File content after modification:"
+          cat ci_test/test_ratelimit.py
+
       - name: Run e2e rate-limit test
         shell: bash
         env:
@@ -147,9 +166,22 @@ jobs:
           AEGIS_BASE_URL: http://localhost:10224/api/v1
         run: python ci_test/test_ratelimit.py
 
+      - name: Cleanup Windows Environment
+        if: runner.os == 'Windows' && always()
+        shell: powershell
+        run: |
+          echo "Re-enabling Windows Defender real-time monitoring..."
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          echo "Removing firewall rule for port 10224..."
+          Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
+
       - name: Check for uncommitted generated files
         shell: bash
         run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            git config core.autocrlf false
+          fi
+          
           if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
             echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
             git --no-pager diff
