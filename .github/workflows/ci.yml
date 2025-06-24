@@ -141,10 +141,14 @@ jobs:
           echo "Detected entry package: $TARGET"
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
 
-      - name: Disable Windows Defender
+      - name: Configure Windows Environment for Test
         if: runner.os == 'Windows'
         shell: powershell
-        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        run: |
+          echo "Disabling Windows Defender real-time monitoring..."
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          echo "Adding firewall rule for port 10224..."
+          New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
 
       - name: Run e2e rate-limit test
         shell: bash
@@ -153,10 +157,14 @@ jobs:
           AEGIS_BASE_URL: http://localhost:10224/api/v1
         run: python test_script/test_ratelimit.py
 
-      - name: Re-enable Windows Defender
+      - name: Cleanup Windows Environment
         if: runner.os == 'Windows' && always()
         shell: powershell
-        run: Set-MpPreference -DisableRealtimeMonitoring $false
+        run: |
+          echo "Re-enabling Windows Defender real-time monitoring..."
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          echo "Removing firewall rule for port 10224..."
+          Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
 
       - name: Check for uncommitted generated files
         shell: bash
