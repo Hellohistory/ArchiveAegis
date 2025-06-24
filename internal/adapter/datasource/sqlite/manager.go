@@ -1,9 +1,9 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/manager.go
 package sqlite
 
 import (
 	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/pkg/go_plugin_sdk"
 	"context"
 	"database/sql"
 	"fmt"
@@ -19,8 +19,9 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-// 断言 *Manager 实现新的 port.Executor 接口，编译期校验
+// 断言 *Manager 同时实现 port.Executor 和 go_plugin_sdk.Plugin 接口，编译期校验
 var _ port.Executor = (*Manager)(nil)
+var _ go_plugin_sdk.Plugin = (*Manager)(nil)
 
 const (
 	debounceDuration = 2 * time.Second
@@ -33,12 +34,11 @@ type dbInstance struct {
 }
 
 // Manager 是 SQLite 数据源适配器的核心结构体。
-// 它现在实现了 port.Executor 接口，通过统一的 Execute 方法处理所有请求。
 type Manager struct {
-	mu sync.RWMutex
-
+	mu            sync.RWMutex
+	pluginSysDB   *sql.DB // 用于持有插件自身的系统DB连接
 	root          string
-	group         map[string]map[string]*dbInstance // 使用 dbInstance 结构体
+	group         map[string]map[string]*dbInstance
 	dbSchemaCache map[*sql.DB]*dbPhysicalSchemaInfo
 	schema        map[string]map[string][]string
 	eventTimers   map[string]*time.Timer
@@ -47,11 +47,16 @@ type Manager struct {
 }
 
 // NewManager 创建一个新的 Manager 实例。
-func NewManager(cfgService port.QueryAdminConfigService) *Manager {
+// 构造函数现在接收插件自身的系统数据库连接。
+func NewManager(cfgService port.QueryAdminConfigService, sysDB *sql.DB) *Manager {
 	if cfgService == nil {
 		log.Fatal("[DBManager] 致命错误: QueryAdminConfigService 实例不能为 nil。")
 	}
+	if sysDB == nil {
+		log.Fatal("[DBManager] 致命错误: 系统数据库连接实例 (sysDB) 不能为 nil。")
+	}
 	m := &Manager{
+		pluginSysDB:   sysDB, // 保存系统DB连接
 		group:         make(map[string]map[string]*dbInstance),
 		dbSchemaCache: make(map[*sql.DB]*dbPhysicalSchemaInfo),
 		schema:        make(map[string]map[string][]string),
@@ -123,15 +128,41 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 	}, nil
 }
 
-// Close 安全地关闭由 Manager 管理的所有数据库连接。
+// GracefulShutdown 实现了 go_plugin_sdk.Plugin 接口。
+// 这是优雅关闭的入口点，负责关闭所有数据库连接。
+func (m *Manager) GracefulShutdown(ctx context.Context) error {
+	slog.Info("开始执行 SQLite Manager 的优雅关闭...")
+
+	// 关闭所有业务数据库连接
+	if err := m.Close(); err != nil {
+		slog.Error("关闭业务数据库时发生错误", "error", err)
+		// 继续尝试关闭系统DB
+	} else {
+		slog.Info("所有业务数据库连接已成功关闭。")
+	}
+
+	// 关闭插件自身的系统数据库连接
+	if m.pluginSysDB != nil {
+		slog.Info("正在关闭插件系统数据库连接...")
+		if err := m.pluginSysDB.Close(); err != nil {
+			slog.Error("关闭插件系统数据库时发生错误", "error", err)
+			return err // 这是一个更严重的错误，直接返回
+		}
+		slog.Info("插件系统数据库连接已成功关闭。")
+	}
+	return nil
+}
+
+// Close 安全地关闭由 Manager 管理的所有业务数据库连接。
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var firstErr error
+	log.Printf("正在关闭 %d 个业务组的所有数据库连接...", len(m.group))
 	for bizName, libs := range m.group {
 		for libName, instance := range libs {
 			if err := instance.conn.Close(); err != nil {
-				log.Printf("ERROR: Closing database %s/%s failed: %v", bizName, libName, err)
+				log.Printf("ERROR: 关闭数据库 %s/%s 失败: %v", bizName, libName, err)
 				if firstErr == nil {
 					firstErr = err
 				}
