@@ -4,6 +4,7 @@ package aegobserve
 
 import (
 	"bytes"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,18 @@ import (
 type regSwap struct {
 	oldReg prometheus.Registerer
 	oldGat prometheus.Gatherer
+}
+
+// resetGlobalRegistry 重置包级别的 Registry 变量，确保测试隔离
+func resetGlobalRegistry() {
+	// 1. 创建一个全新的、干净的注册表
+	newReg := prometheus.NewRegistry()
+
+	newReg.MustRegister(httpRequestDuration)
+	newReg.MustRegister(collectors.NewGoCollector())
+	newReg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	Registry = newReg
 }
 
 func swapDefaultRegistry() (*prometheus.Registry, func()) {
@@ -35,15 +48,11 @@ func swapDefaultRegistry() (*prometheus.Registry, func()) {
 }
 
 func TestRegister_IsolatedRegistry(t *testing.T) {
-	reg, restore := swapDefaultRegistry()
-	defer restore()
+	resetGlobalRegistry()
 
-	Register()
-
-	// 写入一次样本，确保 HistogramVec 生成子指标
 	httpRequestDuration.WithLabelValues("dummy", "GET", "200").Observe(0)
 
-	mfs, err := reg.Gather()
+	mfs, err := Registry.Gather()
 	if err != nil {
 		t.Fatalf("Registry.Gather() 失败: %v", err)
 	}
@@ -64,7 +73,6 @@ func TestHandler_MetricsEndpoint(t *testing.T) {
 	_, restore := swapDefaultRegistry()
 	defer restore()
 
-	Register()
 	httpRequestDuration.WithLabelValues("/", "GET", "200").Observe(0) // 注入样本
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -83,11 +91,9 @@ func TestHandler_MetricsEndpoint(t *testing.T) {
 }
 
 func TestPrometheusMiddleware_RecordOnce(t *testing.T) {
-	reg, restore := swapDefaultRegistry()
-	defer restore()
+	resetGlobalRegistry()
 
 	gin.SetMode(gin.TestMode)
-	Register() // Histogram 注册
 
 	r := gin.New()
 	r.Use(PrometheusMiddleware())
@@ -104,13 +110,11 @@ func TestPrometheusMiddleware_RecordOnce(t *testing.T) {
 		t.Fatalf("Gin 处理 /ping 失败, code=%d, body=%s", w.Code, w.Body.String())
 	}
 
-	// 收集最新指标快照
-	mfs, err := reg.Gather()
+	mfs, err := Registry.Gather()
 	if err != nil {
 		t.Fatalf("Registry.Gather() 失败: %v", err)
 	}
 
-	// 核心断言：Histogram 中存在 path="/ping", method="GET", code="200" 的计数
 	var matched bool
 	for _, mf := range mfs {
 		if mf.GetName() != "archiveaegis_http_request_duration_seconds" {
