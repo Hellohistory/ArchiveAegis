@@ -1,0 +1,15 @@
+# .github/workflows/stale.yml
+name: Close stale Pull Requests
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 每天运行一次
+jobs:
+  close_stale_prs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 90
+          days-before-close: 7
+          stale-pr-message: '此 PR 超过 90 天无更新，将关闭。若仍需处理，请回复评论。'
+          stale-pr-label: 'Stale'
