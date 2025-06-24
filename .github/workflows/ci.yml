@@ -69,6 +69,7 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
           echo "${HOME}/go/bin" >> $GITHUB_PATH
+        shell: bash
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -140,6 +141,11 @@ jobs:
           echo "Detected entry package: $TARGET"
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
 
+      - name: Disable Windows Defender
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Run e2e rate-limit test
         shell: bash
         env:
@@ -147,9 +153,19 @@ jobs:
           AEGIS_BASE_URL: http://localhost:10224/api/v1
         run: python test_script/test_ratelimit.py
 
+      - name: Re-enable Windows Defender
+        if: runner.os == 'Windows' && always()
+        shell: powershell
+        run: Set-MpPreference -DisableRealtimeMonitoring $false
+
       - name: Check for uncommitted generated files
         shell: bash
         run: |
+          # 忽略在 Windows 上因换行符(CRLF)不同而产生的 git status 变化
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            git config core.autocrlf false
+          fi
+          
           if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
             echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
             git --no-pager diff
