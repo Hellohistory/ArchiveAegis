@@ -128,7 +128,7 @@ jobs:
           mkdir -p AegisBuild
           EXT=$([[ "${{ runner.os }}" == "Windows" ]] && echo ".exe" || echo "")
           detect_target() {
-            for p in ./cmd/core ./cmd/ArchiveAegisCore ./cmd ./ ; do
+            for p in ./cmd/core ./cmd/ArchiveAegisCore ./cmd/gateway ./cmd ./ ; do
               if [[ -f "$p/main.go" ]]; then
                 echo "$p"; return
               fi
