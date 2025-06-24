@@ -1,4 +1,4 @@
-# .github/workflows/ci.yml
+# .github/workflows/proto-check.yml
 name: Build & Test (Multi-OS)
 
 on:
