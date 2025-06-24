@@ -177,10 +177,19 @@ jobs:
 
       - name: Cleanup Windows Environment
         if: runner.os == 'Windows' && always()
+        shell: powershell
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $false
-          Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
-        shell: powershell
+          Write-Host "Windows Defender real-time monitoring re‑enabled."
+
+          $rule = Get-NetFirewallRule -DisplayName "Allow Aegis Test Port" -ErrorAction SilentlyContinue
+          if ($rule) {
+            Write-Host "Firewall rule found—removing..."
+            Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
+            Write-Host "Firewall rule removed."
+          } else {
+            Write-Host "No firewall rule found—skipping removal."
+          }
 
       - name: Check for uncommitted generated files
         run: |
