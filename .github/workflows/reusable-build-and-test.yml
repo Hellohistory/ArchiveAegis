@@ -1,9 +1,7 @@
 name: Reusable Build & Test
 
-# 定义这是一个可被调用的工作流
 on:
   workflow_call:
-    # 定义可以接收的输入参数
     inputs:
       os:
         required: true
@@ -11,7 +9,6 @@ on:
 
 jobs:
   build-test:
-    # 使用从调用方传来的 os 参数
     runs-on: ${{ inputs.os }}
 
     steps:
@@ -153,8 +150,20 @@ jobs:
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
         shell: bash
 
+      - name: Check for relevant changes for E2E tests
+        id: e2e_changes
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            ci_test/test_ratelimit.py
+            cmd/**
+            internal/**
+            pkg/**
+            go.mod
+            go.sum
+
       - name: Configure Windows Environment for Test
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.e2e_changes.outputs.any_changed == 'true'
         run: |
           echo "Disabling Windows Defender real-time monitoring..."
           Set-MpPreference -DisableRealtimeMonitoring $true
@@ -163,13 +172,14 @@ jobs:
         shell: powershell
 
       - name: Increase test timeout on Windows
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.e2e_changes.outputs.any_changed == 'true'
         run: |
           sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
           cat ci_test/test_ratelimit.py
         shell: bash
 
       - name: Run e2e rate-limit test
+        if: runner.os != 'Windows' || steps.e2e_changes.outputs.any_changed == 'true'
         run: |
           python ci_test/test_ratelimit.py
         shell: bash
