@@ -1,4 +1,4 @@
-name: Build & Test (Multi-OS)
+name: CI
 
 on:
   push:
@@ -7,211 +7,20 @@ on:
     branches: [ master, main ]
 
 jobs:
-  build-test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+  build-ubuntu:
+    uses: ./.github/workflows/reusable-build-and-test.yml
+    with:
+      os: ubuntu-latest
+    secrets: inherit
 
-    env:
-      GOMODCACHE: ${{ github.workspace }}/.cache/go-mod
+  build-macos:
+    uses: ./.github/workflows/reusable-build-and-test.yml
+    with:
+      os: macos-latest
+    secrets: inherit
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install dos2unix on Linux
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dos2unix
-
-      - name: Install dos2unix on macOS
-        if: runner.os == 'macOS'
-        run: brew install dos2unix
-
-      - name: Ensure Unix line endings
-        if: runner.os != 'Windows'
-        run: find . -type f \( -name '*.sh' -o -name '*.yaml' \) -print0 | xargs -0 dos2unix || true
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.23
-          cache: false
-
-      - name: Cache Go modules & build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ${{ env.GOMODCACHE }}
-          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-
-
-      - name: Download Go modules
-        run: go mod download
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cache protoc
-        id: cache-protoc
-        uses: actions/cache@v4
-        with:
-          path: ~/protoc
-          key: protoc-25.3-${{ runner.os }}
-
-      - name: Install Protobuf Compiler
-        if: steps.cache-protoc.outputs.cache-hit != 'true'
-        uses: arduino/setup-protoc@v2
-        with:
-          version: 25.3
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Go protobuf plugins
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-          echo "${HOME}/go/bin" >> $GITHUB_PATH
-        shell: bash
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-          cache: pip
-          cache-dependency-path: |
-            requirements-ci.txt
-            ci_test/requirements-ci.txt
-
-      - name: Install Python deps
-        run: |
-          python -m pip install -q --upgrade pip
-          if [[ -f requirements-ci.txt ]]; then
-            python -m pip install -q -r requirements-ci.txt
-          elif [[ -f ci_test/requirements-ci.txt ]]; then
-            python -m pip install -q -r ci_test/requirements-ci.txt
-          else
-            python -m pip install -q grpcio grpcio-tools requests
-          fi
-        shell: bash
-
-      - name: Generate protobuf files
-        run: task gen
-
-      - name: Run go vet
-        run: go vet ./...
-        shell: bash
-
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-
-      - name: Find changed Go/proto files
-        id: changed
-        uses: tj-actions/changed-files@v44
-        with:
-          files: |
-            **/*.go
-            **/*.proto
-
-      - name: Run unit tests (affected packages)
-        if: steps.changed.outputs.any_changed == 'true'
-        run: |
-          PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
-                 | sed 's|\\|/|g' \
-                 | xargs -n1 dirname \
-                 | sort -u \
-                 | sed 's|^|./|')
-          echo "Packages to test: $PKGS"
-          if [[ -n "$PKGS" ]]; then
-            go test -v -race -failfast $PKGS
-          else
-            echo "No affected packages."
-          fi
-        shell: bash
-
-      - name: Build ArchiveAegisCore
-        run: |
-          set -euo pipefail
-          mkdir -p AegisBuild
-          EXT=$([[ "${{ runner.os }}" == "Windows" ]] && echo ".exe" || echo "")
-          detect_target() {
-            for p in ./cmd/core ./cmd/ArchiveAegisCore ./cmd/gateway ./cmd ./ ; do
-              if [[ -f "$p/main.go" ]]; then
-                echo "$p"; return
-              fi
-            done
-            echo "::error::未找到入口包 main.go" >&2
-            exit 1
-          }
-          TARGET=$(detect_target)
-          echo "Detected entry package: $TARGET"
-          go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
-        shell: bash
-
-      - name: Configure Windows Environment for Test
-        if: runner.os == 'Windows'
-        run: |
-          echo "Disabling Windows Defender real-time monitoring..."
-          Set-MpPreference -DisableRealtimeMonitoring $true
-          echo "Adding firewall rule for port 10224..."
-          New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
-        shell: powershell
-
-      - name: Increase test timeout on Windows
-        if: runner.os == 'Windows'
-        run: |
-          sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
-          cat ci_test/test_ratelimit.py
-        shell: bash
-
-      - name: Run e2e rate-limit test
-        run: |
-          python ci_test/test_ratelimit.py
-        shell: bash
-        env:
-          AEGIS_BIN: ${{ github.workspace }}/AegisBuild/ArchiveAegisCore${{ runner.os == 'Windows' && '.exe' || '' }}
-          AEGIS_BASE_URL: http://localhost:10224/api/v1
-
-      - name: Cleanup Windows Environment
-        if: runner.os == 'Windows' && always()
-        shell: powershell
-        run: |
-          Set-MpPreference -DisableRealtimeMonitoring $false
-          Write-Host "Windows Defender real-time monitoring re‑enabled."
-
-          $rule = Get-NetFirewallRule -DisplayName "Allow Aegis Test Port" -ErrorAction SilentlyContinue
-          if ($rule) {
-            Write-Host "Firewall rule found—removing..."
-            Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
-            Write-Host "Firewall rule removed."
-          } else {
-            Write-Host "No firewall rule found—skipping removal."
-          }
-
-      - name: Check for uncommitted generated files
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            git config core.autocrlf false
-          fi
-          if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
-            echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
-            git --no-pager diff
-            exit 1
-          else
-            echo "✅ Protobuf 文件已是最新，无需提交。"
-          fi
-        shell: bash
-
-      - name: All checks passed
-        run: echo "✅🎉 全平台 CI 全部通过！"
+  build-windows:
+    uses: ./.github/workflows/reusable-build-and-test.yml
+    with:
+      os: windows-latest
+    secrets: inherit
