@@ -61,13 +61,16 @@ def launch_gateway(bin_path: Path) -> Generator[subprocess.Popen, None, None]:
         yield proc
     finally:
         log("CLEAN", f"关闭网关进程 (PID={proc.pid})")
-        if proc.poll() is None:
-            sig = signal.SIGINT if sys.platform == "win32" else signal.SIGTERM
-            proc.send_signal(sig)
-            try:
-                proc.wait(5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        try:
+            if proc.poll() is None:
+                if sys.platform == "win32":
+                    proc.terminate()  # Windows 使用 terminate()
+                else:
+                    proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=5)
+        except Exception as e:
+            log("WARN", f"终止失败，将强制杀进程: {e}")
+            proc.kill()
         if proc.stdout:
             lines = proc.stdout.readlines()[-20:]
             tail = "".join(line.decode("utf-8", errors="ignore") for line in lines).strip()
