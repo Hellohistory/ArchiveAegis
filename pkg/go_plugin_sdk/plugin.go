@@ -1,4 +1,3 @@
-// Package go_plugin_sdk file: pkg/go_plugin_sdk/plugin.go
 package go_plugin_sdk
 
 import (
@@ -14,6 +13,10 @@ type Plugin interface {
 
 	// HealthCheck 执行健康检查，成功返回 nil，失败返回 error。
 	HealthCheck(ctx context.Context) error
+
+	// GracefulShutdown 执行优雅关闭前的清理工作，比如关闭数据库连接、保存内存数据等。
+	// SDK 会在收到 SIGTERM 或 SIGINT 信号后调用此方法。
+	GracefulShutdown(ctx context.Context) error
 }
 
 // PluginInfo 包含了插件的元数据信息。

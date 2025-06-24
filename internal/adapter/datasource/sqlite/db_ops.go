@@ -133,13 +133,13 @@ func (m *Manager) closeDB(path string) {
 	}
 }
 
-// HealthCheck 实现 port.Executor.HealthCheck
+// HealthCheck 实现了 go_plugin_sdk.Plugin 接口。
+// 它通过 ping 插件自身的系统数据库来检查健康状况。
 func (m *Manager) HealthCheck(ctx context.Context) error {
-	db, err := m.getAnyDB()
-	if err != nil {
-		return err
+	if m.pluginSysDB == nil {
+		return fmt.Errorf("系统数据库连接未初始化")
 	}
-	return db.PingContext(ctx)
+	return m.pluginSysDB.PingContext(ctx)
 }
 
 // getAnyDB 随机返回一个当前加载的 *sql.DB 连接实例。

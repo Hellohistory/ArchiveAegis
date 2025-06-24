@@ -1,4 +1,3 @@
-// Package plugin_manager file: internal/service/plugin_lifecycle.go
 package plugin_manager
 
 import (
@@ -15,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -245,20 +245,64 @@ func (pm *PluginManager) Start(instanceID string) error {
 // Stop 停止一个正在运行的插件实例。
 func (pm *PluginManager) Stop(instanceID string) error {
 	pm.runningPluginsMu.Lock()
-	defer pm.runningPluginsMu.Unlock()
-
 	cmd, isRunning := pm.runningPlugins[instanceID]
 	if !isRunning {
+		pm.runningPluginsMu.Unlock()
+		// 即使不在运行，也确保数据库状态正确
 		_, _ = pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
 		return fmt.Errorf("插件实例 '%s' 并未在运行中", instanceID)
 	}
+	pm.runningPluginsMu.Unlock() // 尽早释放锁
 
-	if err := cmd.Process.Kill(); err != nil {
-		log.Printf("⚠️ [PluginManager] 停止插件进程 (PID: %d) 失败: %v", cmd.Process.Pid, err)
+	log.Printf("ℹ️ [PluginManager] 正在尝试优雅地停止插件实例 '%s' (PID: %d)...", instanceID, cmd.Process.Pid)
+
+	// 发送 SIGTERM 信号，请求插件优雅退出
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("⚠️ [PluginManager] 发送 SIGTERM 信号到插件 '%s' 失败: %v。将尝试强制杀死。", instanceID, err)
+		return pm.forceKill(instanceID, cmd) // 封装一个强制杀死的方法
 	}
+
+	// 等待插件进程自己退出，但设置一个超时
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		// 进程正常退出
+		log.Printf("✅ [PluginManager] 插件 '%s' 已成功优雅退出。", instanceID)
+		pm.cleanupAfterStop(instanceID)
+		if err != nil {
+			// 如果 wait 返回错误，记录它
+			log.Printf("ℹ️ [PluginManager] 插件 '%s' 退出时返回错误: %v", instanceID, err)
+		}
+		return nil
+	case <-time.After(10 * time.Second): // 10秒超时
+		// 进程没有在规定时间内退出，强制杀死
+		log.Printf("⚠️ [PluginManager] 插件 '%s' 在10秒内未响应 SIGTERM，将执行强制杀死。", instanceID)
+		return pm.forceKill(instanceID, cmd)
+	}
+}
+
+// forceKill 辅助函数：强制杀死并清理
+func (pm *PluginManager) forceKill(instanceID string, cmd *exec.Cmd) error {
+	if err := cmd.Process.Kill(); err != nil {
+		log.Printf("🚨 [PluginManager] 强制杀死插件进程 (PID: %d) 失败: %v", cmd.Process.Pid, err)
+	}
+	pm.cleanupAfterStop(instanceID)
+	return fmt.Errorf("插件 '%s' 被强制杀死", instanceID)
+}
+
+// cleanupAfterStop 辅助函数：统一处理停止后的清理工作
+func (pm *PluginManager) cleanupAfterStop(instanceID string) {
+	pm.runningPluginsMu.Lock()
 	delete(pm.runningPlugins, instanceID)
+	pm.runningPluginsMu.Unlock()
 
 	pm.registryMu.Lock()
+	defer pm.registryMu.Unlock()
+
 	var bizToUnregister string
 	for biz, iID := range pm.bizToInstanceID {
 		if iID == instanceID {
@@ -271,11 +315,9 @@ func (pm *PluginManager) Stop(instanceID string) error {
 		delete(pm.bizToInstanceID, bizToUnregister)
 		log.Printf("🔌 [PluginManager] 业务组 '%s' 已从网关注销。", bizToUnregister)
 	}
-	pm.registryMu.Unlock()
 
 	log.Printf("👋 [PluginManager] 插件实例 '%s' 已停止。", instanceID)
-	_, err := pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
-	return err
+	_, _ = pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
 }
 
 // StartHealthChecks 用于启动后台健康检查任务
@@ -403,12 +445,7 @@ func (pm *PluginManager) registerPlugin(instanceID, bizName string, adapter *grp
 func (pm *PluginManager) monitorPlugin(cmd *exec.Cmd, instanceID string) {
 	err := cmd.Wait()
 	log.Printf("🔌 [PluginManager] 插件 '%s' 进程已退出，错误: %v", instanceID, err)
-
-	var status string
-	_ = pm.db.QueryRow("SELECT status FROM plugin_instances WHERE instance_id = ?", instanceID).Scan(&status)
-	if status == statusRunning {
-		_ = pm.Stop(instanceID)
-	}
+	pm.cleanupAfterStop(instanceID)
 }
 
 // findFreePort 查找一个可用的 TCP 端口。

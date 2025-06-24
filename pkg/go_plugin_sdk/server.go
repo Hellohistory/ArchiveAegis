@@ -1,4 +1,3 @@
-// file: pkg/go_plugin_sdk/server.go
 package go_plugin_sdk
 
 import (
@@ -8,6 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"google.golang.org/grpc"
@@ -39,7 +41,9 @@ func Serve(info PluginInfo, initializer Initializer) error {
 	slog.Info("🔌 启动插件服务...", "name", cfg.PluginName, "version", info.Version, "biz", cfg.BizName, "port", cfg.Port)
 
 	// 调用开发者提供的初始化函数来获取业务逻辑实例
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	pluginLogic, err := initializer(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("插件初始化失败: %w", err)
@@ -62,8 +66,33 @@ func Serve(info PluginInfo, initializer Initializer) error {
 
 	datasourcev1.RegisterDataSourceServer(grpcServer, s)
 
-	slog.Info("✅ 插件启动成功，开始提供服务...")
-	return grpcServer.Serve(lis)
+	go func() {
+		slog.Info("✅ 插件启动成功，开始提供服务...")
+		if err := grpcServer.Serve(lis); err != nil {
+			// 当 grpcServer.GracefulStop() 被调用时，Serve会返回错误，这是正常现象
+			slog.Info("gRPC 服务已停止", "error", err)
+		}
+	}()
+
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
+	<-stopChan
+
+	slog.Info("收到关闭信号，开始执行优雅关闭...")
+
+	grpcServer.GracefulStop()
+	slog.Info("gRPC 服务已平滑停止。")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+	if err := pluginLogic.GracefulShutdown(shutdownCtx); err != nil {
+		slog.Error("插件自定义清理逻辑执行失败", "error", err)
+		return err
+	}
+	slog.Info("插件清理逻辑执行完毕。")
+
+	slog.Info("👋 插件已成功优雅关闭。")
+	return nil
 }
 
 // grpcPluginServer 是 datasourcev1.DataSourceServer 的内部实现。
