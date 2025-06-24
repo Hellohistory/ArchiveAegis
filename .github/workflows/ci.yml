@@ -89,6 +89,7 @@ jobs:
             python -m pip install -q -r test_script/requirements-ci.txt
           else
             python -m pip install -q grpcio grpcio-tools requests
+          fi
 
       - name: Generate protobuf files
         run: task gen
