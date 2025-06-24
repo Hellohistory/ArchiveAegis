@@ -156,6 +156,7 @@ jobs:
             exit 1
           else
             echo "✅ Protobuf 文件已是最新，无需提交。"
+          fi
 
       - name: All checks passed
         run: echo "✅🎉 全平台 CI 全部通过！"
