@@ -12,22 +12,23 @@ from pathlib import Path
 import requests
 
 # --- 配置 ---
-BASE_URL = "http://localhost:10224/api/v1"
+BASE_URL = os.getenv("AEGIS_BASE_URL", "http://localhost:10224/api/v1")
 ADMIN_USER = "admin"
 ADMIN_PASS = "password"
-
-# --- 跨平台路径处理 ---
-_gateway_base_path = Path("../AegisBuild/ArchiveAegisCore")
-if sys.platform == "win32":
-    GATEWAY_EXE_PATH = _gateway_base_path.with_suffix(".exe").resolve()
-else:
-    GATEWAY_EXE_PATH = _gateway_base_path.resolve()
-
-GATEWAY_LOG_FILE = Path("gateway-output.log").resolve()
 FIREWALL_RULE_NAME = "Aegis_CI_Test_Rule"
 
-gateway_process = None
+gateway_path_str = os.getenv("AEGIS_BIN")
+if gateway_path_str:
+    GATEWAY_EXE_PATH = Path(gateway_path_str)
+else:
+    _gateway_base_path = Path("./AegisBuild/ArchiveAegisCore")
+    if sys.platform == "win32":
+        GATEWAY_EXE_PATH = _gateway_base_path.with_suffix(".exe").resolve()
+    else:
+        GATEWAY_EXE_PATH = _gateway_base_path.resolve()
 
+GATEWAY_LOG_FILE = Path("gateway-output.log").resolve()
+gateway_process = None
 
 # --- CI 专用日志函数 ---
 def log(level, message):
@@ -47,10 +48,11 @@ def configure_windows_firewall():
     try:
         subprocess.run(command, check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        if "已存在" in e.stderr.decode('gbk', errors='ignore'):
-            log("INFO", "Windows: Firewall rule already exists.")
+        stderr_decoded = e.stderr.decode('gbk', errors='ignore')
+        if "已存在" in stderr_decoded or "exists" in stderr_decoded.lower():
+             log("INFO", "Windows: Firewall rule already exists.")
         else:
-            log("FAIL", f"Windows: Failed to add firewall rule. Error: {e.stderr.decode('gbk', errors='ignore')}")
+            log("FAIL", f"Windows: Failed to add firewall rule. Error: {stderr_decoded}")
 
 
 def cleanup_windows_firewall_rule():
@@ -81,7 +83,7 @@ def wait_for_gateway():
                 return
         except requests.exceptions.RequestException:
             time.sleep(1)
-    log("FAIL", "Timeout waiting for gateway.")
+    log("FAIL", "Timeout waiting for gateway. Check gateway-output.log for errors.")
 
 
 def cleanup_gateway_process():
@@ -96,7 +98,7 @@ def cleanup_gateway_process():
             gateway_process.wait()
         log("INFO", "Gateway process terminated.")
 
-        if GATEWAY_LOG_FILE.exists():
+        if GATEWAY_LOG_FILE.exists() and GATEWAY_LOG_FILE.stat().st_size > 0:
             print("\n--- Gateway Log Output ---")
             print(GATEWAY_LOG_FILE.read_text(encoding="utf-8").strip())
             print("--- End Gateway Log ---\n")
@@ -112,7 +114,8 @@ def prepare_environment():
     else:
         subprocess.run(["pkill", "-f", gateway_basename], check=False, capture_output=True)
 
-    instance_dir = Path("../instance")
+    # *** 已修正 *** 使用 './' 确保目录在项目文件夹内
+    instance_dir = Path("./instance")
     instance_dir.mkdir(exist_ok=True)
     auth_db_path = instance_dir / "auth.db"
     if auth_db_path.exists():
@@ -165,7 +168,7 @@ def run_burst_test(name, url, burst_count, expected_ok_max, session=None):
     log("INFO", f"Results - Success: {success_count}, Throttled: {throttled_count}")
     if not throttled_count > 0:
         log("FAIL", "Rate limit failed: No requests were throttled.")
-    if not success_count <= expected_ok_max:
+    if success_count > expected_ok_max:
         log("FAIL", f"Rate limit failed: Success count ({success_count}) exceeded expected max ({expected_ok_max}).")
     log("PASS", f"Rate limit test for '{name}' passed.")
 
@@ -179,7 +182,6 @@ def main():
     start_gateway()
     wait_for_gateway()
 
-    # 测试1: 未认证IP限速 (假定 瞬时峰值20)
     run_burst_test(
         name="Anonymous IP Limit",
         url=f"{BASE_URL}/system/status",
@@ -190,12 +192,10 @@ def main():
     log("INFO", "Waiting for rate limiter recovery...")
     time.sleep(3)
 
-    # 认证
     session = requests.Session()
     jwt = initial_setup_and_get_token(session)
     session.headers.update({"Authorization": f"Bearer {jwt}"})
 
-    # 测试2: 认证后业务接口限速 (假定 瞬时峰值30)
     run_burst_test(
         name="Authenticated Business API Limit",
         url=f"{BASE_URL}/meta/biz",
