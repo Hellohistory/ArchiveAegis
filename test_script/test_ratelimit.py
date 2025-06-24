@@ -16,7 +16,7 @@ import io
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-BASE_URL: str = os.getenv("AEGIS_BASE_URL", "http://localhost:10224/api/v1")
+BASE_URL: str = os.getenv("AEGIS_BASE_URL", "http://127.0.0.1:10224/api/v1")
 _default_bin = Path(os.getenv("AEGIS_BIN", "../AegisBuild/ArchiveAegisCore"))
 if sys.platform == "win32":
     _default_bin = _default_bin.with_suffix(".exe")
@@ -74,8 +74,9 @@ def _wait_until_ready(timeout: int = 45) -> None:
             if r.status_code == 200:
                 log("READY", "网关已就绪")
                 return
-        except requests.exceptions.RequestException:
-            pass
+            log("WAIT", f"响应码: {r.status_code}")
+        except requests.exceptions.RequestException as e:
+            log("WAIT", f"{type(e).__name__}: {e}")
         time.sleep(1)
     raise RuntimeError("网关启动超时")
 
