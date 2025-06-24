@@ -1,234 +1,156 @@
-import atexit
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
 import os
+import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Generator, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-# ==============================================================================
-# --- 配置区 ---
-# ==============================================================================
-BASE_URL = "http://localhost:10224/api/v1"
-GATEWAY_EXE_PATH = os.path.join("../AegisBuild", "ArchiveAegisCore.exe")
+BASE_URL: str = os.getenv("AEGIS_BASE_URL", "http://localhost:10224/api/v1")
+
+_default_bin = Path(os.getenv("AEGIS_BIN", "../AegisBuild/ArchiveAegisCore"))
+if sys.platform == "win32":
+    _default_bin = _default_bin.with_suffix(".exe")
+GATEWAY_BIN: Path = _default_bin.resolve(strict=False)
 
 ADMIN_USER = "admin"
 ADMIN_PASS = "password"
 
-# 全局变量，用于确保总能关闭子进程
-gateway_process = None
+INSTANCE_DIR = Path("../instance")
 
-# ==============================================================================
-# --- 辅助函数 ---
-# ==============================================================================
-def print_step(step_num, title):
-    """打印测试步骤的标题。"""
-    print("\n" + "=" * 80)
-    print(f"▶️  步骤 {step_num}: {title}")
-    print("=" * 80)
+def log(step: str, msg: str) -> None:
+    """统一格式化输出"""
+    print(f"{step:>8} │ {msg}", flush=True)
 
-def print_status(message, success=True):
-    """打印测试状态信息，如果失败则退出程序。"""
-    prefix = "✅ PASS:" if success else "❌ FAIL:"
-    print(f"{prefix} {message}")
-    if not success:
-        if gateway_process:
-            print_info("测试失败，正在尝试关闭网关进程...")
-            gateway_process.terminate()
-        sys.exit(1)
 
-def print_info(message):
-    """打印一般信息。"""
-    print(f"   ℹ️  {message}")
+def _run(cmd: list[str]) -> None:
+    """执行本地命令并忽略返回值（用作清理）"""
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-# ==============================================================================
-# --- 网关启动与清理 ---
-# ==============================================================================
-def terminate_existing_gateway_processes():
-    """尝试终止所有可能正在运行的网关进程。"""
-    print_info("正在尝试终止所有可能存在的 ArchiveAegisCore 进程...")
+
+@contextmanager
+def launch_gateway(bin_path: Path) -> Generator[subprocess.Popen, None, None]:
+    """启动网关并在退出时确保关闭"""
+    if not bin_path.exists():
+        raise FileNotFoundError(f"未找到网关可执行文件: {bin_path}")
+
+    # 尝试杀掉残留进程
+    log("PREP", "终止历史网关进程…")
+    if sys.platform == "win32":
+        _run(["taskkill", "/F", "/IM", bin_path.name])
+    else:
+        _run(["pkill", "-f", bin_path.name])
+
+    log("PREP", f"启动网关 ⇢ {bin_path}")
+    proc = subprocess.Popen([str(bin_path)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
     try:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/IM", os.path.basename(GATEWAY_EXE_PATH)], check=False, capture_output=True)
-        else:
-            subprocess.run(["pkill", "-f", os.path.basename(GATEWAY_EXE_PATH)], check=False, capture_output=True)
-        print_info(f"已尝试终止 '{os.path.basename(GATEWAY_EXE_PATH)}' 进程。")
-    except Exception as e:
-        print_info(f"终止进程时发生错误: {e}")
-    time.sleep(1)
+        _wait_until_ready()
+        yield proc
+    finally:
+        log("CLEAN", f"关闭网关进程 (PID={proc.pid})")
+        if proc.poll() is None:
+            sig = signal.SIGINT if sys.platform == "win32" else signal.SIGTERM
+            proc.send_signal(sig)
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        # 输出最后几行日志辅助调试
+        if proc.stdout:
+            tail = "".join(proc.stdout.readlines()[-20:]).strip()
+            if tail:
+                log("LOG", f"核心日志尾部 ↓\n{tail}")
 
-def prepare_test_environment():
-    """准备测试环境：仅清理认证数据库。"""
-    print_step("A", "准备测试环境 (清理旧数据)")
-    terminate_existing_gateway_processes()
-    instance_dir = "../instance"
-    os.makedirs(instance_dir, exist_ok=True)
-    auth_db_path = os.path.join(instance_dir, "auth.db")
-    if os.path.exists(auth_db_path):
-        print_info(f"清理旧的认证数据库: {auth_db_path}")
-        os.remove(auth_db_path)
 
-def start_gateway():
-    """启动网关服务作为子进程。"""
-    global gateway_process
-    print_step("B", "启动网关服务子进程")
-    try:
-        print_info(f"正在从 '{GATEWAY_EXE_PATH}' 启动网关...")
-        gateway_process = subprocess.Popen([GATEWAY_EXE_PATH])
-        print_status(f"网关进程已启动，PID: {gateway_process.pid}")
-    except FileNotFoundError:
-        print_status(f"未找到网关可执行文件: '{GATEWAY_EXE_PATH}'。", success=False)
-    except Exception as e:
-        print_status(f"启动网关失败: {e}", success=False)
-
-def wait_for_gateway():
-    """等待网关服务就绪。"""
-    print_info("等待网关服务就绪...")
-    for _ in range(15):
+def _wait_until_ready(timeout: int = 15) -> None:
+    """轮询 /system/status 直到 200 或超时抛异常"""
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
         try:
-            r = requests.get(f"{BASE_URL}/system/status", timeout=1)
-            if r.status_code == 200:
-                print_status("网关已就绪，可以开始测试。")
+            if requests.get(f"{BASE_URL}/system/status", timeout=1).status_code == 200:
+                log("READY", "网关已就绪")
                 return
         except requests.exceptions.RequestException:
-            time.sleep(1)
-    print_status("等待网关超时，测试中止。", success=False)
+            pass
+        time.sleep(1)
+    raise RuntimeError("网关启动超时")
 
-def cleanup():
-    """确保无论如何都关闭网关进程。"""
-    if gateway_process:
-        print_info(f"\n测试结束，正在尝试关闭网关进程 (PID: {gateway_process.pid})...")
-        gateway_process.terminate()
-        try:
-            gateway_process.wait(timeout=5)
-            print_status("网关进程已成功关闭。")
-        except subprocess.TimeoutExpired:
-            gateway_process.kill()
-            gateway_process.wait()
-            print_status("网关进程已强制关闭。")
+def _burst_get(url: str, burst: int, session: requests.Session | None = None) -> Tuple[int, int]:
+    ok = throttled = 0
+    with ThreadPoolExecutor(max_workers=burst) as pool:
+        futures = [pool.submit(lambda: (session or requests).get(url, timeout=5)) for _ in range(burst)]
+        for f in as_completed(futures):
+            try:
+                code = f.result().status_code
+            except requests.exceptions.RequestException:
+                code = 500
+            if code == 200:
+                ok += 1
+            elif code == 429:
+                throttled += 1
+            else:
+                raise AssertionError(f"收到非预期状态码 {code}")
+    return ok, throttled
 
-atexit.register(cleanup)
 
-# ==============================================================================
-# --- 认证流程 ---
-# ==============================================================================
-def initial_setup_and_get_token(session):
-    """执行首次安装，创建管理员并获取JWT。"""
-    print_info("系统处于首次安装模式，开始自动化设置...")
-    resp = session.get(f"{BASE_URL}/system/setup")
-    resp.raise_for_status()
-    setup_token = resp.json().get("token")
+def _initial_setup(session: requests.Session) -> str:
+    r = session.get(f"{BASE_URL}/system/setup")
+    r.raise_for_status()
+    setup_token = r.json().get("token")
     if not setup_token:
-        print_status("未能从 /setup 接口获取到安装令牌", success=False)
+        raise AssertionError("未获取到安装令牌")
 
-    setup_payload = {"token": setup_token, "user": ADMIN_USER, "pass": ADMIN_PASS}
-    resp = session.post(f"{BASE_URL}/system/setup", json=setup_payload)
+    payload = {"token": setup_token, "user": ADMIN_USER, "pass": ADMIN_PASS}
+    resp = session.post(f"{BASE_URL}/system/setup", json=payload)
     resp.raise_for_status()
-    token = resp.json().get("token")
-    print_status("成功创建管理员并获取到初始 JWT。")
-    return token
+    jwt = resp.json().get("token")
+    if not jwt:
+        raise AssertionError("初始化未返回 JWT")
+    return jwt
 
-# ==============================================================================
-# --- 限速测试核心逻辑 ---
-# ==============================================================================
+def main() -> None:
+    log("STEP A", "清理旧认证数据库")
+    INSTANCE_DIR.mkdir(exist_ok=True)
+    auth_db = INSTANCE_DIR / "auth.db"
+    if auth_db.exists():
+        auth_db.unlink()
 
-def send_request(url, session=None):
-    """发送单个请求并返回状态码的辅助函数"""
-    try:
-        s = session or requests
-        resp = s.get(url, timeout=5)
-        return resp.status_code
-    except requests.exceptions.RequestException:
-        return 500 # 返回一个错误码
+    with launch_gateway(GATEWAY_BIN):
+        log("STEP 1", "匿名速率限制测试")
+        ok, throttled = _burst_get(f"{BASE_URL}/system/status", burst=35)
+        assert throttled > 0 and ok <= 25
 
-def run_ratelimit_tests():
-    """执行所有限速相关的测试。"""
-    # 步骤 1: 测试全局 IP 限速 (无需认证)
-    # 根据日志，IP默认限制为 瞬时峰值 20
-    print_step(1, "测试全局 IP 速率限制 (未认证)")
-    burst_limit_unauthenticated = 20
-    requests_to_send = burst_limit_unauthenticated + 15
+        time.sleep(3)
 
-    print_info(f"将向 /api/v1/system/status 并发发送 {requests_to_send} 个请求...")
-    success_count = 0
-    throttled_count = 0
-    with ThreadPoolExecutor(max_workers=requests_to_send) as executor:
-        futures = [executor.submit(send_request, f"{BASE_URL}/system/status") for _ in range(requests_to_send)]
-        for future in as_completed(futures):
-            status_code = future.result()
-            if status_code == 200:
-                success_count += 1
-            elif status_code == 429:
-                throttled_count += 1
-            else:
-                print_status(f"收到非预期的状态码: {status_code}", success=False)
+        sess = requests.Session()
+        jwt = _initial_setup(sess)
+        sess.headers.update({"Authorization": f"Bearer {jwt}"})
+        log("AUTH", "已获取并附加 JWT")
 
-    print_info(f"测试完成。成功请求: {success_count}，被限速请求: {throttled_count}")
-    assert success_count <= burst_limit_unauthenticated + 5
-    assert throttled_count > 0
-    print_status("全局 IP 速率限制测试通过：成功阻止了超出限制的请求。")
+        log("STEP 2", "认证后速率限制测试")
+        ok, throttled = _burst_get(f"{BASE_URL}/meta/biz", burst=45, session=sess)
+        assert throttled > 0 and ok <= 35
 
-    # --- BUG 修复点 ---
-    # 在进行下一步操作前，等待几秒钟，让IP限速器的令牌桶恢复。
-    # 否则，下一步的认证请求会因为IP仍处于被限速状态而失败。
-    wait_for_recovery = 3
-    print_info(f"等待 {wait_for_recovery} 秒以使IP限速器恢复...")
-    time.sleep(wait_for_recovery)
+        time.sleep(2)
+        assert sess.get(f"{BASE_URL}/meta/biz", timeout=5).status_code == 200
+        log("PASS", "速率限制全部验证通过 🎉")
+
+    log("END", "测试脚本执行完毕")
 
 
-    # 步骤 2: 用户认证
-    print_step(2, "用户认证")
-    session = requests.Session()
-    token = initial_setup_and_get_token(session)
-    session.headers.update({"Authorization": f"Bearer {token}"})
-    print_info("认证完成，JWT 已自动应用于后续所有请求。")
-
-    # 步骤 3: 测试业务接口速率限制 (认证后)
-    # 根据日志，业务接口限制为 瞬时峰值 30
-    print_step(3, "测试业务接口速率限制 (已认证)")
-    burst_limit_authenticated = 30
-    requests_to_send = burst_limit_authenticated + 15
-    success_count = 0
-    throttled_count = 0
-
-    print_info(f"将向 /api/v1/meta/biz 并发发送 {requests_to_send} 个请求...")
-    with ThreadPoolExecutor(max_workers=requests_to_send) as executor:
-        futures = [executor.submit(send_request, f"{BASE_URL}/meta/biz", session) for _ in range(requests_to_send)]
-        for future in as_completed(futures):
-            status_code = future.result()
-            if status_code == 200:
-                success_count += 1
-            elif status_code == 429:
-                throttled_count += 1
-            else:
-                print_status(f"收到非预期的状态码: {status_code}", success=False)
-
-    print_info(f"测试完成。成功请求: {success_count}，被限速请求: {throttled_count}")
-    assert success_count <= burst_limit_authenticated + 5
-    assert throttled_count > 0
-    print_status("业务接口速率限制测试通过：成功阻止了超出限制的请求。")
-
-    # 步骤 4: 验证限速恢复
-    print_step(4, "验证速率限制恢复")
-    wait_time = 2
-    print_info(f"等待 {wait_time} 秒让限速器恢复...")
-    time.sleep(wait_time)
-
-    resp = session.get(f"{BASE_URL}/meta/biz")
-    if resp.status_code == 200:
-        print_status("速率限制已恢复，请求成功。")
-    else:
-        print_status(f"速率限制恢复失败，请求返回 {resp.status_code}", success=False)
-
-# ==============================================================================
-# --- 主执行入口 ---
-# ==============================================================================
 if __name__ == "__main__":
-    prepare_test_environment()
-    start_gateway()
-    wait_for_gateway()
-
-    run_ratelimit_tests()
-
-    print("\n" + "🏆 " * 3 + " 恭喜！速率限制自动化测试成功！ " + "🏆 " * 3)
+    try:
+        main()
+    except Exception as exc:
+        log("ERROR", str(exc))
+        sys.exit(1)
