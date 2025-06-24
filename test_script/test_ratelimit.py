@@ -65,9 +65,9 @@ def launch_gateway(bin_path: Path) -> Generator[subprocess.Popen, None, None]:
                 proc.wait(5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-        # 输出最后几行日志辅助调试
         if proc.stdout:
-            tail = "".join(proc.stdout.readlines()[-20:]).strip()
+            lines = proc.stdout.readlines()[-20:]
+            tail = "".join(line.decode("utf-8", errors="ignore") for line in lines).strip()
             if tail:
                 log("LOG", f"核心日志尾部 ↓\n{tail}")
 
