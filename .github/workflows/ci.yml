@@ -26,6 +26,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Ensure Unix line endings
+        if: runner.os != 'Windows'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dos2unix
+          # 转换所有脚本和 CI 生成脚本
+          find . -type f -name '*.sh' -o -name '*.yaml' | xargs dos2unix || true
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -81,7 +89,6 @@ jobs:
             ci_test/requirements-ci.txt
 
       - name: Install Python deps
-        shell: bash
         run: |
           python -m pip install -q --upgrade pip
           if [[ -f requirements-ci.txt ]]; then
@@ -91,6 +98,7 @@ jobs:
           else
             python -m pip install -q grpcio grpcio-tools requests
           fi
+        shell: bash
 
       - name: Generate protobuf files
         run: task gen
@@ -99,6 +107,7 @@ jobs:
         run: |
           go vet ./...
           go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        shell: bash
 
       - name: Find changed Go/proto files
         id: changed
@@ -110,7 +119,6 @@ jobs:
 
       - name: Run unit tests (affected packages)
         if: steps.changed.outputs.any_changed == 'true'
-        shell: bash
         run: |
           PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
                  | xargs -n1 dirname \
@@ -121,9 +129,10 @@ jobs:
             go test -v -race -failfast $PKGS
           else
             echo "No affected packages."
+          fi
+        shell: bash
 
       - name: Build ArchiveAegisCore
-        shell: bash
         run: |
           set -euo pipefail
           mkdir -p AegisBuild
@@ -140,48 +149,44 @@ jobs:
           TARGET=$(detect_target)
           echo "Detected entry package: $TARGET"
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
+        shell: bash
 
       - name: Configure Windows Environment for Test
         if: runner.os == 'Windows'
-        shell: powershell
         run: |
           echo "Disabling Windows Defender real-time monitoring..."
           Set-MpPreference -DisableRealtimeMonitoring $true
           echo "Adding firewall rule for port 10224..."
           New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
+        shell: powershell
 
       - name: Increase test timeout on Windows
         if: runner.os == 'Windows'
-        shell: bash
         run: |
-          echo "Increasing Python test script timeout to 120 seconds for Windows runner..."
           sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
-          echo "File content after modification:"
           cat ci_test/test_ratelimit.py
+        shell: bash
 
       - name: Run e2e rate-limit test
+        run: |
+          python ci_test/test_ratelimit.py
         shell: bash
         env:
           AEGIS_BIN: ${{ github.workspace }}/AegisBuild/ArchiveAegisCore${{ runner.os == 'Windows' && '.exe' || '' }}
           AEGIS_BASE_URL: http://localhost:10224/api/v1
-        run: python ci_test/test_ratelimit.py
 
       - name: Cleanup Windows Environment
         if: runner.os == 'Windows' && always()
-        shell: powershell
         run: |
-          echo "Re-enabling Windows Defender real-time monitoring..."
           Set-MpPreference -DisableRealtimeMonitoring $false
-          echo "Removing firewall rule for port 10224..."
           Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
+        shell: powershell
 
       - name: Check for uncommitted generated files
-        shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             git config core.autocrlf false
           fi
-          
           if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
             echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
             git --no-pager diff
@@ -189,6 +194,7 @@ jobs:
           else
             echo "✅ Protobuf 文件已是最新，无需提交。"
           fi
+        shell: bash
 
       - name: All checks passed
         run: echo "✅🎉 全平台 CI 全部通过！"
