@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,7 +26,7 @@ type PluginManager struct {
 	catalog          map[string]domain.PluginManifest
 	downloaders      []downloader.Downloader
 	runningPlugins   map[string]*exec.Cmd
-	executorRegistry map[string]port.Executor // <--- 重大变更
+	executorRegistry map[string]port.Executor
 	closableAdapters *[]io.Closer
 	bizToInstanceID  map[string]string
 
@@ -43,7 +44,7 @@ type RepositoryConfig struct {
 }
 
 // NewPluginManager 创建一个新的插件管理器实例
-func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) { // <--- 参数类型变更
+func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) {
 	if db == nil {
 		return nil, errors.New("PluginManager 需要一个有效的数据库连接")
 	}
@@ -61,7 +62,7 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 		&downloader.FileDownloader{},
 	}
 
-	return &PluginManager{
+	pm := &PluginManager{
 		db:               db,
 		rootDir:          rootDir,
 		installDir:       installDir,
@@ -69,8 +70,15 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 		catalog:          make(map[string]domain.PluginManifest),
 		downloaders:      supportedDownloaders,
 		runningPlugins:   make(map[string]*exec.Cmd),
-		executorRegistry: registry, // <--- 字段赋值变更
+		executorRegistry: registry,
 		closableAdapters: closers,
 		bizToInstanceID:  make(map[string]string),
-	}, nil
+	}
+
+	// 在启动时执行孤儿进程清理
+	if err := pm.ReconcileOrphanedPlugins(); err != nil {
+		log.Printf("⚠️ [PluginManager] 启动时清理孤儿插件进程失败: %v", err)
+	}
+
+	return pm, nil
 }

@@ -1,3 +1,4 @@
+// Package plugin_manager file：internal/service/plugin_manager/plugin_lifecycle.go
 package plugin_manager
 
 import (
@@ -68,7 +69,7 @@ func (pm *PluginManager) CreateInstance(
 // ListInstances 查询所有插件实例并校准状态。
 // 返回值 error 将综合 rows.Err() 与 rows.Close() 的错误。
 func (pm *PluginManager) ListInstances() (_ []domain.PluginInstance, retErr error) {
-	// ---- 1. 查询数据库 ----
+	// 查询数据库
 	const q = `SELECT instance_id, display_name, plugin_id, version,
 	                  biz_name, port, status, enabled, created_at, last_started_at
 	             FROM plugin_instances`
@@ -218,17 +219,37 @@ func (pm *PluginManager) Start(instanceID string) error {
 	}
 
 	cmd := exec.Command(cmdPath, finalArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// 将日志重定向到独立文件，而不是标准输出
+	logPath, err := pm.getInstanceAssetPath(instanceID, "log")
+	if err != nil {
+		return fmt.Errorf("无法获取日志文件路径: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("无法打开插件日志文件 '%s': %w", logPath, err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动插件进程失败: %w", err)
 	}
 
+	// 进程启动成功后，立即写入PID文件
+	pidPath, err := pm.getInstanceAssetPath(instanceID, "pid")
+	if err != nil {
+		log.Printf("⚠️ [PluginManager] 无法获取PID文件路径，将跳过写入: %v", err)
+	} else {
+		if err := writePIDFile(pidPath, cmd.Process.Pid); err != nil {
+			log.Printf("⚠️ [PluginManager] 写入 PID 文件 '%s' 失败: %v。强烈建议手动停止实例以避免孤儿进程。", pidPath, err)
+		}
+	}
+
 	pm.runningPluginsMu.Lock()
 	pm.runningPlugins[instanceID] = cmd
 	pm.runningPluginsMu.Unlock()
-	log.Printf("🚀 [PluginManager] 插件实例 '%s' (%s) 进程已启动 (PID: %d)", inst.DisplayName, instanceID, cmd.Process.Pid)
+	// 更新日志消息以包含日志文件路径
+	log.Printf("🚀 [PluginManager] 插件实例 '%s' (%s) 进程已启动 (PID: %d)，日志位于: %s", inst.DisplayName, instanceID, cmd.Process.Pid, logPath)
 
 	go func() {
 		if _, err := pm.db.Exec(
@@ -299,6 +320,14 @@ func (pm *PluginManager) cleanupAfterStop(instanceID string) {
 	pm.runningPluginsMu.Lock()
 	delete(pm.runningPlugins, instanceID)
 	pm.runningPluginsMu.Unlock()
+
+	// 清理PID文件
+	pidPath, err := pm.getInstanceAssetPath(instanceID, "pid")
+	if err != nil {
+		log.Printf("⚠️ [PluginManager] 无法获取实例 '%s' 的PID文件路径进行清理: %v", instanceID, err)
+	} else {
+		cleanupPIDFile(pidPath)
+	}
 
 	pm.registryMu.Lock()
 	defer pm.registryMu.Unlock()
@@ -446,6 +475,123 @@ func (pm *PluginManager) monitorPlugin(cmd *exec.Cmd, instanceID string) {
 	err := cmd.Wait()
 	log.Printf("🔌 [PluginManager] 插件 '%s' 进程已退出，错误: %v", instanceID, err)
 	pm.cleanupAfterStop(instanceID)
+}
+
+// ReconcileOrphanedPlugins 在管理器启动时检查并处理孤儿进程。
+func (pm *PluginManager) ReconcileOrphanedPlugins() error {
+	log.Printf("🔄 [PluginManager] 开始巡检并清理潜在的孤儿插件进程...")
+
+	// 1. 从数据库获取所有实例的ID
+	rows, err := pm.db.Query(`SELECT instance_id FROM plugin_instances`)
+	if err != nil {
+		return fmt.Errorf("无法查询所有实例ID: %w", err)
+	}
+	defer rows.Close()
+
+	var orphanedCount int
+	for rows.Next() {
+		var instanceID string
+		if err := rows.Scan(&instanceID); err != nil {
+			log.Printf("⚠️ [PluginManager] 扫描实例ID失败: %v", err)
+			continue
+		}
+
+		// 2. 检查每个实例是否存在 PID 文件
+		pidPath, err := pm.getInstanceAssetPath(instanceID, "pid")
+		if err != nil {
+			// 如果连路径都获取不到，说明实例信息有问题，跳过
+			continue
+		}
+
+		pid, err := readPIDFile(pidPath)
+		if os.IsNotExist(err) {
+			// PID 文件不存在，正常
+			continue
+		}
+		if err != nil {
+			log.Printf("⚠️ [PluginManager] 读取 PID 文件 '%s' 失败: %v", pidPath, err)
+			continue
+		}
+
+		// 3. 检查 PID 对应的进程是否存在
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			// 在类 Unix 系统上，FindProcess 总是成功，所以这个错误不关键
+			log.Printf("ℹ️ [PluginManager] 查找进程 PID %d 时出错 (可忽略): %v", pid, err)
+		}
+
+		// 在类 Unix 系统上，向进程发送 signal 0 是检查其是否存在的标准方法
+		// 在 Windows 上，此方法无效，但 FindProcess 本身就更可靠
+		err = process.Signal(syscall.Signal(0))
+		if err == nil {
+			// 进程存在！这是一个孤儿进程。
+			log.Printf("🚨 [PluginManager] 发现孤儿进程！实例: %s, PID: %d。正在尝试终止...", instanceID, pid)
+			if killErr := process.Kill(); killErr != nil {
+				log.Printf("🚨 [PluginManager] 强制杀死孤儿进程 PID %d 失败: %v", pid, killErr)
+			} else {
+				log.Printf("✅ [PluginManager] 孤儿进程 PID %d 已被成功终止。", pid)
+				orphanedCount++
+			}
+		}
+
+		// 4. 无论进程是否存在，只要PID文件存在于此阶段，都应被清理
+		cleanupPIDFile(pidPath)
+	}
+
+	if orphanedCount > 0 {
+		log.Printf("🎉 [PluginManager] 孤儿进程巡检完成，共清理了 %d 个进程。", orphanedCount)
+	} else {
+		log.Printf("✅ [PluginManager] 孤儿进程巡检完成，未发现任何孤儿进程。")
+	}
+
+	// 确保所有插件在数据库中的状态都是 STOPPED
+	if _, err := pm.db.Exec(`UPDATE plugin_instances SET status = ? WHERE status != ?`, statusStopped, statusStopped); err != nil {
+		return fmt.Errorf("重置所有插件状态为 STOPPED 失败: %w", err)
+	}
+
+	return rows.Err()
+}
+
+// 用于管理PID和日志文件的辅助函数
+
+// getInstanceAssetPath 为插件实例生成特定资产（如pid, log）的路径
+func (pm *PluginManager) getInstanceAssetPath(instanceID, assetName string) (string, error) {
+	var pluginID, version string
+	// 从数据库查询 pluginID 和 version，因为我们需要它们来构建安装路径
+	query := `SELECT plugin_id, version FROM plugin_instances WHERE instance_id = ?`
+	if err := pm.db.QueryRow(query, instanceID).Scan(&pluginID, &version); err != nil {
+		return "", fmt.Errorf("无法找到实例 '%s' 的插件信息: %w", instanceID, err)
+	}
+
+	// e.g., /path/to/install/dir/<plugin_id>/<version>/assets/
+	assetsDir := filepath.Join(pm.installDir, pluginID, version, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		return "", fmt.Errorf("创建资产目录 '%s' 失败: %w", assetsDir, err)
+	}
+
+	// e.g., /path/to/install/dir/<plugin_id>/<version>/assets/<instance_id>.log
+	return filepath.Join(assetsDir, instanceID+"."+assetName), nil
+}
+
+// writePIDFile 将进程ID写入指定文件
+func writePIDFile(path string, pid int) error {
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+// readPIDFile 读取并返回PID
+func readPIDFile(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(data)))
+}
+
+// cleanupPIDFile 删除PID文件
+func cleanupPIDFile(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("⚠️ [PluginManager] 警告: 清理 PID 文件 '%s' 失败: %v", path, err)
+	}
 }
 
 // findFreePort 查找一个可用的 TCP 端口。
