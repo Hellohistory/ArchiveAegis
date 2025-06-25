@@ -47,8 +47,8 @@
       "name": "高级可观测性模块",
       "description": "启用高级结构化日志(slog)和性能剖析(pprof)端点。启用后，网关日志将以JSON格式输出，并可在 localhost:6060 查看 pprof 数据。需要重启网关生效。",
       "author": "ArchiveAegis",
+      "type": "system_feature",
       "tags": [
-        "SYSTEM_FEATURE",
         "system",
         "observability",
         "logging",
