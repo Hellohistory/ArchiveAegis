@@ -1,4 +1,5 @@
-// Package plugin_manager file: internal/service/plugin_manager/plugin_manager.go
+// file: internal/service/plugin_manager/plugin_manager.go
+
 package plugin_manager
 
 import (
@@ -17,23 +18,30 @@ import (
 	"time"
 )
 
+// 统一的运行时实例结构体 ---
+// runningInstance 封装了一个正在运行的插件实例的所有运行时状态。
+type runningInstance struct {
+	cmd      *exec.Cmd     // 插件的系统进程
+	executor port.Executor // 与插件通信的gRPC客户端
+	bizName  string        // 该实例绑定的业务名称
+}
+
 // PluginManager 负责管理插件的目录、安装和生命周期。
 type PluginManager struct {
-	db               *sql.DB
-	rootDir          string
-	installDir       string
-	repositories     []RepositoryConfig
-	catalog          map[string]domain.PluginManifest
-	downloaders      []downloader.Downloader
-	runningPlugins   map[string]*exec.Cmd
+	db                 *sql.DB
+	rootDir            string
+	installDir         string
+	repositories       []RepositoryConfig
+	catalog            map[string]domain.PluginManifest
+	downloaders        []downloader.Downloader
+	runningInstances   map[string]*runningInstance // Key: instanceID
+	runningInstancesMu sync.RWMutex
+
 	executorRegistry map[string]port.Executor
 	closableAdapters *[]io.Closer
-	bizToInstanceID  map[string]string
 
-	// Mutexes
-	catalogMu        sync.RWMutex
-	runningPluginsMu sync.Mutex
-	registryMu       sync.RWMutex
+	// catalog 的访问也需要并发安全
+	catalogMu sync.RWMutex
 }
 
 // RepositoryConfig 是在网关主配置中定义的仓库信息
@@ -63,16 +71,16 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 	}
 
 	pm := &PluginManager{
-		db:               db,
-		rootDir:          rootDir,
-		installDir:       installDir,
-		repositories:     repos,
-		catalog:          make(map[string]domain.PluginManifest),
-		downloaders:      supportedDownloaders,
-		runningPlugins:   make(map[string]*exec.Cmd),
+		db:           db,
+		rootDir:      rootDir,
+		installDir:   installDir,
+		repositories: repos,
+		catalog:      make(map[string]domain.PluginManifest),
+		downloaders:  supportedDownloaders,
+		// --- 修改：初始化新的字段 ---
+		runningInstances: make(map[string]*runningInstance),
 		executorRegistry: registry,
 		closableAdapters: closers,
-		bizToInstanceID:  make(map[string]string),
 	}
 
 	// 在启动时执行孤儿进程清理

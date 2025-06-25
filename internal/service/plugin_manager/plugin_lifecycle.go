@@ -1,4 +1,4 @@
-// Package plugin_manager file：internal/service/plugin_manager/plugin_lifecycle.go
+// Package plugin_manager file: internal/service/plugin_manager/plugin_lifecycle.go
 package plugin_manager
 
 import (
@@ -84,7 +84,8 @@ func (pm *PluginManager) ListInstances() (_ []domain.PluginInstance, retErr erro
 		}
 	}()
 
-	runningSet := pm.snapshotRunning()
+	// 使用新的 snapshot 方法
+	runningSet := pm.snapshotRunningInstanceIDs()
 
 	var instances []domain.PluginInstance
 	for rows.Next() {
@@ -109,15 +110,14 @@ func (pm *PluginManager) ListInstances() (_ []domain.PluginInstance, retErr erro
 }
 
 /*
-snapshotRunning 拷贝一份当前正在运行实例的集合，避免在主循环内反复加锁。
-集合类型用 map[string]struct{}，查找 O(1)。
+snapshotRunningInstanceIDs 拷贝一份当前正在运行实例ID的集合，避免在主循环内反复加锁。
 */
-func (pm *PluginManager) snapshotRunning() map[string]struct{} {
-	pm.runningPluginsMu.Lock()
-	defer pm.runningPluginsMu.Unlock()
+func (pm *PluginManager) snapshotRunningInstanceIDs() map[string]struct{} {
+	pm.runningInstancesMu.RLock()
+	defer pm.runningInstancesMu.RUnlock()
 
-	clone := make(map[string]struct{}, len(pm.runningPlugins))
-	for id := range pm.runningPlugins {
+	clone := make(map[string]struct{}, len(pm.runningInstances))
+	for id := range pm.runningInstances {
 		clone[id] = struct{}{}
 	}
 	return clone
@@ -149,9 +149,11 @@ func (pm *PluginManager) reconcileStatus(
 
 // DeleteInstance 从数据库中删除一个插件实例的配置。
 func (pm *PluginManager) DeleteInstance(instanceID string) error {
-	pm.runningPluginsMu.Lock()
-	_, isRunning := pm.runningPlugins[instanceID]
-	pm.runningPluginsMu.Unlock()
+	// 使用新的 map 和锁
+	pm.runningInstancesMu.RLock()
+	_, isRunning := pm.runningInstances[instanceID]
+	pm.runningInstancesMu.RUnlock()
+
 	if isRunning {
 		return fmt.Errorf("无法删除正在运行的插件实例 '%s'，请先停止它", instanceID)
 	}
@@ -171,13 +173,23 @@ func (pm *PluginManager) DeleteInstance(instanceID string) error {
 }
 
 // Start 启动一个已配置的插件实例。
-func (pm *PluginManager) Start(instanceID string) error {
-	pm.runningPluginsMu.Lock()
-	if _, isRunning := pm.runningPlugins[instanceID]; isRunning {
-		pm.runningPluginsMu.Unlock()
+func (pm *PluginManager) Start(instanceID string) (err error) {
+	// 检查实例是否已在运行，并使用单个写锁占位
+	pm.runningInstancesMu.Lock()
+	if _, isRunning := pm.runningInstances[instanceID]; isRunning {
+		pm.runningInstancesMu.Unlock()
 		return fmt.Errorf("插件实例 '%s' 已经在运行中", instanceID)
 	}
-	pm.runningPluginsMu.Unlock()
+	// 先在 map 中占位，防止并发启动。此时结构体为空。
+	pm.runningInstances[instanceID] = &runningInstance{}
+	pm.runningInstancesMu.Unlock()
+
+	// 确保在启动失败时清理占位
+	defer func() {
+		if err != nil {
+			pm.cleanupFailedStart(instanceID)
+		}
+	}()
 
 	var inst domain.PluginInstance
 	var installPath string
@@ -185,7 +197,7 @@ func (pm *PluginManager) Start(instanceID string) error {
               FROM plugin_instances pi 
               JOIN installed_plugins ip ON pi.plugin_id = ip.plugin_id AND pi.version = ip.version
               WHERE pi.instance_id = ?`
-	if err := pm.db.QueryRow(query, instanceID).Scan(&inst.DisplayName, &inst.PluginID, &inst.Version, &inst.BizName, &inst.Port, &installPath); err != nil {
+	if err = pm.db.QueryRow(query, instanceID).Scan(&inst.DisplayName, &inst.PluginID, &inst.Version, &inst.BizName, &inst.Port, &installPath); err != nil {
 		return fmt.Errorf("未找到插件实例 '%s' 或其安装信息: %w", instanceID, err)
 	}
 
@@ -219,7 +231,6 @@ func (pm *PluginManager) Start(instanceID string) error {
 	}
 
 	cmd := exec.Command(cmdPath, finalArgs...)
-	// 将日志重定向到独立文件，而不是标准输出
 	logPath, err := pm.getInstanceAssetPath(instanceID, "log")
 	if err != nil {
 		return fmt.Errorf("无法获取日志文件路径: %w", err)
@@ -231,7 +242,7 @@ func (pm *PluginManager) Start(instanceID string) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("启动插件进程失败: %w", err)
 	}
 
@@ -240,15 +251,25 @@ func (pm *PluginManager) Start(instanceID string) error {
 	if err != nil {
 		log.Printf("⚠️ [PluginManager] 无法获取PID文件路径，将跳过写入: %v", err)
 	} else {
-		if err := writePIDFile(pidPath, cmd.Process.Pid); err != nil {
+		if err = writePIDFile(pidPath, cmd.Process.Pid); err != nil {
 			log.Printf("⚠️ [PluginManager] 写入 PID 文件 '%s' 失败: %v。强烈建议手动停止实例以避免孤儿进程。", pidPath, err)
 		}
 	}
 
-	pm.runningPluginsMu.Lock()
-	pm.runningPlugins[instanceID] = cmd
-	pm.runningPluginsMu.Unlock()
-	// 更新日志消息以包含日志文件路径
+	// 更新占位的 runningInstance 结构体
+	pm.runningInstancesMu.Lock()
+	if ri, ok := pm.runningInstances[instanceID]; ok {
+		ri.cmd = cmd
+		ri.bizName = inst.BizName
+	} else {
+		// 理论上不应该发生，因为前面已经占位了
+		pm.runningInstancesMu.Unlock()
+		log.Printf("🚨 [PluginManager] 严重错误：实例 '%s' 的占位符丢失，将尝试强制停止进程。", instanceID)
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("实例 '%s' 状态不一致", instanceID)
+	}
+	pm.runningInstancesMu.Unlock()
+
 	log.Printf("🚀 [PluginManager] 插件实例 '%s' (%s) 进程已启动 (PID: %d)，日志位于: %s", inst.DisplayName, instanceID, cmd.Process.Pid, logPath)
 
 	go func() {
@@ -265,22 +286,24 @@ func (pm *PluginManager) Start(instanceID string) error {
 
 // Stop 停止一个正在运行的插件实例。
 func (pm *PluginManager) Stop(instanceID string) error {
-	pm.runningPluginsMu.Lock()
-	cmd, isRunning := pm.runningPlugins[instanceID]
-	if !isRunning {
-		pm.runningPluginsMu.Unlock()
+	// 使用新的 map 和锁来获取 cmd 对象
+	pm.runningInstancesMu.RLock()
+	ri, isRunning := pm.runningInstances[instanceID]
+	pm.runningInstancesMu.RUnlock()
+
+	if !isRunning || ri.cmd == nil {
 		// 即使不在运行，也确保数据库状态正确
 		_, _ = pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
 		return fmt.Errorf("插件实例 '%s' 并未在运行中", instanceID)
 	}
-	pm.runningPluginsMu.Unlock() // 尽早释放锁
 
+	cmd := ri.cmd // 获取到 cmd
 	log.Printf("ℹ️ [PluginManager] 正在尝试优雅地停止插件实例 '%s' (PID: %d)...", instanceID, cmd.Process.Pid)
 
 	// 发送 SIGTERM 信号，请求插件优雅退出
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		log.Printf("⚠️ [PluginManager] 发送 SIGTERM 信号到插件 '%s' 失败: %v。将尝试强制杀死。", instanceID, err)
-		return pm.forceKill(instanceID, cmd) // 封装一个强制杀死的方法
+		return pm.forceKill(instanceID, cmd)
 	}
 
 	// 等待插件进程自己退出，但设置一个超时
@@ -311,15 +334,22 @@ func (pm *PluginManager) forceKill(instanceID string, cmd *exec.Cmd) error {
 	if err := cmd.Process.Kill(); err != nil {
 		log.Printf("🚨 [PluginManager] 强制杀死插件进程 (PID: %d) 失败: %v", cmd.Process.Pid, err)
 	}
+	// 调用 cleanup 时不再需要传递 cmd
 	pm.cleanupAfterStop(instanceID)
 	return fmt.Errorf("插件 '%s' 被强制杀死", instanceID)
 }
 
 // cleanupAfterStop 辅助函数：统一处理停止后的清理工作
 func (pm *PluginManager) cleanupAfterStop(instanceID string) {
-	pm.runningPluginsMu.Lock()
-	delete(pm.runningPlugins, instanceID)
-	pm.runningPluginsMu.Unlock()
+	// 从 runningInstances 中获取 bizName 并删除整个实例记录
+	pm.runningInstancesMu.Lock()
+	ri, ok := pm.runningInstances[instanceID]
+	if !ok {
+		pm.runningInstancesMu.Unlock()
+		return // 可能已被其他协程清理
+	}
+	delete(pm.runningInstances, instanceID)
+	pm.runningInstancesMu.Unlock()
 
 	// 清理PID文件
 	pidPath, err := pm.getInstanceAssetPath(instanceID, "pid")
@@ -329,24 +359,21 @@ func (pm *PluginManager) cleanupAfterStop(instanceID string) {
 		cleanupPIDFile(pidPath)
 	}
 
-	pm.registryMu.Lock()
-	defer pm.registryMu.Unlock()
-
-	var bizToUnregister string
-	for biz, iID := range pm.bizToInstanceID {
-		if iID == instanceID {
-			bizToUnregister = biz
-			break
-		}
-	}
-	if bizToUnregister != "" {
-		delete(pm.executorRegistry, bizToUnregister)
-		delete(pm.bizToInstanceID, bizToUnregister)
-		log.Printf("🔌 [PluginManager] 业务组 '%s' 已从网关注销。", bizToUnregister)
+	// 清理共享的 executorRegistry
+	if ri.bizName != "" {
+		delete(pm.executorRegistry, ri.bizName)
+		log.Printf("🔌 [PluginManager] 业务组 '%s' 已从网关注销。", ri.bizName)
 	}
 
 	log.Printf("👋 [PluginManager] 插件实例 '%s' 已停止。", instanceID)
 	_, _ = pm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", statusStopped, instanceID)
+}
+
+// 用于处理启动失败时清理工作的辅助函数
+func (pm *PluginManager) cleanupFailedStart(instanceID string) {
+	pm.runningInstancesMu.Lock()
+	delete(pm.runningInstances, instanceID)
+	pm.runningInstancesMu.Unlock()
 }
 
 // StartHealthChecks 用于启动后台健康检查任务
@@ -366,17 +393,19 @@ func (pm *PluginManager) StartHealthChecks(interval time.Duration) {
 
 // performAllHealthChecks 执行一轮完整的健康检查
 func (pm *PluginManager) performAllHealthChecks() {
-	pm.registryMu.RLock()
-	if len(pm.executorRegistry) == 0 {
-		pm.registryMu.RUnlock()
+	pm.runningInstancesMu.RLock()
+	if len(pm.runningInstances) == 0 {
+		pm.runningInstancesMu.RUnlock()
 		return
 	}
 
 	registrySnapshot := make(map[string]port.Executor)
-	for bizName, executor := range pm.executorRegistry {
-		registrySnapshot[bizName] = executor
+	for _, ri := range pm.runningInstances {
+		if ri.executor != nil && ri.bizName != "" {
+			registrySnapshot[ri.bizName] = ri.executor
+		}
 	}
-	pm.registryMu.RUnlock()
+	pm.runningInstancesMu.RUnlock()
 
 	log.Printf("🩺 [PluginManager] 开始对 %d 个正在运行的插件实例进行健康巡检...", len(registrySnapshot))
 
@@ -394,11 +423,20 @@ func (pm *PluginManager) checkPluginHealth(bizName string, executor port.Executo
 		// 健康检查失败！
 		log.Printf("🚨 [PluginManager] 检测到插件实例 (业务: %s) 健康检查失败: %v", bizName, err)
 
-		pm.registryMu.RLock()
-		instanceID, ok := pm.bizToInstanceID[bizName]
-		pm.registryMu.RUnlock()
+		// 通过遍历 runningInstances 查找 instanceID
+		// 注意：这是一个 O(N) 操作，如果运行实例非常多，可能会有性能影响。
+		// 但通常插件数量可控，且健康检查是低频操作，此影响可接受。
+		var instanceID string
+		pm.runningInstancesMu.RLock()
+		for id, ri := range pm.runningInstances {
+			if ri.bizName == bizName {
+				instanceID = id
+				break
+			}
+		}
+		pm.runningInstancesMu.RUnlock()
 
-		if !ok {
+		if instanceID == "" {
 			log.Printf("⚠️ [PluginManager] 无法找到业务 '%s' 对应的实例ID，无法处理不健康的插件。", bizName)
 			return
 		}
@@ -424,50 +462,22 @@ func (pm *PluginManager) registerAndMonitorPlugin(cmd *exec.Cmd, instanceID, add
 		return
 	}
 
-	pm.registerPlugin(instanceID, bizName, adapter)
-
-	// 异步监控插件生命周期，避免阻塞主流程
-	go pm.monitorPlugin(cmd, instanceID)
-}
-
-// tryConnectPlugin 尝试连接插件服务，最多重试 5 次，采用指数退避策略。
-func (pm *PluginManager) tryConnectPlugin(address, instanceID string) (*grpc_client.ClientAdapter, error) {
-	var adapter *grpc_client.ClientAdapter
-	var err error
-	baseDelay := time.Second
-
-	for i := 0; i < 5; i++ {
-		log.Printf("ℹ️ [PluginManager] 尝试连接插件 '%s' (%s)，第 %d 次...", instanceID, address, i+1)
-
-		adapter, err = grpc_client.New(address)
-		if err == nil {
-			// 使用超时上下文验证服务存活
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_, err = adapter.GetPluginInfo(ctx)
-			cancel()
-			if err == nil {
-				log.Printf("✅ [PluginManager] 成功连接插件 '%s'", instanceID)
-				return adapter, nil
-			}
-		}
-
-		// 指数退避延迟（1s, 2s, 4s, 8s, 16s）
-		time.Sleep(baseDelay << i)
+	// 不再调用独立的 registerPlugin，而是直接更新 runningInstance
+	pm.runningInstancesMu.Lock()
+	if ri, ok := pm.runningInstances[instanceID]; ok {
+		ri.executor = adapter
+		// 注册到共享的 executorRegistry
+		pm.executorRegistry[bizName] = adapter
+		*pm.closableAdapters = append(*pm.closableAdapters, adapter)
+		log.Printf("✅ [PluginManager] 插件 '%s' 注册完成，业务组 '%s' 正在使用。", instanceID, bizName)
+	} else {
+		// 这可能发生在插件启动非常慢，而用户已经调用了 Stop 的情况
+		log.Printf("⚠️ [PluginManager] 实例 '%s' 在注册前就已停止，将关闭连接。", instanceID)
+		adapter.Close()
 	}
+	pm.runningInstancesMu.Unlock()
 
-	return nil, fmt.Errorf("连接插件 '%s' 失败（%v）", instanceID, err)
-}
-
-// registerPlugin 将插件适配器注册进插件管理器内部注册表。
-func (pm *PluginManager) registerPlugin(instanceID, bizName string, adapter *grpc_client.ClientAdapter) {
-	pm.registryMu.Lock()
-	defer pm.registryMu.Unlock()
-
-	pm.executorRegistry[bizName] = adapter
-	pm.bizToInstanceID[bizName] = instanceID
-	*pm.closableAdapters = append(*pm.closableAdapters, adapter)
-
-	log.Printf("✅ [PluginManager] 插件 '%s' 注册完成，业务组 '%s' 正在使用。", instanceID, bizName)
+	go pm.monitorPlugin(cmd, instanceID)
 }
 
 // monitorPlugin 监控插件进程，检测退出后做清理。
@@ -552,9 +562,39 @@ func (pm *PluginManager) ReconcileOrphanedPlugins() error {
 	return rows.Err()
 }
 
-// 用于管理PID和日志文件的辅助函数
+// --- 新增：补全之前遗漏的辅助函数 ---
 
-// getInstanceAssetPath 为插件实例生成特定资产（如pid, log）的路径
+// tryConnectPlugin 尝试连接插件服务，最多重试 5 次，采用指数退避策略。
+func (pm *PluginManager) tryConnectPlugin(address, instanceID string) (*grpc_client.ClientAdapter, error) {
+	var adapter *grpc_client.ClientAdapter
+	var err error
+	baseDelay := time.Second
+
+	for i := 0; i < 5; i++ {
+		log.Printf("ℹ️ [PluginManager] 尝试连接插件 '%s' (%s)，第 %d 次...", instanceID, address, i+1)
+
+		adapter, err = grpc_client.New(address)
+		if err == nil {
+			// 使用超时上下文验证服务存活
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			// 注意：grpc_client.ClientAdapter 需要有 GetPluginInfo 方法
+			// _, err = adapter.GetPluginInfo(ctx)
+			err = adapter.HealthCheck(ctx) // 使用 HealthCheck 可能更合适
+			cancel()
+			if err == nil {
+				log.Printf("✅ [PluginManager] 成功连接插件 '%s'", instanceID)
+				return adapter, nil
+			}
+		}
+
+		// 指数退避延迟（1s, 2s, 4s, 8s, 16s）
+		time.Sleep(baseDelay << i)
+	}
+
+	return nil, fmt.Errorf("连接插件 '%s' 失败（%v）", instanceID, err)
+}
+
+// 用于管理PID和日志文件的辅助函数
 func (pm *PluginManager) getInstanceAssetPath(instanceID, assetName string) (string, error) {
 	var pluginID, version string
 	// 从数据库查询 pluginID 和 version，因为我们需要它们来构建安装路径
