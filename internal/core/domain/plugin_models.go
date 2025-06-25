@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+type PluginType string
+
+const (
+	// PluginTypeStandard 表示一个标准的、需要下载和运行的插件
+	PluginTypeStandard PluginType = "standard"
+	// PluginTypeSystemFeature 表示一个内置的系统功能
+	PluginTypeSystemFeature PluginType = "system_feature"
+)
+
 // Repository 代表一个插件仓库的元数据
 type Repository struct {
 	Name        string           `json:"repository_name"`
@@ -19,6 +28,7 @@ type PluginManifest struct {
 	ID                string          `json:"id"`
 	Name              string          `json:"name"`
 	Description       string          `json:"description"`
+	Type              PluginType      `json:"type,omitempty"`
 	Author            string          `json:"author"`
 	Tags              []string        `json:"tags"`
 	SupportedBizNames []string        `json:"supported_biz_names"`

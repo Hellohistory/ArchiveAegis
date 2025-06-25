@@ -1,5 +1,5 @@
-// file: cmd/gateway/main.go
-
+// Package main 启动 ArchiveAegis 网关服务的主程序。
+// 包含配置加载、依赖初始化、插件系统启动、HTTP 服务运行与优雅停机处理等功能。
 package main
 
 import (
@@ -34,26 +34,25 @@ import (
 
 const version = "v1.0.0-alpha10"
 
-// =============================================================================
-// 配置与应用核心结构体
-// =============================================================================
-
+// PluginManagementConfig 定义插件管理模块的配置项。
 type PluginManagementConfig struct {
 	InstallDirectory string                            `mapstructure:"install_directory"`
 	Repositories     []plugin_manager.RepositoryConfig `mapstructure:"repositories"`
 }
 
+// ServerConfig 定义 HTTP 服务的基础配置项。
 type ServerConfig struct {
 	Port     int    `mapstructure:"port"`
 	LogLevel string `mapstructure:"log_level"`
 }
 
+// Config 包含完整的应用运行配置。
 type Config struct {
 	Server           ServerConfig           `mapstructure:"server"`
 	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"`
 }
 
-// application 结构体现在持有 Executor 注册表
+// application 封装应用运行所需的所有依赖项。
 type application struct {
 	config             Config
 	db                 *sql.DB
@@ -65,42 +64,30 @@ type application struct {
 	closableAdapters   *[]io.Closer
 }
 
-// =============================================================================
-// 主程序入口与生命周期管理
-// =============================================================================
-
+// main 是程序入口，负责构建应用并启动运行逻辑。
 func main() {
-	// build 函数负责创建和初始化 application 实例
 	app, err := build()
 	if err != nil {
-		// 如果在 build 阶段就出错，此时 slog 可能还未初始化，使用标准 log
 		log.Fatalf("CRITICAL: 应用初始化失败: %v", err)
 	}
-
-	// 确保数据库连接在程序退出时被关闭
 	defer func() {
 		app.logger.Info("正在关闭系统数据库连接...")
 		if err := app.db.Close(); err != nil {
 			app.logger.Error("关闭系统数据库时发生错误", "error", err)
 		}
 	}()
-
-	// app.run 负责运行应用
 	if err := app.run(); err != nil {
 		app.logger.Error("应用运行时发生错误", "error", err)
 		os.Exit(1)
 	}
-
 	app.logger.Info("程序已成功退出。")
 }
 
-// build 函数封装了所有的初始化逻辑
+// build 初始化并组装 application 实例，包括配置解析、数据库连接、服务初始化等。
 func build() (*application, error) {
-	// --- 命令行标志处理 ---
 	serviceTokenUser := flag.String("gen-service-token", "", "为指定的服务账户用户名生成一个长生命周期的Token并退出")
 	flag.Parse()
 
-	// --- 配置加载 ---
 	log.Printf("ArchiveAegis Universal Kernel %s 正在启动...", version)
 	exePath, err := os.Executable()
 	if err != nil {
@@ -117,7 +104,6 @@ func build() (*application, error) {
 		return nil, fmt.Errorf("解析配置到结构体失败: %w", err)
 	}
 
-	// --- 数据库和可观测性初始化 ---
 	instanceDir := filepath.Join(rootDir, "instance")
 	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(instanceDir, 0755)
@@ -127,31 +113,23 @@ func build() (*application, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if err := service.InitPlatformTables(sysDB); err != nil {
 		return nil, err
 	}
-
-	// 如果是生成 Token 的命令，则执行并退出
 	if *serviceTokenUser != "" {
-		// 这里返回的 error 会被 main 捕获并处理
 		return nil, generateServiceTokenAndExit(sysDB, *serviceTokenUser)
 	}
-
 	enabledFeatures, err := loadEnabledFeatures(sysDB)
 	if err != nil {
 		return nil, err
 	}
-
 	if enabledFeatures["io.archiveaegis.system.observability"] {
 		aegobserve.InitLogger(config.Server.LogLevel)
 	} else {
 		log.Println("ℹ️  高级可观测性功能未启用，使用标准日志。")
 	}
-
 	slog.Info("ArchiveAegis Universal Kernel starting up", "version", version)
 
-	// --- 服务初始化 ---
 	config.PluginManagement.InstallDirectory = filepath.Join(rootDir, config.PluginManagement.InstallDirectory)
 	for i, repo := range config.PluginManagement.Repositories {
 		if !strings.Contains(repo.URL, "://") {
@@ -164,22 +142,18 @@ func build() (*application, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	executorRegistry := make(map[string]port.Executor)
 	closableAdapters := make([]io.Closer, 0)
 	pm, err := plugin_manager.NewPluginManager(sysDB, rootDir, config.PluginManagement.Repositories, config.PluginManagement.InstallDirectory, executorRegistry, &closableAdapters)
 	if err != nil {
 		return nil, err
 	}
-
 	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
-
 	if enabledFeatures["io.archiveaegis.system.observability"] {
 		aegobserve.EnablePprof("0.0.0.0:6060")
 	}
 	slog.Info("监控: metrics 已通过包初始化自动注册。")
 
-	// --- 组装 application 实例 ---
 	app := &application{
 		config:             config,
 		db:                 sysDB,
@@ -187,16 +161,15 @@ func build() (*application, error) {
 		pluginManager:      pm,
 		adminConfigService: adminConfigService,
 		rateLimiter:        rateLimiter,
-		executorRegistry:   executorRegistry, // 使用新的注册表
+		executorRegistry:   executorRegistry,
 		closableAdapters:   &closableAdapters,
 	}
 
 	return app, nil
 }
 
-// run 方法负责启动 HTTP 服务和处理优雅停机。
+// run 启动 HTTP 服务并处理插件系统的定时任务与优雅停机逻辑。
 func (app *application) run() error {
-	// 启动后台任务
 	app.pluginManager.RefreshRepositories()
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
@@ -207,7 +180,6 @@ func (app *application) run() error {
 	}()
 	app.logger.Info("后台任务: 插件仓库定期刷新已启动。")
 
-	// 准备 Setup Token
 	var setupToken string
 	var setupTokenDeadline time.Time
 	if service.UserCount(app.db) == 0 {
@@ -216,29 +188,21 @@ func (app *application) run() error {
 		app.logger.Warn("系统中无管理员，安装令牌已生成 (30分钟内有效)", "setup_token", setupToken)
 	}
 
-	// 创建 HTTP 路由器
-	httpRouter := router.New(
-		router.Dependencies{
-			Registry:           app.executorRegistry, // 注入新的注册表
-			AdminConfigService: app.adminConfigService,
-			PluginManager:      app.pluginManager,
-			RateLimiter:        app.rateLimiter,
-			AuthDB:             app.db,
-			SetupToken:         setupToken,
-			SetupTokenDeadline: setupTokenDeadline,
-		},
-	)
+	httpRouter := router.New(router.Dependencies{
+		Registry:           app.executorRegistry,
+		AdminConfigService: app.adminConfigService,
+		PluginManager:      app.pluginManager,
+		RateLimiter:        app.rateLimiter,
+		AuthDB:             app.db,
+		SetupToken:         setupToken,
+		SetupTokenDeadline: setupTokenDeadline,
+	})
 	app.logger.Info("传输层: HTTP 路由器创建完成。")
 
-	// 创建并启动 HTTP 服务
 	addr := fmt.Sprintf(":%d", app.config.Server.Port)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: httpRouter,
-	}
+	server := &http.Server{Addr: addr, Handler: httpRouter}
 
 	shutdownErr := make(chan error)
-
 	go func() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -247,14 +211,12 @@ func (app *application) run() error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-
 		app.logger.Info("正在关闭所有插件适配器...")
 		for _, closer := range *app.closableAdapters {
 			if err := closer.Close(); err != nil {
 				app.logger.Error("关闭适配器时发生错误", "error", err)
 			}
 		}
-
 		shutdownErr <- server.Shutdown(ctx)
 	}()
 
@@ -262,20 +224,14 @@ func (app *application) run() error {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-
 	if err := <-shutdownErr; err != nil {
 		return err
 	}
-
 	app.logger.Info("HTTP服务已成功关闭。")
 	return nil
 }
 
-// =============================================================================
-// 辅助函数
-// =============================================================================
-
-// generateServiceTokenAndExit 处理生成Token的逻辑并退出。
+// generateServiceTokenAndExit 为服务账户生成持久化 Token，并立即退出程序。
 func generateServiceTokenAndExit(db *sql.DB, username string) error {
 	id, role, ok := service.GetUserByUsername(db, username)
 	if !ok {
@@ -288,23 +244,20 @@ func generateServiceTokenAndExit(db *sql.DB, username string) error {
 	} else {
 		log.Printf("服务账户 '%s' 已存在 (ID: %d)，为其生成新Token...", username, id)
 	}
-
 	token, err := service.GenServiceToken(id, role)
 	if err != nil {
 		return fmt.Errorf("生成服务Token失败: %w", err)
 	}
-
 	fmt.Printf("\n为服务账户 '%s' (role: %s, id: %d) 生成的Token:\n", username, role, id)
 	fmt.Println("------------------------------------------------------------------")
 	fmt.Println(token)
 	fmt.Println("------------------------------------------------------------------")
 	fmt.Println("请将此Token配置到你的 Prometheus 或其他服务中。")
-
 	os.Exit(0)
-	return nil // 实际上，os.Exit(0)会立刻终止程序
+	return nil
 }
 
-// loadEnabledFeatures 从数据库加载启用的功能列表
+// loadEnabledFeatures 从系统数据库中加载已启用的功能标识。
 func loadEnabledFeatures(db *sql.DB) (map[string]bool, error) {
 	rows, err := db.Query("SELECT feature_id FROM system_features WHERE enabled = TRUE")
 	if err != nil {
@@ -324,7 +277,7 @@ func loadEnabledFeatures(db *sql.DB) (map[string]bool, error) {
 	return features, rows.Err()
 }
 
-// initAuthDB 封装了认证数据库的初始化逻辑
+// initAuthDB 初始化认证数据库连接，配置相关选项。
 func initAuthDB(path string) (*sql.DB, error) {
 	dsn := fmt.Sprintf("file:%s?_busy_timeout=10000&_journal_mode=WAL&_foreign_keys=ON&_synchronous=NORMAL", path)
 	db, err := sql.Open("sqlite", dsn)
@@ -338,7 +291,7 @@ func initAuthDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// genToken 生成一次性的安装令牌
+// genToken 生成一次性使用的随机安装令牌。
 func genToken() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
