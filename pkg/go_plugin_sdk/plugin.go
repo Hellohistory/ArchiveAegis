@@ -1,3 +1,5 @@
+// Package go_plugin_sdk 提供插件接口定义及配置信息结构
+// 文件位置: pkg/go_plugin_sdk/plugin.go
 package go_plugin_sdk
 
 import (
@@ -6,36 +8,34 @@ import (
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 )
 
-// Plugin 是插件开发者需要实现的业务逻辑核心接口。
+// Plugin 定义插件需实现的核心接口，用于处理请求、健康检查与资源清理
 type Plugin interface {
-	// Execute 将统一处理请求，内部需要有逻辑来分发不同类型的负载。
+	// Execute 统一处理插件请求，需根据负载类型执行对应逻辑
 	Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error)
 
-	// HealthCheck 执行健康检查，成功返回 nil，失败返回 error。
+	// HealthCheck 执行插件的健康状态检查，返回 nil 表示健康
 	HealthCheck(ctx context.Context) error
 
-	// GracefulShutdown 执行优雅关闭前的清理工作，比如关闭数据库连接、保存内存数据等。
-	// SDK 会在收到 SIGTERM 或 SIGINT 信号后调用此方法。
+	// GracefulShutdown 执行插件关闭前的清理操作，用于资源释放
 	GracefulShutdown(ctx context.Context) error
 }
 
-// PluginInfo 包含了插件的元数据信息。
+// PluginInfo 表示插件的元数据信息
 type PluginInfo struct {
-	Name                  string
-	Version               string
-	Type                  string
-	DescriptionMarkdown   string
-	SupportedCapabilities []string
-	// SupportedPayloads 将由 SDK 自动生成
+	Name                  string   // 插件名称
+	Version               string   // 插件版本
+	Type                  string   // 插件类型
+	DescriptionMarkdown   string   // 插件说明（Markdown 格式）
+	SupportedCapabilities []string // 插件支持的功能列表
 }
 
-// PluginConfig 是由 SDK 解析命令行参数后传递给插件初始化器的配置。
+// PluginConfig 表示插件初始化时提供的配置项
 type PluginConfig struct {
-	Port        int
-	BizName     string
-	PluginName  string
-	InstanceDir string
+	Port        int    // 插件监听端口
+	BizName     string // 业务组名称
+	PluginName  string // 插件实例名称
+	InstanceDir string // 插件实例存储目录
 }
 
-// Initializer 是一个函数类型，插件开发者需要提供此类型的函数来创建和配置他们的 Plugin 实例。
+// Initializer 是插件初始化函数的类型定义
 type Initializer func(ctx context.Context, cfg PluginConfig) (Plugin, error)
