@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import atexit
-import os
 import subprocess
 import sys
 import time
@@ -10,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
-
 
 BASE_URL = "http://localhost:10224/api/v1"
 ADMIN_USER = "admin"
@@ -293,3 +291,4 @@ if __name__ == "__main__":
     run_ratelimit_tests()
 
     print("\n" + "🏆 " * 3 + " 恭喜！速率限制自动化测试成功！ " + "🏆 " * 3)
+

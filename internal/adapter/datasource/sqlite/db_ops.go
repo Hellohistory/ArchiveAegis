@@ -49,7 +49,7 @@ func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string
 	return nil
 }
 
-// openDBInternal 打开并注册指定路径的数据库实例
+// openDBInternal 打开并注册指定路径的数据库连接
 func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	rel, errRel := filepath.Rel(m.root, path)
 	if errRel != nil {

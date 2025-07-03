@@ -126,7 +126,7 @@ func (m *Manager) mutateInternal(ctx context.Context, req port.MutateRequest) (*
 		return nil, fmt.Errorf("构建写操作SQL失败: %w", err)
 	}
 
-	// 获取业务对应的数据库实例集合
+	// 获取业务对应的数据库实例的集合
 	m.mu.RLock()
 	dbInstances, bizExists := m.group[req.BizName]
 	m.mu.RUnlock()

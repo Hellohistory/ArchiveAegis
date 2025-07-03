@@ -1,7 +1,7 @@
 {
   "repository_name": "本地开发测试仓库",
   "owner": "Developer",
-  "last_updated": "2025-06-21T10:00:00Z",
+  "last_updated": "2025-06-21T10:00:00",
   "plugins": [
     {
       "id": "io.archiveaegis.sqlite",

@@ -108,23 +108,6 @@ func (s *AdminConfigServiceImpl) UpdateTableWritePermissions(ctx context.Context
 }
 
 // UpdateTableFieldSettings 全量更新指定业务组下某张表的字段配置。
-//
-// 整体流程：
-//  1. 参数校验，业务名和表名不能为空。
-//  2. 开启事务，保证删除和批量插入操作的一致性。
-//  3. 删除原有字段配置。
-//  4. 若 fields 列表为空，则直接失效缓存并返回，无需插入。
-//  5. 使用预编译语句批量插入新的字段配置，包括字段名、可搜索、可返回及类型信息。
-//  6. 在 defer 中统一处理 rollback 和 commit，并在提交后失效缓存。
-//
-// 参数：
-//   - ctx: 上下文，用于管理请求生命周期。
-//   - bizName: 业务组名称，不能为空。
-//   - tableName: 表名称，不能为空。
-//   - fields: 字段配置列表，包含 FieldName、IsSearchable、IsReturnable、DataType。
-//
-// 返回：
-//   - error: 操作过程中发生的错误。
 func (s *AdminConfigServiceImpl) UpdateTableFieldSettings(ctx context.Context, bizName, tableName string, fields []domain.FieldSetting) (err error) {
 	if bizName == "" || tableName == "" {
 		return fmt.Errorf("业务名或表名不能为空")
