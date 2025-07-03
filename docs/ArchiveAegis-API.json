@@ -1,0 +1,1905 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ArchiveAegis API",
+    "description": "这是 ArchiveAegis 服务的官方 API 文档，涵盖了所有可用的端点，包括系统、认证、元数据、数据和管理平面。",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "tags": [
+    {
+      "name": "系统 (System)",
+      "description": "与系统状态和初始设置相关的端点"
+    },
+    {
+      "name": "认证 (Auth)",
+      "description": "用户登录和认证"
+    },
+    {
+      "name": "元数据 (Metadata)",
+      "description": "用于发现业务、模式和表现层配置的端点"
+    },
+    {
+      "name": "数据 (Data)",
+      "description": "执行数据查询和变更的核心端点"
+    },
+    {
+      "name": "管理/业务配置 (Admin/BizConfig)",
+      "description": "管理员用于配置特定业务组的端点"
+    },
+    {
+      "name": "管理/插件 (Admin/Plugins)",
+      "description": "管理员用于管理插件和实例的端点"
+    },
+    {
+      "name": "管理/安全 (Admin/Security)",
+      "description": "管理员用于配置全局安全设置的端点"
+    },
+    {
+      "name": "管理/监控 (Admin/Monitoring)",
+      "description": "管理员用于监控和度量的端点"
+    }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "认证 (Auth)"
+        ],
+        "summary": "用户登录",
+        "description": "使用用户名和密码进行认证，成功后返回 JWT。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginSuccessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "认证失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/status": {
+      "get": {
+        "tags": [
+          "系统 (System)"
+        ],
+        "summary": "获取系统状态",
+        "description": "检查系统是否已初始化（即是否已创建管理员账户）。",
+        "responses": {
+          "200": {
+            "description": "成功获取状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready_for_login",
+                        "needs_setup"
+                      ],
+                      "description": "系统状态"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/setup": {
+      "get": {
+        "tags": [
+          "系统 (System)"
+        ],
+        "summary": "获取安装令牌",
+        "description": "在系统未初始化时，获取用于创建第一个管理员账户的一次性令牌。",
+        "responses": {
+          "200": {
+            "description": "成功获取令牌",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "description": "一次性安装令牌"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "系统已安装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "系统 (System)"
+        ],
+        "summary": "初始化系统",
+        "description": "使用有效的安装令牌创建第一个管理员账户。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "管理员创建成功，并返回该用户的 JWT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginSuccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "无效或过期的令牌",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "系统已安装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/meta/biz": {
+      "get": {
+        "tags": [
+          "元数据 (Metadata)"
+        ],
+        "summary": "列出所有业务组",
+        "description": "获取在系统中注册的所有业务组 (Biz) 的名称列表。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "example": [
+                        "crm_data",
+                        "inventory_system"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          }
+        }
+      }
+    },
+    "/meta/schema/{bizName}": {
+      "get": {
+        "tags": [
+          "元数据 (Metadata)"
+        ],
+        "summary": "获取业务模式 (Schema)",
+        "description": "获取指定业务组的数据模式。可以提供 `tableName` 查询参数来获取特定表的模式。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "业务组的名称"
+          },
+          {
+            "name": "tableName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "（可选）表的名称，用于获取特定表的模式"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取模式信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SchemaResult"
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "数据源类型"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/meta/presentations": {
+      "get": {
+        "tags": [
+          "元数据 (Metadata)"
+        ],
+        "summary": "获取表现层配置",
+        "description": "获取指定业务和表的默认视图（表现层）配置。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "biz",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "业务组的名称"
+          },
+          {
+            "name": "table",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "表的名称"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取视图配置",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ViewConfig"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/data/query": {
+      "post": {
+        "tags": [
+          "数据 (Data)"
+        ],
+        "summary": "数据查询 (旧)",
+        "description": "【便利端点】对指定的业务组执行数据查询。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "biz_name",
+                  "query"
+                ],
+                "properties": {
+                  "biz_name": {
+                    "type": "string",
+                    "description": "目标业务组名称"
+                  },
+                  "query": {
+                    "type": "object",
+                    "description": "查询条件，结构取决于具体的数据源插件",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "查询成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataQueryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/data/mutate": {
+      "post": {
+        "tags": [
+          "数据 (Data)"
+        ],
+        "summary": "数据变更 (旧)",
+        "description": "【便利端点】对指定的业务组执行数据变更操作（如创建、更新、删除）。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "biz_name",
+                  "operation",
+                  "payload"
+                ],
+                "properties": {
+                  "biz_name": {
+                    "type": "string",
+                    "description": "目标业务组名称"
+                  },
+                  "operation": {
+                    "type": "string",
+                    "description": "操作类型 (e.g., 'create', 'update', 'delete')"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "description": "操作所需的数据",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "变更成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataMutateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/data/execute": {
+      "post": {
+        "tags": [
+          "数据 (Data)"
+        ],
+        "summary": "统一执行端点",
+        "description": "这是一个统一的端点，用于执行所有类型的数据和元数据相关命令。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "biz_name",
+                  "command"
+                ],
+                "properties": {
+                  "biz_name": {
+                    "type": "string",
+                    "description": "目标业务组名称"
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "要执行的命令",
+                    "enum": [
+                      "DataQuery",
+                      "DataMutate",
+                      "GetSchema",
+                      "TriggerBackup"
+                    ]
+                  },
+                  "payload": {
+                    "type": "object",
+                    "description": "命令所需的载荷，其结构随 `command` 的不同而变化",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "命令执行成功。响应 `data` 字段的结构取决于所执行的 `command`。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "description": "响应数据，结构可变",
+                      "additionalProperties": true
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "执行命令的数据源类型"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求无效或不支持的命令",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/admin/metrics": {
+      "get": {
+        "tags": [
+          "管理/监控 (Admin/Monitoring)"
+        ],
+        "summary": "获取 Prometheus 指标",
+        "description": "获取系统监控指标，格式为 Prometheus 可消费的文本格式。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus 指标",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "example": "# HELP go_gc_duration_seconds A summary of the GC invocation durations.\n# TYPE go_gc_duration_seconds summary\ngo_gc_duration_seconds{quantile=\"0\"} 0.0001875\n..."
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/available": {
+      "get": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "列出可用的插件",
+        "description": "获取插件管理器中所有可供安装的插件列表。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PluginManifest"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/install": {
+      "post": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "安装插件",
+        "description": "根据插件ID和版本提交一个异步的插件安装任务。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "plugin_id",
+                  "version"
+                ],
+                "properties": {
+                  "plugin_id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "安装任务已提交",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/instances": {
+      "get": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "列出插件实例",
+        "description": "获取所有已创建的插件实例的列表。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PluginInstance"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "创建插件实例",
+        "description": "为一个已安装的插件创建一个新的实例，并将其绑定到一个业务组。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "display_name",
+                  "plugin_id",
+                  "version",
+                  "biz_name"
+                ],
+                "properties": {
+                  "display_name": {
+                    "type": "string",
+                    "description": "实例的显示名称"
+                  },
+                  "plugin_id": {
+                    "type": "string",
+                    "description": "插件的ID"
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "插件的版本"
+                  },
+                  "biz_name": {
+                    "type": "string",
+                    "description": "要绑定的业务组名称"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "实例创建成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "instance_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/instances/{instance_id}": {
+      "delete": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "删除插件实例",
+        "description": "删除指定的插件实例。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "要删除的实例ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/instances/{instance_id}/start": {
+      "post": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "启动插件实例",
+        "description": "提交一个启动指定插件实例的任务。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "要启动的实例ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "启动任务已提交",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/plugins/instances/{instance_id}/stop": {
+      "post": {
+        "tags": [
+          "管理/插件 (Admin/Plugins)"
+        ],
+        "summary": "停止插件实例",
+        "description": "停止指定的插件实例。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "要停止的实例ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "停止成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/": {
+      "get": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "获取所有已配置的业务组名称",
+        "description": "返回一个包含所有已存在配置的业务组名称的列表。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}": {
+      "get": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "获取业务组的完整配置",
+        "description": "获取指定业务组的所有查询和表相关的配置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BizQueryConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/settings": {
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新业务组的总体设置",
+        "description": "更新业务组的显示名称、描述等总体设置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BizOverallSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessMessageResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/tables": {
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新业务组的可搜索表",
+        "description": "更新指定业务组中哪些表是可被搜索的。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "searchable_tables": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessMessageResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/rate-limit": {
+      "get": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "获取业务组的速率限制",
+        "description": "获取指定业务组的速率限制配置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BizRateLimitSetting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新业务组的速率限制",
+        "description": "更新指定业务组的速率限制配置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BizRateLimitSetting"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessStatusResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/views": {
+      "get": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "获取业务组的所有视图配置",
+        "description": "获取指定业务组下所有表的视图（表现层）配置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/ViewConfig"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新业务组的所有视图配置",
+        "description": "批量更新指定业务组下所有表的视图（表现层）配置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewConfig"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessStatusResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/tables/{tableName}/fields": {
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新表的字段配置",
+        "description": "更新指定业务组中特定表的字段设置（如显示名称、是否可搜索等）。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tableName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FieldSetting"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessMessageResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/biz-config/{bizName}/tables/{tableName}/permissions": {
+      "put": {
+        "tags": [
+          "管理/业务配置 (Admin/BizConfig)"
+        ],
+        "summary": "更新表的写权限",
+        "description": "更新指定业务组中特定表的写操作权限（创建、更新、删除）。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bizName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tableName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TablePermissions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessMessageResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    },
+    "/admin/security/rate-limiting/global": {
+      "get": {
+        "tags": [
+          "管理/安全 (Admin/Security)"
+        ],
+        "summary": "获取全局 IP 速率限制",
+        "description": "获取全局的基于 IP 的速率限制设置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IPLimitSetting"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "管理/安全 (Admin/Security)"
+        ],
+        "summary": "更新全局 IP 速率限制",
+        "description": "更新全局的基于 IP 的速率限制设置。需要管理员权限。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IPLimitSetting"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SuccessStatusResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/ForbiddenError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "user",
+          "pass"
+        ],
+        "properties": {
+          "user": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "认证令牌 (JWT)"
+          },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "username": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "token",
+          "user",
+          "pass"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "从 GET /system/setup 获取的安装令牌"
+          },
+          "user": {
+            "type": "string",
+            "description": "新管理员的用户名"
+          },
+          "pass": {
+            "type": "string",
+            "description": "新管理员的密码"
+          }
+        }
+      },
+      "SchemaResult": {
+        "type": "object",
+        "description": "数据模式的表示。这是一个基于 Protobuf `SchemaResult` 的推断结构。",
+        "properties": {
+          "tableSchemas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tableName": {
+                  "type": "string"
+                },
+                "columns": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ViewConfig": {
+        "type": "object",
+        "description": "用于控制前端UI如何展示数据的配置",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "bizName": {
+            "type": "string"
+          },
+          "tableName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "视图名称"
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "是否为默认视图"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "table",
+              "card"
+            ],
+            "description": "视图类型"
+          },
+          "fieldSettings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fieldName": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "字段显示标签"
+                },
+                "visible": {
+                  "type": "boolean",
+                  "description": "是否可见"
+                },
+                "order": {
+                  "type": "integer",
+                  "description": "显示顺序"
+                }
+              }
+            }
+          }
+        }
+      },
+      "DataQueryResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "查询结果，结构可变",
+            "additionalProperties": true
+          },
+          "source": {
+            "type": "string",
+            "description": "数据源类型"
+          }
+        }
+      },
+      "DataMutateResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "变更结果，结构可变",
+            "additionalProperties": true
+          },
+          "source": {
+            "type": "string",
+            "description": "数据源类型"
+          }
+        }
+      },
+      "PluginManifest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PluginInstance": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "pluginId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "bizName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "BizQueryConfig": {
+        "type": "object",
+        "properties": {
+          "bizName": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/BizOverallSettings"
+          },
+          "searchableTables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tables": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TableConfig"
+            }
+          }
+        }
+      },
+      "BizOverallSettings": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "TableConfig": {
+        "type": "object",
+        "properties": {
+          "fieldSettings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldSetting"
+            }
+          },
+          "allowCreate": {
+            "type": "boolean"
+          },
+          "allowUpdate": {
+            "type": "boolean"
+          },
+          "allowDelete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FieldSetting": {
+        "type": "object",
+        "properties": {
+          "fieldName": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "isSearchable": {
+            "type": "boolean"
+          },
+          "isSortable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TablePermissions": {
+        "type": "object",
+        "properties": {
+          "allow_create": {
+            "type": "boolean"
+          },
+          "allow_update": {
+            "type": "boolean"
+          },
+          "allow_delete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BizRateLimitSetting": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "rate": {
+            "type": "number",
+            "description": "每秒请求数"
+          },
+          "burst": {
+            "type": "integer",
+            "description": "令牌桶大小"
+          }
+        }
+      },
+      "IPLimitSetting": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "rate": {
+            "type": "number",
+            "description": "每秒请求数"
+          },
+          "burst": {
+            "type": "integer",
+            "description": "令牌桶大小"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "错误信息"
+          }
+        }
+      },
+      "SuccessMessageResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "SuccessStatusResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "success"
+          }
+        }
+      }
+    },
+    "responses": {
+      "UnauthorizedError": {
+        "description": "需要认证",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "需要认证"
+            }
+          }
+        }
+      },
+      "ForbiddenError": {
+        "description": "需要管理员权限",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "需要管理员权限"
+            }
+          }
+        }
+      },
+      "NotFoundError": {
+        "description": "资源未找到",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "未找到业务"
+            }
+          }
+        }
+      },
+      "SuccessMessageResponse": {
+        "description": "操作成功",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SuccessMessageResponse"
+            }
+          }
+        }
+      },
+      "SuccessStatusResponse": {
+        "description": "操作成功",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SuccessStatusResponse"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}
