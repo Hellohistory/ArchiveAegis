@@ -42,7 +42,7 @@ type Dependencies struct {
 	SetupTokenDeadline time.Time
 }
 
-// New 创建并配置一个全新的、基于 Gin 的 HTTP 路由器
+// New 创建并配置一个基于 Gin 的 HTTP 路由器
 func New(deps Dependencies) http.Handler {
 	router := gin.Default()
 
