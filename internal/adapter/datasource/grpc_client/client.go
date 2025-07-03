@@ -6,7 +6,7 @@ package grpc_client
 
 import (
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1" // gRPC generated DataSource service client interface
-	"ArchiveAegis/internal/core/port"                      // Executor interface definition
+	"ArchiveAegis/internal/core/port"
 	"context"
 	"fmt"
 	"log/slog"
@@ -27,6 +27,7 @@ var _ port.Executor = (*ClientAdapter)(nil)
 // and returns an initialised ClientAdapter.
 // 调用方应在使用完毕后调用 Close 以释放连接资源。
 func New(pluginAddress string) (*ClientAdapter, error) {
+	// nolint:staticcheck // grpc.Dial 在 Go 1.x 中仍支持，如未来废弃再替换为 NewClient。
 	conn, err := grpc.Dial(pluginAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("grpc_client: dial %s: %w", pluginAddress, err)

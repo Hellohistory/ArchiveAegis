@@ -54,7 +54,11 @@ jobs:
       - name: 执行 GolangCI-Lint 检查
         uses: golangci/golangci-lint-action@v6
         with:
-          cache: true
+          version: latest
+          install-mode: binary
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          only-new-issues: false
+          skip-cache: false
 
       - name: 执行 Go 漏洞扫描
         uses: golang/govulncheck-action@v1

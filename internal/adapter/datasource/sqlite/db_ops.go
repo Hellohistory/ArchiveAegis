@@ -143,6 +143,8 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 }
 
 // getAnyDB 返回当前加载的任意一个数据库连接实例
+//
+//nolint:unused
 func (m *Manager) getAnyDB() (*sql.DB, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

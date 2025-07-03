@@ -324,6 +324,8 @@ func (l *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 }
 
 // cleanupDaemon 定期清理长时间未使用的 IP 限速器实例。
+//
+//nolint:unused
 func (l *IPRateLimiter) cleanupDaemon() {
 	for {
 		time.Sleep(10 * time.Minute)

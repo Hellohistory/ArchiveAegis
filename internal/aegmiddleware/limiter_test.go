@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -83,7 +84,9 @@ func (m *mockAdminConfigService) InvalidateAllCaches()                 {}
 // 一个最小化的处理器，便于验证限流行为。
 var testHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	if _, err := w.Write([]byte("OK")); err != nil {
+		panic(fmt.Sprintf("写入响应失败: %v", err))
+	}
 })
 
 // 将 Claim 嵌入请求上下文的辅助函数。
