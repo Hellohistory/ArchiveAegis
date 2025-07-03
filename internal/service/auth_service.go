@@ -1,4 +1,5 @@
-// Package service file: internal/service/auth_service.go
+// Package service 提供系统业务逻辑的实现
+// 文件位置: internal/service/auth_service.go
 package service
 
 import (
@@ -16,16 +17,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-/* =============================================================================
-   常量与全局变量
-============================================================================= */
-
-// JWT HMAC 密钥（可通过环境变量 AEGIS_JWT_KEY 覆盖）
+// hmacKey 表示 JWT 使用的 HMAC 签名密钥
+// 可通过环境变量 AEGIS_JWT_KEY 进行覆盖
 var hmacKey = []byte("ArchiveAegisSecret_Hellohistory")
 
-// ErrInvalidToken 表示 JWT 无效或过期
+// ErrInvalidToken 表示解析出的 JWT 无效或已过期
 var ErrInvalidToken = errors.New("invalid or expired token")
 
+// init 初始化 JWT 密钥，支持从环境变量加载
 func init() {
 	envKey := os.Getenv("AEGIS_JWT_KEY")
 	if envKey != "" {
@@ -36,18 +35,15 @@ func init() {
 	}
 }
 
-/* =============================================================================
-   核心用户与认证逻辑
-============================================================================= */
-
-// Claim 定义了 JWT 中存储的用户信息 payload
+// Claim 表示 JWT 中携带的用户信息
+// 包括用户 ID、角色以及标准 JWT 注册字段
 type Claim struct {
 	ID   int64  `json:"id"`
 	Role string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-// UserCount 返回数据库中的用户总数
+// UserCount 返回用户表中的总记录数
 func UserCount(db *sql.DB) int {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM _user`).Scan(&n)
@@ -58,7 +54,7 @@ func UserCount(db *sql.DB) int {
 	return n
 }
 
-// CreateAdmin 创建一个拥有管理员权限的普通用户账户
+// CreateAdmin 创建一个具有管理员权限的用户
 func CreateAdmin(db *sql.DB, user, pass string) error {
 	if user == "" || pass == "" {
 		return errors.New("用户名或密码不能为空")
@@ -74,18 +70,14 @@ func CreateAdmin(db *sql.DB, user, pass string) error {
 	return nil
 }
 
-// CreateServiceAccount 在数据库中创建一个服务账户。
-// 这类账户有特定的命名约定，且没有可用的密码，仅用于机器间认证。
+// CreateServiceAccount 创建一个服务账户，该账户用于服务间通信
 func CreateServiceAccount(db *sql.DB, username string) (id int64, role string, err error) {
-	// 服务账户统一给予 'admin' 角色，以便它们有足够权限，例如访问 /metrics
-	// 密码哈希设为 'N/A'，因为它不可用于登录。
 	role = "admin"
 	_, err = db.Exec(`INSERT INTO _user(username, password_hash, role) VALUES (?, 'N/A', ?)`, username, role)
 	if err != nil {
 		return 0, "", fmt.Errorf("插入服务账户 '%s' 失败: %w", username, err)
 	}
 
-	// 获取刚刚插入的用户的ID
 	id, _, ok := GetUserByUsername(db, username)
 	if !ok {
 		return 0, "", fmt.Errorf("创建后无法立即找到服务账户 '%s'", username)
@@ -95,7 +87,7 @@ func CreateServiceAccount(db *sql.DB, username string) (id int64, role string, e
 	return id, role, nil
 }
 
-// CheckUser 校验普通用户的用户名和密码是否匹配
+// CheckUser 校验用户名与密码是否匹配
 func CheckUser(db *sql.DB, user, pass string) (id int64, role string, ok bool) {
 	var hash string
 	err := db.QueryRow(`SELECT id, password_hash, role FROM _user WHERE username = ?`, user).
@@ -106,14 +98,14 @@ func CheckUser(db *sql.DB, user, pass string) (id int64, role string, ok bool) {
 		}
 		return 0, "", false
 	}
-	if hash == "N/A" { // 服务账户不能通过密码登录
+	if hash == "N/A" {
 		return 0, "", false
 	}
 	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(pass))
 	return id, role, err == nil
 }
 
-// GetUserById 根据用户ID获取用户信息
+// GetUserById 根据用户 ID 查询用户名与角色信息
 func GetUserById(db *sql.DB, id int64) (username string, role string, ok bool) {
 	err := db.QueryRow(`SELECT username, role FROM _user WHERE id = ?`, id).
 		Scan(&username, &role)
@@ -126,7 +118,7 @@ func GetUserById(db *sql.DB, id int64) (username string, role string, ok bool) {
 	return username, role, true
 }
 
-// GetUserByUsername 根据用户名获取用户信息，主要用于服务账户的查找
+// GetUserByUsername 根据用户名查询用户 ID 与角色信息
 func GetUserByUsername(db *sql.DB, username string) (id int64, role string, ok bool) {
 	err := db.QueryRow(`SELECT id, role FROM _user WHERE username = ?`, username).
 		Scan(&id, &role)
@@ -139,7 +131,7 @@ func GetUserByUsername(db *sql.DB, username string) (id int64, role string, ok b
 	return id, role, true
 }
 
-// GenToken 为普通用户生成一个新的、有生命周期限制的 JWT
+// GenToken 为用户生成短期有效的 JWT
 func GenToken(uid int64, role string) (string, error) {
 	claims := Claim{
 		ID:   uid,
@@ -155,24 +147,23 @@ func GenToken(uid int64, role string) (string, error) {
 	return token.SignedString(hmacKey)
 }
 
-// GenServiceToken 为服务账户生成一个长生命周期的服务 Token
+// GenServiceToken 为服务账户生成长期有效的 JWT
 func GenServiceToken(uid int64, role string) (string, error) {
 	claims := Claim{
 		ID:   uid,
 		Role: role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			// 设置一个非常长的过期时间，例如 10 年
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * 365 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    "ArchiveAegis-Service", // 使用不同的发行方以作区分
+			Issuer:    "ArchiveAegis-Service",
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(hmacKey)
 }
 
-// ParseToken 解析 JWT 字符串，验证其签名和时效性
+// ParseToken 解析并验证 JWT 字符串的有效性
 func ParseToken(tokenString string) (*Claim, error) {
 	claims := &Claim{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
@@ -193,18 +184,14 @@ func ParseToken(tokenString string) (*Claim, error) {
 	return claims, nil
 }
 
-/* =============================================================================
-   Context 上下文管理
-============================================================================= */
-
-// CtxKey 是用于 context 的 key 的类型。定义为特定类型以避免键冲突。
+// CtxKey 表示用于 Context 的 Key 类型
+// 定义为自定义类型以避免键名冲突
 type CtxKey string
 
-// ClaimKey 是用于在 context 中存储和检索用户 Claim 的唯一键。
-// 导出此常量以确保整个应用程序（包括测试）都使用同一个键。
+// ClaimKey 是存储在 Context 中的 Claim 对象的键
 const ClaimKey CtxKey = "aegis-user-claim"
 
-// ClaimFrom 从请求的 context 中提取用户 Claim
+// ClaimFrom 从请求中提取 Claim 对象
 func ClaimFrom(r *http.Request) *Claim {
 	val := r.Context().Value(ClaimKey)
 	if val == nil {
@@ -218,16 +205,13 @@ func ClaimFrom(r *http.Request) *Claim {
 	return claims
 }
 
-/* =============================================================================
-   HTTP 中间件
-============================================================================= */
-
-// Authenticator 是一个持有数据库连接的结构体，用于实现认证中间件
+// Authenticator 是用于实现认证中间件的结构体
+// 持有数据库连接
 type Authenticator struct {
 	DB *sql.DB
 }
 
-// NewAuthenticator 创建一个新的 Authenticator 实例
+// NewAuthenticator 创建新的 Authenticator 实例
 func NewAuthenticator(db *sql.DB) *Authenticator {
 	if db == nil {
 		log.Fatal("严重错误: NewAuthenticator 接收到空的数据库连接！")
@@ -235,7 +219,8 @@ func NewAuthenticator(db *sql.DB) *Authenticator {
 	return &Authenticator{DB: db}
 }
 
-// Middleware 是 JWT 中间件：验证 Token 并将用户信息（Claim）注入到请求的 context 中
+// Middleware 实现 JWT 验证中间件
+// 验证通过后将用户信息注入到请求 context 中
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -245,10 +230,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			if tokenString != "" {
 				claims, err := ParseToken(tokenString)
 				if err == nil && claims != nil {
-					// 令牌有效，再确认一下用户是否仍然存在于数据库中
 					_, _, userExists := GetUserById(a.DB, claims.ID)
 					if userExists {
-						// 用户存在，将 claim 注入 context
 						ctx := context.WithValue(r.Context(), ClaimKey, claims)
 						r = r.WithContext(ctx)
 					}

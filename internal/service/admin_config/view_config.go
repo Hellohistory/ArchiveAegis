@@ -1,4 +1,5 @@
-// Package admin_config internal/service/admin_config/view_config.go
+// Package admin_config 提供系统管理配置服务的实现
+// 文件位置: internal/service/admin_config/view_config.go
 package admin_config
 
 import (
@@ -12,7 +13,7 @@ import (
 	"ArchiveAegis/internal/core/domain"
 )
 
-// GetDefaultViewConfig 从数据库获取指定表的默认视图配置。
+// GetDefaultViewConfig 获取指定业务组下某表的默认视图配置
 func (s *AdminConfigServiceImpl) GetDefaultViewConfig(ctx context.Context, bizName, tableName string) (*domain.ViewConfig, error) {
 	if bizName == "" || tableName == "" {
 		return nil, fmt.Errorf("业务组和表名不能为空")
@@ -23,7 +24,7 @@ func (s *AdminConfigServiceImpl) GetDefaultViewConfig(ctx context.Context, bizNa
 
 	err := s.db.QueryRowContext(ctx, query, bizName, tableName).Scan(&configJSON)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // 非错误，仅未配置
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("获取视图配置时发生数据库错误: %w", err)
@@ -37,7 +38,7 @@ func (s *AdminConfigServiceImpl) GetDefaultViewConfig(ctx context.Context, bizNa
 	return &viewConf, nil
 }
 
-// GetAllViewConfigsForBiz 从数据库获取指定业务组下所有表的全部视图配置。
+// GetAllViewConfigsForBiz 获取指定业务组下所有表的全部视图配置
 func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bizName string) (map[string][]*domain.ViewConfig, error) {
 	if bizName == "" {
 		return nil, fmt.Errorf("业务组名称 (bizName) 不能为空")
@@ -49,7 +50,6 @@ func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bi
 		return nil, fmt.Errorf("获取业务 '%s' 的所有视图配置时发生数据库错误: %w", bizName, err)
 	}
 
-	// 通过 defer 封装资源释放逻辑，并增加错误日志
 	defer func() {
 		if err := rows.Close(); err != nil {
 			log.Printf("警告: 关闭视图配置结果集失败 (业务 '%s'): %v", bizName, err)
@@ -62,19 +62,17 @@ func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bi
 		var tableName string
 		var configJSON string
 
-		// 扫描每一行的表名与配置JSON
 		if err := rows.Scan(&tableName, &configJSON); err != nil {
-			log.Printf("警告: [AdminConfigService DB] 扫描视图配置行失败 (业务 '%s'): %v", bizName, err)
+			log.Printf("警告: 扫描视图配置行失败 (业务 '%s'): %v", bizName, err)
 			continue
 		}
 
 		var viewConf domain.ViewConfig
 		if err := json.Unmarshal([]byte(configJSON), &viewConf); err != nil {
-			log.Printf("警告: [AdminConfigService DB] JSON解析失败 (业务 '%s', 表 '%s')，数据: %s，错误: %v", bizName, tableName, configJSON, err)
+			log.Printf("警告: JSON解析失败 (业务 '%s', 表 '%s')，数据: %s，错误: %v", bizName, tableName, configJSON, err)
 			continue
 		}
 
-		// 追加到对应表的视图列表中
 		results[tableName] = append(results[tableName], &viewConf)
 	}
 
@@ -85,20 +83,17 @@ func (s *AdminConfigServiceImpl) GetAllViewConfigsForBiz(ctx context.Context, bi
 	return results, nil
 }
 
-// UpdateAllViewsForBiz 在单个事务中，原子性地全量更新一个业务组的所有视图配置。
-// 该操作会先删除业务组的所有现有视图配置，然后插入传入的所有新配置。
+// UpdateAllViewsForBiz 原子性地更新指定业务组的所有视图配置
 func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizName string, viewsData map[string][]*domain.ViewConfig) (err error) {
 	if bizName == "" {
 		return fmt.Errorf("业务组名称 (bizName) 不能为空")
 	}
 
-	// 开启事务
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开启事务失败 (业务 '%s'): %w", bizName, err)
 	}
 
-	// 管理事务提交 / 回滚逻辑
 	defer func() {
 		if p := recover(); p != nil {
 			_ = tx.Rollback()
@@ -114,17 +109,15 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 		}
 	}()
 
-	// 清空旧配置
+	// 删除旧的视图配置
 	if _, err = tx.ExecContext(ctx, "DELETE FROM biz_view_definitions WHERE biz_name = ?", bizName); err != nil {
 		return fmt.Errorf("清除旧视图配置失败 (业务 '%s'): %w", bizName, err)
 	}
 
 	if len(viewsData) == 0 {
-		// 如果没有传入新的视图数据，则只删除旧配置即可
 		return nil
 	}
 
-	// 准备插入新配置的语句
 	stmt, err := tx.PrepareContext(ctx, `
         INSERT INTO biz_view_definitions 
         (biz_name, table_name, view_name, view_config_json, is_default) 
@@ -139,7 +132,6 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 		}
 	}()
 
-	// 插入新配置
 	for tableName, views := range viewsData {
 		for _, view := range views {
 			if view == nil {
@@ -155,5 +147,5 @@ func (s *AdminConfigServiceImpl) UpdateAllViewsForBiz(ctx context.Context, bizNa
 		}
 	}
 
-	return nil // 事务提交由 defer 完成
+	return nil
 }

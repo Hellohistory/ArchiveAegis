@@ -1,4 +1,5 @@
-// Package admin_config internal/service/admin_config/rate_limit_config.go
+// Package admin_config 提供系统管理配置服务的实现
+// 文件位置: internal/service/admin_config/rate_limit_config.go
 package admin_config
 
 import (
@@ -12,7 +13,7 @@ import (
 	"ArchiveAegis/internal/core/domain"
 )
 
-// GetIPLimitSettings 获取全局IP速率限制配置。
+// GetIPLimitSettings 获取全局 IP 限速配置
 func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domain.IPLimitSetting, error) {
 	settings := &domain.IPLimitSetting{}
 
@@ -22,7 +23,6 @@ func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domai
 		return nil, fmt.Errorf("查询全局IP限制配置失败: %w", err)
 	}
 
-	// 安全释放资源并捕获关闭错误
 	defer func() {
 		if errClose := rows.Close(); errClose != nil {
 			log.Printf("警告: 关闭 rows 失败 (IPLimitSettings 查询): %v", errClose)
@@ -45,15 +45,11 @@ func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domai
 			if v, errConv := strconv.ParseFloat(value, 64); errConv == nil {
 				settings.RateLimitPerMinute = v
 				hasRate = true
-			} else {
-				log.Printf("警告: ip_rate_limit_per_minute 配置值非法: '%s'", value)
 			}
 		case "ip_burst_size":
 			if v, errConv := strconv.Atoi(value); errConv == nil {
 				settings.BurstSize = v
 				hasBurst = true
-			} else {
-				log.Printf("警告: ip_burst_size 配置值非法: '%s'", value)
 			}
 		}
 	}
@@ -62,25 +58,20 @@ func (s *AdminConfigServiceImpl) GetIPLimitSettings(ctx context.Context) (*domai
 		return nil, fmt.Errorf("遍历 IP 限制配置失败: %w", err)
 	}
 
-	// 未配置任何有效项，视为未设置
 	if !hasRate && !hasBurst {
-		log.Printf("信息: 系统中未找到有效的 IP 限速设置")
 		return nil, nil
 	}
 
 	return settings, nil
 }
 
-// UpdateIPLimitSettings 更新全局IP速率限制配置。
-// 使用 UPSERT 确保配置的存在性或更新。
+// UpdateIPLimitSettings 更新全局 IP 限速配置
 func (s *AdminConfigServiceImpl) UpdateIPLimitSettings(ctx context.Context, settings domain.IPLimitSetting) (err error) {
-	// 开启事务
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开启事务失败 (UpdateIPLimitSettings): %w", err)
 	}
 
-	// 管理事务的提交/回滚行为
 	defer func() {
 		if p := recover(); p != nil {
 			_ = tx.Rollback()
@@ -96,7 +87,6 @@ func (s *AdminConfigServiceImpl) UpdateIPLimitSettings(ctx context.Context, sett
 		}
 	}()
 
-	// 预编译 UPSERT 语句
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO global_settings (key, value)
          VALUES (?, ?)
@@ -110,23 +100,21 @@ func (s *AdminConfigServiceImpl) UpdateIPLimitSettings(ctx context.Context, sett
 		}
 	}()
 
-	// 写入 ip_rate_limit_per_minute
 	rateStr := fmt.Sprintf("%.4f", settings.RateLimitPerMinute)
 	if _, err = stmt.ExecContext(ctx, "ip_rate_limit_per_minute", rateStr); err != nil {
 		return fmt.Errorf("写入 ip_rate_limit_per_minute 失败，值为 '%s': %w", rateStr, err)
 	}
 
-	// 写入 ip_burst_size
 	burstStr := strconv.Itoa(settings.BurstSize)
 	if _, err = stmt.ExecContext(ctx, "ip_burst_size", burstStr); err != nil {
 		return fmt.Errorf("写入 ip_burst_size 失败，值为 '%s': %w", burstStr, err)
 	}
 
 	log.Printf("信息: 全局 IP 限速配置已更新 (Rate: %s, Burst: %s)", rateStr, burstStr)
-	return nil // 事务提交由 defer 完成
+	return nil
 }
 
-// GetUserLimitSettings 获取特定用户的速率限制配置。
+// GetUserLimitSettings 获取指定用户的限速配置
 func (s *AdminConfigServiceImpl) GetUserLimitSettings(ctx context.Context, userID int64) (*domain.UserLimitSetting, error) {
 	var rateLimit sql.NullFloat64
 	var burstSize sql.NullInt64
@@ -134,12 +122,12 @@ func (s *AdminConfigServiceImpl) GetUserLimitSettings(ctx context.Context, userI
 	err := s.db.QueryRowContext(ctx, query, userID).Scan(&rateLimit, &burstSize)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil // 用户未设置个性化限制
+			return nil, nil
 		}
 		return nil, fmt.Errorf("数据库查询用户ID %d 速率限制失败: %w", userID, err)
 	}
 	if !rateLimit.Valid || !burstSize.Valid {
-		return nil, nil // 数据库中存在记录但值无效
+		return nil, nil
 	}
 	return &domain.UserLimitSetting{
 		RateLimitPerSecond: rateLimit.Float64,
@@ -147,7 +135,7 @@ func (s *AdminConfigServiceImpl) GetUserLimitSettings(ctx context.Context, userI
 	}, nil
 }
 
-// UpdateUserLimitSettings 更新特定用户的速率限制配置。
+// UpdateUserLimitSettings 更新指定用户的限速配置
 func (s *AdminConfigServiceImpl) UpdateUserLimitSettings(ctx context.Context, userID int64, settings domain.UserLimitSetting) error {
 	query := "UPDATE _user SET rate_limit_per_second = ?, burst_size = ? WHERE id = ?"
 	result, err := s.db.ExecContext(ctx, query, settings.RateLimitPerSecond, settings.BurstSize, userID)
@@ -162,22 +150,21 @@ func (s *AdminConfigServiceImpl) UpdateUserLimitSettings(ctx context.Context, us
 	return nil
 }
 
-// GetBizRateLimitSettings 获取特定业务组的速率限制配置。
+// GetBizRateLimitSettings 获取指定业务组的限速配置
 func (s *AdminConfigServiceImpl) GetBizRateLimitSettings(ctx context.Context, bizName string) (*domain.BizRateLimitSetting, error) {
 	query := "SELECT rate_limit_per_second, burst_size FROM biz_ratelimit_settings WHERE biz_name = ?"
 	setting := &domain.BizRateLimitSetting{}
 	err := s.db.QueryRowContext(ctx, query, bizName).Scan(&setting.RateLimitPerSecond, &setting.BurstSize)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil // 业务组未设置个性化限制
+			return nil, nil
 		}
 		return nil, fmt.Errorf("数据库查询业务组 '%s' 速率限制失败: %w", bizName, err)
 	}
 	return setting, nil
 }
 
-// UpdateBizRateLimitSettings 更新特定业务组的速率限制配置。
-// 使用 UPSERT 确保配置的存在性或更新。
+// UpdateBizRateLimitSettings 更新指定业务组的限速配置
 func (s *AdminConfigServiceImpl) UpdateBizRateLimitSettings(ctx context.Context, bizName string, settings domain.BizRateLimitSetting) error {
 	query := `
         INSERT INTO biz_ratelimit_settings (biz_name, rate_limit_per_second, burst_size) 

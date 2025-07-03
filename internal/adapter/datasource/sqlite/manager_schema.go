@@ -1,4 +1,5 @@
-// file: internal/adapter/datasource/sqlite/manager_schema.go
+// Package sqlite 提供 SQLite 数据源适配器的实现
+// 文件位置: internal/adapter/datasource/sqlite/manager_schema.go
 package sqlite
 
 import (
@@ -20,20 +21,21 @@ import (
 )
 
 const (
-	// innerPrefix 定义了内部保留表的前缀，以避免被扫描
+	// innerPrefix 表示内部保留表的前缀，避免被扫描处理
 	innerPrefix = "_archiveaegis_internal_"
 
-	// schemaCacheFilename 定义了物理 schema 缓存文件的名称
+	// schemaCacheFilename 表示 schema 缓存文件名
 	schemaCacheFilename = "schema_cache.json"
 )
 
-// dbPhysicalSchemaInfo 存储从单个数据库文件探测到的物理结构信息。
+// dbPhysicalSchemaInfo 表示从数据库文件中探测到的物理结构信息
+// 包括默认表名与各表字段名映射
 type dbPhysicalSchemaInfo struct {
 	detectedDefaultTable string
 	allTablesAndColumns  map[string][]string
 }
 
-// tableExists 是一个辅助方法，用于检查物理 schema 中是否存在指定的表。
+// tableExists 判断给定表名是否存在于物理结构信息中
 func (info *dbPhysicalSchemaInfo) tableExists(tableName string) bool {
 	if info == nil {
 		return false
@@ -42,13 +44,15 @@ func (info *dbPhysicalSchemaInfo) tableExists(tableName string) bool {
 	return ok
 }
 
-// schemaFile 表示写入磁盘的 schema_cache.json 的整体 JSON 结构
+// schemaFile 表示 schema 缓存文件的整体 JSON 结构
+// 包括更新时间、表结构与库级表结构
 type schemaFile struct {
 	UpdatedAt time.Time                      `json:"updated_at"`
 	Tables    map[string][]string            `json:"tables"`
 	Libs      map[string]map[string][]string `json:"libs"`
 }
 
+// handleGetSchema 处理客户端发起的获取 schema 请求
 func (m *Manager) handleGetSchema(ctx context.Context, req *v1.RequestEnvelope) (proto.Message, error) {
 	var schemaReq v1.GetSchemaRequest
 	if err := req.Payload.UnmarshalTo(&schemaReq); err != nil {
@@ -82,6 +86,7 @@ func (m *Manager) handleGetSchema(ctx context.Context, req *v1.RequestEnvelope) 
 	return &v1.SchemaResult{Tables: grpcTables}, nil
 }
 
+// getSchemaInternal 基于配置服务获取业务对应的逻辑 schema 结果
 func (m *Manager) getSchemaInternal(ctx context.Context, req port.SchemaRequest) (*port.SchemaResult, error) {
 	bizConfig, err := m.configService.GetBizQueryConfig(ctx, req.BizName)
 	if err != nil {
@@ -120,6 +125,7 @@ func (m *Manager) getSchemaInternal(ctx context.Context, req port.SchemaRequest)
 	return &port.SchemaResult{Tables: schemaTables}, nil
 }
 
+// loadDBPhysicalSchema 探测数据库的实际物理结构信息
 func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInfo, error) {
 	autoDetectedDefaultTable, errDetect := detectTable(db)
 	if errDetect != nil && errDetect != sql.ErrNoRows {
@@ -154,8 +160,7 @@ func loadDBPhysicalSchema(ctx context.Context, db *sql.DB) (*dbPhysicalSchemaInf
 	}, nil
 }
 
-// loadOrRefreshSchemaInternal 负责计算并更新 m.schema (业务组物理 Schema 并集缓存)。
-// 调用此方法前必须获取写锁 m.mu.Lock()。
+// loadOrRefreshSchemaInternal 刷新并更新所有业务的物理 schema 并集缓存（调用前需获取写锁）
 func (m *Manager) loadOrRefreshSchemaInternal() {
 	log.Printf("信息: [DBManager] 开始刷新所有业务的 (物理) schema 并集缓存 (m.schema)...")
 	newCombinedSchemaState := make(map[string]map[string][]string)
@@ -185,13 +190,13 @@ func (m *Manager) loadOrRefreshSchemaInternal() {
 	log.Printf("信息: [DBManager] 所有业务的 schema 并集缓存 (m.schema) 刷新完成。")
 }
 
-// computeSchemaUnionForBiz 为单个业务组计算其下所有库的Schema并集。
-func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[string]*dbInstance) (map[string][]string, map[string]map[string][]string) { // <--- [修复] 参数类型与 manager.go 中的 group 定义保持一致
+// computeSchemaUnionForBiz 计算指定业务组下所有库的物理 schema 并集
+func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[string]*dbInstance) (map[string][]string, map[string]map[string][]string) {
 	union := make(map[string]map[string]struct{})
 	perLib := make(map[string]map[string][]string)
 
-	for libName, instance := range libsMapInBiz { // <--- [修复] 循环变量为 instance
-		phySchema, found := m.dbSchemaCache[instance.conn] // <--- [修复] 使用 instance.conn 进行查找
+	for libName, instance := range libsMapInBiz {
+		phySchema, found := m.dbSchemaCache[instance.conn]
 		if !found || phySchema == nil {
 			log.Printf("错误: [DBManager] 业务 '%s' 库 '%s' 的物理 schema 未在缓存中找到。", bizName, libName)
 			continue
@@ -219,14 +224,14 @@ func (m *Manager) computeSchemaUnionForBiz(bizName string, libsMapInBiz map[stri
 	return result, perLib
 }
 
-// loadOrRefreshSchema 是 loadOrRefreshSchemaInternal 的公开包装器，带锁。
+// loadOrRefreshSchema 为 loadOrRefreshSchemaInternal 的并发安全包装器
 func (m *Manager) loadOrRefreshSchema() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.loadOrRefreshSchemaInternal()
 }
 
-// getTablesSet 返回数据库中所有用户表的集合
+// getTablesSet 返回数据库中所有用户定义的表的名称集合
 func getTablesSet(db *sql.DB) (map[string]struct{}, error) {
 	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ?`, innerPrefix+"%")
 	if err != nil {
@@ -245,14 +250,14 @@ func getTablesSet(db *sql.DB) (map[string]struct{}, error) {
 	return set, rows.Err()
 }
 
-// detectTable 尝试检测数据库中的一个 "默认" 用户表
+// detectTable 检测数据库中的默认表名（按表名排序首个表）
 func detectTable(db *sql.DB) (string, error) {
 	var name string
 	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE ? ORDER BY name ASC LIMIT 1`, innerPrefix+"%").Scan(&name)
 	return name, err
 }
 
-// listColumns 返回指定表的所有物理列名
+// listColumns 返回指定表的所有列名
 func listColumns(db *sql.DB, tableName string) ([]string, error) {
 	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%q)`, tableName))
 	if err != nil {
@@ -278,7 +283,7 @@ func listColumns(db *sql.DB, tableName string) ([]string, error) {
 	return cols, rows.Err()
 }
 
-// readSchemaCache 读取并反序列化 schema_cache.json。
+// readSchemaCache 从 schema 缓存文件中读取并反序列化为结构体
 func readSchemaCache(bizDir string) (map[string][]string, map[string]map[string][]string, error) {
 	path := filepath.Join(bizDir, schemaCacheFilename)
 	data, err := os.ReadFile(path)
@@ -293,7 +298,7 @@ func readSchemaCache(bizDir string) (map[string][]string, map[string]map[string]
 	return sf.Tables, sf.Libs, nil
 }
 
-// writeSchemaCache 覆盖写入 schema_cache.json。
+// writeSchemaCache 将 schema 信息写入缓存文件中
 func writeSchemaCache(bizDir string, libs map[string]map[string][]string, tables map[string][]string) error {
 	tmp := filepath.Join(bizDir, schemaCacheFilename+".tmp")
 	final := filepath.Join(bizDir, schemaCacheFilename)

@@ -1,4 +1,5 @@
-// Package plugin_manager file: internal/service/plugin_installer.go
+// Package plugin_manager 提供插件安装与系统功能启用的相关功能
+// 文件位置: internal/service/plugin_installer.go
 package plugin_manager
 
 import (
@@ -14,7 +15,7 @@ import (
 	"strings"
 )
 
-// Install 下载、校验并解压指定 ID 和版本的插件。
+// Install 执行插件的下载、校验、解压及安装路径记录
 func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	pm.catalogMu.RLock()
 	manifest, exists := pm.catalog[pluginID]
@@ -33,13 +34,12 @@ func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的版本 '%s' 未找到", pluginID, version)
 	}
-	// =============  识别并处理系统功能插件  =============
-	// 我们通过检查一个特殊的 "type" 字段或约定的ID前缀来识别它
+
+	// 检测是否为系统功能插件
 	var manifestType string
-	if len(manifest.Tags) > 0 { // 假设我们用 tag 来区分，或者你可以直接在 domain.PluginManifest 加一个 Type 字段
-		// 为了简单，我们暂时用 tag 判断。更好的方式是在 domain.PluginManifest 加 Type 字段。
+	if len(manifest.Tags) > 0 {
 		for _, tag := range manifest.Tags {
-			if tag == "SYSTEM_FEATURE" { // 假设我们在 local_repository.json 的 tags 里加了 "SYSTEM_FEATURE"
+			if tag == "SYSTEM_FEATURE" {
 				manifestType = "SYSTEM_FEATURE"
 				break
 			}
@@ -47,7 +47,6 @@ func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	}
 
 	if manifestType == "SYSTEM_FEATURE" {
-		// 这不是一个真正的插件，而是一个系统功能开关
 		log.Printf("⚙️ [PluginManager] 正在启用系统功能 '%s'...", pluginID)
 		return pm.enableSystemFeature(pluginID, true)
 	}
@@ -93,7 +92,7 @@ func (pm *PluginManager) Install(pluginID, version string) (err error) {
 	return nil
 }
 
-// performDownload 执行下载操作
+// performDownload 执行插件的下载流程，将数据保存到指定路径
 func (pm *PluginManager) performDownload(sourceURL, destPath string) error {
 	reader, err := pm.getSourceReader(sourceURL)
 	if err != nil {
@@ -116,7 +115,7 @@ func (pm *PluginManager) performDownload(sourceURL, destPath string) error {
 	return nil
 }
 
-// verifyChecksum 校验文件的哈希值
+// verifyChecksum 校验指定文件的哈希值是否与预期匹配
 func (pm *PluginManager) verifyChecksum(filePath, expectedChecksum string) error {
 	parts := strings.SplitN(expectedChecksum, ":", 2)
 	if len(parts) != 2 || parts[0] != "sha256" {
@@ -141,7 +140,7 @@ func (pm *PluginManager) verifyChecksum(filePath, expectedChecksum string) error
 	return nil
 }
 
-// unzip 解压 zip 文件
+// unzip 解压指定的 zip 文件到目标路径
 func unzip(src, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -161,17 +160,15 @@ func unzip(src, dest string) error {
 	return nil
 }
 
-// extractFile 解压单个文件或目录
+// extractFile 解压单个文件或目录到指定目标路径
 func extractFile(f *zip.File, dest string) error {
 	cleanName := filepath.Clean(f.Name)
 	fpath := filepath.Join(dest, cleanName)
 
-	// 防止 Zip Slip 攻击（路径穿越）
 	if relPath, err := filepath.Rel(dest, fpath); err != nil || strings.HasPrefix(relPath, "..") {
 		return fmt.Errorf("检测到潜在非法路径 (文件: %s)", f.Name)
 	}
 
-	// 目录处理
 	if f.FileInfo().IsDir() {
 		if err := os.MkdirAll(fpath, 0755); err != nil {
 			return fmt.Errorf("创建目录失败 (%s): %w", fpath, err)
@@ -179,26 +176,22 @@ func extractFile(f *zip.File, dest string) error {
 		return nil
 	}
 
-	// 确保目标文件父目录存在
 	if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
 		return fmt.Errorf("创建文件父目录失败 (%s): %w", fpath, err)
 	}
 
-	// 打开目标文件
 	outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fallbackMode(f.Mode()))
 	if err != nil {
 		return fmt.Errorf("创建文件失败 (%s): %w", fpath, err)
 	}
 	defer outFile.Close()
 
-	// 打开 zip 中的源文件
 	rc, err := f.Open()
 	if err != nil {
 		return fmt.Errorf("打开 zip 内部文件失败 (%s): %w", f.Name, err)
 	}
 	defer rc.Close()
 
-	// 拷贝文件内容
 	if _, err := io.Copy(outFile, rc); err != nil {
 		return fmt.Errorf("写入文件失败 (%s): %w", fpath, err)
 	}
@@ -206,7 +199,7 @@ func extractFile(f *zip.File, dest string) error {
 	return nil
 }
 
-// fallbackMode 用于处理 zip 中 mode 缺失的场景
+// fallbackMode 返回默认文件权限模式（当 zip 文件未提供权限信息时使用）
 func fallbackMode(m os.FileMode) os.FileMode {
 	if m == 0 {
 		return 0644
@@ -214,7 +207,7 @@ func fallbackMode(m os.FileMode) os.FileMode {
 	return m
 }
 
-// 一个辅助函数来更新数据库
+// enableSystemFeature 启用或禁用系统功能并更新数据库记录
 func (pm *PluginManager) enableSystemFeature(featureID string, enabled bool) error {
 	query := `UPDATE system_features SET enabled = ? WHERE feature_id = ?`
 	res, err := pm.db.Exec(query, enabled, featureID)
@@ -223,7 +216,6 @@ func (pm *PluginManager) enableSystemFeature(featureID string, enabled bool) err
 	}
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
-		// 如果 UPDATE 没影响任何行，说明可能需要 INSERT
 		insertQuery := `INSERT INTO system_features (feature_id, enabled) VALUES (?, ?)`
 		_, err = pm.db.Exec(insertQuery, featureID, enabled)
 		if err != nil {

@@ -1,4 +1,6 @@
-// Package aegmiddleware internal/aegmiddleware/limiter.go
+// Package aegmiddleware 提供项目通用的中间件实现。
+// 本文件实现业务性能速率限制器（BusinessRateLimiter）及相关策略组件，支持按全局、IP、用户
+// 与业务维度的多级限流。
 package aegmiddleware
 
 import (
@@ -20,17 +22,17 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// limiterEntry 存储限制器和最后访问时间，被 BusinessRateLimiter 复用
+// limiterEntry 记录限速器实例及其最后一次访问时间，供 BusinessRateLimiter 复用。
 type limiterEntry struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
 }
 
 // ============================================================================
-//  业务性能限制器 (Business Performance Limiter) - V2版本
+//  业务性能限制器 (Business Performance Limiter) - V2 版本
 // ============================================================================
 
-// BusinessRateLimiter 是一个统一的结构，管理所有业务性能相关的速率限制。
+// BusinessRateLimiter 统一管理业务相关的多级速率限制，包括全局、IP、用户及业务维度。
 type BusinessRateLimiter struct {
 	configService port.QueryAdminConfigService
 
@@ -50,10 +52,10 @@ type BusinessRateLimiter struct {
 	bizMu       sync.Mutex
 }
 
-// NewBusinessRateLimiter 创建一个新的、功能完备的业务速率限制器。
+// NewBusinessRateLimiter 创建并初始化 BusinessRateLimiter。
 func NewBusinessRateLimiter(cs port.QueryAdminConfigService, globalRate float64, globalBurst int) *BusinessRateLimiter {
 	brl := &BusinessRateLimiter{
-		configService: cs, // 接收依赖
+		configService: cs,
 
 		globalLimiter: rate.NewLimiter(rate.Limit(globalRate), globalBurst),
 
@@ -79,26 +81,26 @@ func NewBusinessRateLimiter(cs port.QueryAdminConfigService, globalRate float64,
 	go brl.cleanupBizs()
 
 	log.Printf(
-		"信息: [Business Limiter] 初始化完成。全局限制: %.2f req/s, 峰值: %d。IP默认限制: %.2f req/s, 峰值: %d",
+		"信息: [Business Limiter] 初始化完成。全局限制: %.2f req/s, 峰值: %d。IP 默认限制: %.2f req/s, 峰值: %d",
 		globalRate, globalBurst, brl.ipDefaultRate, brl.ipDefaultBurst,
 	)
 
 	return brl
 }
 
-// loadIPDefaultSettings 从数据库加载IP限制的默认配置。
+// loadIPDefaultSettings 从配置服务加载 IP 维度的默认速率限制。
 func (brl *BusinessRateLimiter) loadIPDefaultSettings() {
 	settings, err := brl.configService.GetIPLimitSettings(context.Background())
 	if err == nil && settings != nil {
 		brl.ipDefaultRate = rate.Limit(settings.RateLimitPerMinute / 60.0)
 		brl.ipDefaultBurst = settings.BurstSize
-		log.Printf("信息: [Business Limiter] 已从数据库加载IP速率限制默认值 (Rate: %.2f/min, Burst: %d)", settings.RateLimitPerMinute, settings.BurstSize)
+		log.Printf("信息: [Business Limiter] 已从数据库加载 IP 速率限制默认值 (Rate: %.2f/min, Burst: %d)", settings.RateLimitPerMinute, settings.BurstSize)
 	} else if err != nil {
-		log.Printf("警告: [Business Limiter] 从数据库加载IP速率限制默认值失败: %v。将使用硬编码的默认值。", err)
+		log.Printf("警告: [Business Limiter] 从数据库加载 IP 速率限制默认值失败: %v。将使用硬编码的默认值。", err)
 	}
 }
 
-// cleanupIPs 定期清理不活跃的IP条目
+// cleanupIPs 按固定间隔删除 15 分钟内未访问的 IP 限速器实例。
 func (brl *BusinessRateLimiter) cleanupIPs() {
 	for {
 		time.Sleep(10 * time.Minute)
@@ -112,7 +114,7 @@ func (brl *BusinessRateLimiter) cleanupIPs() {
 	}
 }
 
-// cleanupUsers 定期清理不活跃的用户条目
+// cleanupUsers 按固定间隔删除 15 分钟内未访问的用户限速器实例。
 func (brl *BusinessRateLimiter) cleanupUsers() {
 	for {
 		time.Sleep(10 * time.Minute)
@@ -126,7 +128,7 @@ func (brl *BusinessRateLimiter) cleanupUsers() {
 	}
 }
 
-// cleanupBizs 定期清理不活跃的业务组条目
+// cleanupBizs 按固定间隔删除 15 分钟内未访问的业务限速器实例。
 func (brl *BusinessRateLimiter) cleanupBizs() {
 	for {
 		time.Sleep(10 * time.Minute)
@@ -141,10 +143,10 @@ func (brl *BusinessRateLimiter) cleanupBizs() {
 }
 
 // ==================================================================
-//  模块化的中间件方法
+//  模块化中间件方法
 // ==================================================================
 
-// Global 返回全局限制中间件
+// Global 返回全局限速中间件，限制整体 QPS。
 func (brl *BusinessRateLimiter) Global(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !brl.globalLimiter.Allow() {
@@ -155,7 +157,7 @@ func (brl *BusinessRateLimiter) Global(next http.Handler) http.Handler {
 	})
 }
 
-// PerIP 返回IP限制中间件
+// PerIP 返回基于客户端 IP 的限速中间件。
 func (brl *BusinessRateLimiter) PerIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
@@ -177,11 +179,11 @@ func (brl *BusinessRateLimiter) PerIP(next http.Handler) http.Handler {
 	})
 }
 
-// PerUser 返回用户限制中间件
+// PerUser 返回基于用户 ID 的限速中间件；未认证用户直接放行。
 func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := service.ClaimFrom(r)
-		if claims == nil { // 对于未认证用户，此中间件直接放行
+		if claims == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -191,17 +193,12 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 		entry, exists := brl.userLimiters[userID]
 
 		if !exists {
-			// 1. 先用默认值初始化配置变量
 			rateLimit, burstSize := brl.userDefaultRate, brl.userDefaultBurst
-
-			// 2. 尝试从配置服务获取并覆盖配置变量
 			if userSettings, err := brl.configService.GetUserLimitSettings(r.Context(), userID); err == nil && userSettings != nil {
 				rateLimit = rate.Limit(userSettings.RateLimitPerSecond)
 				burstSize = userSettings.BurstSize
-				log.Printf("调试: [Business Limiter] 为用户ID %d 加载了特定速率限制: %.2f req/s, burst %d", userID, rateLimit, burstSize)
+				log.Printf("调试: [Business Limiter] 为用户 ID %d 加载特定速率限制: %.2f req/s, burst %d", userID, rateLimit, burstSize)
 			}
-
-			// 3. 最后，使用最终确定的配置变量来创建限制器
 			limiter := rate.NewLimiter(rateLimit, burstSize)
 			entry = &limiterEntry{limiter: limiter, lastSeen: time.Now()}
 			brl.userLimiters[userID] = entry
@@ -219,12 +216,12 @@ func (brl *BusinessRateLimiter) PerUser(next http.Handler) http.Handler {
 	})
 }
 
-// PerBiz 中间件现在可以处理 V1 API 的 POST JSON 请求体
+// PerBiz 返回基于业务名称的限速中间件，对 V1 API 支持从 JSON 请求体提取 biz_name 字段。
 func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var bizName string
 
-		// 优先尝试从JSON Body中解析biz_name，以适配V1 API
+		// 优先尝试从 JSON Body 中解析 biz_name。
 		if r.Method == http.MethodPost && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -232,11 +229,9 @@ func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// 关键：将读取过的内容重新放回 r.Body 中，以供后续的处理器使用
 			r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-			// 只解析我们需要的字段，提高性能
 			var extractor struct {
 				BizName string `json:"biz_name"`
 			}
@@ -245,17 +240,15 @@ func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 			}
 		}
 
-		// 如果不是POST JSON请求，或解析失败，尝试回退到旧的URL参数方式
+		// 回退到 URL 参数方式。
 		if bizName == "" {
 			bizName = r.URL.Query().Get("biz")
 		}
-
 		if bizName == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// 后续的速率限制逻辑完全不变
 		brl.bizMu.Lock()
 		entry, exists := brl.bizLimiters[bizName]
 		if !exists {
@@ -263,7 +256,7 @@ func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 			if bizSettings, err := brl.configService.GetBizRateLimitSettings(r.Context(), bizName); err == nil && bizSettings != nil {
 				rateLimit = rate.Limit(bizSettings.RateLimitPerSecond)
 				burstSize = bizSettings.BurstSize
-				log.Printf("调试: [Business Limiter] 为业务组 %s 加载了特定速率限制: %.2f req/s, burst %d", bizName, rateLimit, burstSize)
+				log.Printf("调试: [Business Limiter] 为业务组 %s 加载特定速率限制: %.2f req/s, burst %d", bizName, rateLimit, burstSize)
 			}
 			limiter := rate.NewLimiter(rateLimit, burstSize)
 			entry = &limiterEntry{limiter: limiter, lastSeen: time.Now()}
@@ -281,15 +274,13 @@ func (brl *BusinessRateLimiter) PerBiz(next http.Handler) http.Handler {
 	})
 }
 
-// FullBusinessChain 组合了所有四个限制层，用于核心业务API。
+// FullBusinessChain 组合全局、IP、用户与业务四级限制，适用于核心业务接口。
 func (brl *BusinessRateLimiter) FullBusinessChain(next http.Handler) http.Handler {
-	// 顺序: Global -> IP -> User -> Biz -> Handler
 	return brl.Global(brl.PerIP(brl.PerUser(brl.PerBiz(next))))
 }
 
-// LightweightChain 组合了基础的限制层，用于公共/轻量级API。
+// LightweightChain 组合全局与 IP 两级限制，适用于公共或轻量级接口。
 func (brl *BusinessRateLimiter) LightweightChain(next http.Handler) http.Handler {
-	// 顺序: Global -> IP -> Handler
 	return brl.Global(brl.PerIP(next))
 }
 
@@ -297,7 +288,7 @@ func (brl *BusinessRateLimiter) LightweightChain(next http.Handler) http.Handler
 //  Tactic 1: 按 IP 地址的严格速率限制器 (Strict Per-IP Rate Limiter)
 // ==================================================================
 
-// IPRateLimiter 结构体，用于管理IP速率限制
+// IPRateLimiter 提供简单的严格 IP 限速策略，实现方式与 BusinessRateLimiter 独立。
 type IPRateLimiter struct {
 	limiters map[string]*limiterEntry
 	mu       sync.Mutex
@@ -305,7 +296,7 @@ type IPRateLimiter struct {
 	burst    int
 }
 
-// getClientIP 从请求中获取客户端IP地址，考虑代理情况
+// getClientIP 提取客户端真实 IP，优先使用 X-Forwarded-For 与 X-Real-IP 头。
 func getClientIP(r *http.Request) string {
 	ip := r.Header.Get("X-Forwarded-For")
 	ip = strings.TrimSpace(strings.Split(ip, ",")[0])
@@ -320,7 +311,7 @@ func getClientIP(r *http.Request) string {
 	return ip
 }
 
-// getLimiter 返回或创建指定IP的速率限制器
+// getLimiter 返回指定 IP 对应的限速器，如不存在则按默认配置创建。
 func (l *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -334,7 +325,7 @@ func (l *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 	return entry.limiter
 }
 
-// cleanupDaemon 定期清理不活跃的IP条目
+// cleanupDaemon 定期清理长时间未使用的 IP 限速器实例。
 func (l *IPRateLimiter) cleanupDaemon() {
 	for {
 		time.Sleep(10 * time.Minute)
@@ -348,7 +339,7 @@ func (l *IPRateLimiter) cleanupDaemon() {
 	}
 }
 
-// Middleware 返回一个HTTP中间件
+// Middleware 将 IPRateLimiter 封装为 HTTP 中间件。
 func (l *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
@@ -365,14 +356,14 @@ func (l *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 //  Tactic 2 & 3: 失败计数与临时锁定 (Failure Counting & Temporary Lockout)
 // ============================================================================
 
-// LoginFailureLock 结构体，用于实现登录失败锁定逻辑
+// LoginFailureLock 实现基于登录失败次数的临时账户锁定策略。
 type LoginFailureLock struct {
 	failureCache    *cache.Cache
 	maxFailures     int
 	lockoutDuration time.Duration
 }
 
-// statusRecorder 是一个健壮的 http.ResponseWriter 包装器
+// statusRecorder 封装 ResponseWriter 以捕获 HTTP 状态码。
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -396,7 +387,7 @@ func (rec *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
-// Middleware 返回一个特殊的中间件，用于包裹登录处理器
+// Middleware 返回登录失败锁定中间件，用于包裹登录处理器。
 func (l *LoginFailureLock) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -408,7 +399,7 @@ func (l *LoginFailureLock) Middleware(next http.Handler) http.Handler {
 		lockKey := "lock:" + ip + ":" + username
 
 		if _, found := l.failureCache.Get(lockKey); found {
-			log.Printf("警告: [Login Lock] 已锁定的账户 '%s' (来自IP: %s) 再次尝试登录。", username, ip)
+			log.Printf("警告: [Login Lock] 已锁定的账户 '%s' (来自 IP: %s) 再次尝试登录。", username, ip)
 			errResp(w, http.StatusUnauthorized, "用户名或密码无效")
 			return
 		}
@@ -418,27 +409,20 @@ func (l *LoginFailureLock) Middleware(next http.Handler) http.Handler {
 
 		if recorder.status == http.StatusUnauthorized {
 			failureKey := "failures:" + ip + ":" + username
-
-			// 尝试对计数器加一。Increment只返回一个error。
 			err := l.failureCache.Increment(failureKey, int64(1))
-
-			// 如果返回错误，说明key不存在（即第一次失败），所以设置初始值为1。
 			if err != nil {
 				l.failureCache.Set(failureKey, int64(1), cache.DefaultExpiration)
 			}
-
-			// 再从缓存中获取最新的计数值。
 			var currentFailures int
 			if x, found := l.failureCache.Get(failureKey); found {
-				currentFailures = int(x.(int64)) // 从缓存取出的值需要类型断言
+				currentFailures = int(x.(int64))
 			}
-
-			log.Printf("信息: [Login Failure] 账户 '%s' (来自IP: %s) 登录失败，当前失败次数: %d", username, ip, currentFailures)
+			log.Printf("信息: [Login Failure] 账户 '%s' (来自 IP: %s) 登录失败，当前失败次数: %d", username, ip, currentFailures)
 
 			if currentFailures >= l.maxFailures {
 				l.failureCache.Set(lockKey, true, l.lockoutDuration)
 				l.failureCache.Delete(failureKey)
-				log.Printf("警告: [Login Lock] 账户 '%s' (来自IP: %s) 已被临时锁定 %v。", username, ip, l.lockoutDuration)
+				log.Printf("警告: [Login Lock] 账户 '%s' (来自 IP: %s) 已被临时锁定 %v。", username, ip, l.lockoutDuration)
 			}
 		}
 
@@ -449,7 +433,7 @@ func (l *LoginFailureLock) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// errResp 的一个本地副本
+// errResp 输出统一的 JSON 格式错误响应。
 func errResp(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -457,8 +441,8 @@ func errResp(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// SetIPDefaultRateForTest 是一个仅用于测试的辅助函数，用于动态修改IP限制器的默认速率和峰值。
-// 注意：这个方法不应该在生产代码中被调用。
+// SetIPDefaultRateForTest 为测试提供的辅助函数，用于动态修改 IP 默认速率配置。
+// 注意：此函数仅应在测试代码中调用。
 func (brl *BusinessRateLimiter) SetIPDefaultRateForTest(newRate float64, burst int) {
 	brl.ipMu.Lock()
 	defer brl.ipMu.Unlock()

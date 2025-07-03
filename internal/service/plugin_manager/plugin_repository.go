@@ -1,4 +1,5 @@
-// Package plugin_manager file: internal/service/plugin_repository.go
+// Package plugin_manager 提供插件管理相关服务
+// 文件位置: internal/service/plugin_repository.go
 package plugin_manager
 
 import (
@@ -16,7 +17,7 @@ import (
 	"sort"
 )
 
-// RefreshRepositories 从所有已配置的仓库中获取信息，并更新内存中的插件目录
+// RefreshRepositories 从所有已启用的插件仓库中获取插件清单，并更新插件目录缓存
 func (pm *PluginManager) RefreshRepositories() {
 	log.Println("🔄 [PluginManager] 开始刷新所有插件仓库...")
 	newCatalog := make(map[string]domain.PluginManifest)
@@ -47,7 +48,7 @@ func (pm *PluginManager) RefreshRepositories() {
 	log.Printf("🎉 [PluginManager] 所有仓库刷新完毕，当前目录中共有 %d 个唯一插件。", len(newCatalog))
 }
 
-// GetAvailablePlugins 返回当前插件目录中所有可用的插件清单。
+// GetAvailablePlugins 返回当前插件目录中的所有插件清单，按 ID 排序
 func (pm *PluginManager) GetAvailablePlugins() []domain.PluginManifest {
 	pm.catalogMu.RLock()
 	defer pm.catalogMu.RUnlock()
@@ -61,7 +62,7 @@ func (pm *PluginManager) GetAvailablePlugins() []domain.PluginManifest {
 	return catalogSlice
 }
 
-// fetchRepository 从远程插件仓库源中读取原始内容
+// fetchRepository 从远程插件仓库读取内容并返回 JSON 字节数据
 func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 	reader, err := pm.getSourceReader(repoURL)
 	if err != nil {
@@ -73,7 +74,7 @@ func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 		}
 	}()
 
-	const maxRepoSize = 10 << 20 // 10MB
+	const maxRepoSize = 10 << 20 // 最大读取大小为 10MB
 	limited := io.LimitReader(reader, maxRepoSize)
 
 	data, err := io.ReadAll(limited)
@@ -84,34 +85,34 @@ func (pm *PluginManager) fetchRepository(repoURL string) ([]byte, error) {
 	return data, nil
 }
 
-// getSourceReader 根据 URL scheme 选择合适的下载器
+// getSourceReader 根据传入 URL 获取插件清单的读取器
 func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
 	//  Windows 绝对路径
 	if runtime.GOOS == "windows" && isWindowsAbsPath(rawURL) {
 		return os.Open(rawURL)
 	}
 
-	// 解析成 URL
+	// 尝试解析为 URL
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		// 解析失败，则按「相对路径」处理（加入 rootDir）
+		// 无法解析时按相对路径处理
 		abs := filepath.Join(pm.rootDir, rawURL)
 		return os.Open(abs)
 	}
 
-	// 无 scheme：相对 / Unix 绝对路径
+	// 无 scheme：处理为本地路径
 	if u.Scheme == "" {
 		abs := filepath.Join(pm.rootDir, u.Path)
 		return os.Open(abs)
 	}
 
-	// file:// 协议
+	// file 协议路径
 	if u.Scheme == "file" {
 		localPath := downloader.ResolveLocalFilePath(u)
 		return os.Open(localPath)
 	}
 
-	// 其它协议（http/https…）
+	// 其他协议（如 http/https）
 	for _, d := range pm.downloaders {
 		if d.SupportsScheme(u.Scheme) {
 			return d.Download(u)
@@ -120,9 +121,7 @@ func (pm *PluginManager) getSourceReader(rawURL string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("没有找到支持协议 '%s' 的下载器", u.Scheme)
 }
 
-// ============================================================================
-// 🛠️ isWindowsAbsPath —— 判断字符串是否形如  C:\或 D:/ 开头
-// ============================================================================
+// isWindowsAbsPath 判断路径是否为 Windows 平台上的绝对路径（如 C:\ 或 D:/ 开头）
 func isWindowsAbsPath(p string) bool {
 	absWin := regexp.MustCompile(`^[a-zA-Z]:[\\/].+`)
 	return absWin.MatchString(p)

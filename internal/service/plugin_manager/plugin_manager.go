@@ -1,4 +1,5 @@
-// Package plugin_manager file: internal/service/plugin_manager/plugin_manager.go
+// Package plugin_manager 提供插件管理器的实现，包括插件目录、安装和生命周期管理功能
+// 文件位置: internal/service/plugin_manager/plugin_manager.go
 package plugin_manager
 
 import (
@@ -16,34 +17,34 @@ import (
 	"time"
 )
 
-// PluginManager 负责管理插件的目录、安装和生命周期。
+// PluginManager 管理插件的目录、安装和运行时状态
 type PluginManager struct {
-	db               *sql.DB
-	rootDir          string
-	installDir       string
-	repositories     []RepositoryConfig
-	catalog          map[string]domain.PluginManifest
-	downloaders      []downloader.Downloader
-	runningPlugins   map[string]*exec.Cmd
-	executorRegistry map[string]port.Executor // <--- 重大变更
-	closableAdapters *[]io.Closer
-	bizToInstanceID  map[string]string
+	db               *sql.DB                          // 插件管理器使用的数据库连接
+	rootDir          string                           // 插件根目录路径
+	installDir       string                           // 插件安装目录路径
+	repositories     []RepositoryConfig               // 插件仓库配置列表
+	catalog          map[string]domain.PluginManifest // 插件目录缓存
+	downloaders      []downloader.Downloader          // 插件资源下载器列表
+	runningPlugins   map[string]*exec.Cmd             // 当前运行中的插件进程映射
+	executorRegistry map[string]port.Executor         // 业务组到执行器的注册映射
+	closableAdapters *[]io.Closer                     // 所有可关闭的资源适配器
+	bizToInstanceID  map[string]string                // 业务组与插件实例ID映射关系
 
-	// Mutexes
-	catalogMu        sync.RWMutex
-	runningPluginsMu sync.Mutex
-	registryMu       sync.RWMutex
+	// 并发控制锁
+	catalogMu        sync.RWMutex // 插件目录锁
+	runningPluginsMu sync.Mutex   // 插件进程锁
+	registryMu       sync.RWMutex // 注册映射锁
 }
 
-// RepositoryConfig 是在网关主配置中定义的仓库信息
+// RepositoryConfig 表示插件仓库的配置项
 type RepositoryConfig struct {
-	Name    string `mapstructure:"name"`
-	URL     string `mapstructure:"url"`
-	Enabled bool   `mapstructure:"enabled"`
+	Name    string `mapstructure:"name"`    // 仓库名称
+	URL     string `mapstructure:"url"`     // 仓库地址
+	Enabled bool   `mapstructure:"enabled"` // 是否启用
 }
 
-// NewPluginManager 创建一个新的插件管理器实例
-func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) { // <--- 参数类型变更
+// NewPluginManager 创建并返回一个新的插件管理器实例
+func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) {
 	if db == nil {
 		return nil, errors.New("PluginManager 需要一个有效的数据库连接")
 	}
@@ -69,7 +70,7 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 		catalog:          make(map[string]domain.PluginManifest),
 		downloaders:      supportedDownloaders,
 		runningPlugins:   make(map[string]*exec.Cmd),
-		executorRegistry: registry, // <--- 字段赋值变更
+		executorRegistry: registry,
 		closableAdapters: closers,
 		bizToInstanceID:  make(map[string]string),
 	}, nil
