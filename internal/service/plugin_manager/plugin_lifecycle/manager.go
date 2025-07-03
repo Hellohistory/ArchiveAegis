@@ -1,5 +1,5 @@
 // Package plugin_lifecycle 提供插件实例生命周期管理器的核心结构与构造函数
-// 文件位置: internal/service/plugin_manager/plugin_lifecycle/manager.go
+// file: internal/service/plugin_manager/plugin_lifecycle/manager.go
 package plugin_lifecycle
 
 import (

@@ -1,5 +1,5 @@
 // Package plugin_lifecycle 提供插件实例的生命周期监控功能
-// 文件位置: internal/service/plugin_manager/plugin_lifecycle/instance_monitor.go
+// file: internal/service/plugin_manager/plugin_lifecycle/instance_monitor.go
 package plugin_lifecycle
 
 import (

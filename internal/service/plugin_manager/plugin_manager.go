@@ -6,34 +6,32 @@ import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/downloader"
+	"ArchiveAegis/internal/service/plugin_manager/plugin_lifecycle"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 )
 
 // PluginManager 管理插件的目录、安装和运行时状态
 type PluginManager struct {
-	db               *sql.DB                          // 插件管理器使用的数据库连接
-	rootDir          string                           // 插件根目录路径
-	installDir       string                           // 插件安装目录路径
-	repositories     []RepositoryConfig               // 插件仓库配置列表
-	catalog          map[string]domain.PluginManifest // 插件目录缓存
-	downloaders      []downloader.Downloader          // 插件资源下载器列表
-	runningPlugins   map[string]*exec.Cmd             // 当前运行中的插件进程映射
-	executorRegistry map[string]port.Executor         // 业务组到执行器的注册映射
-	closableAdapters *[]io.Closer                     // 所有可关闭的资源适配器
-	bizToInstanceID  map[string]string                // 业务组与插件实例ID映射关系
+	*plugin_lifecycle.LifecycleManager
+
+	db               *sql.DB
+	rootDir          string
+	installDir       string
+	repositories     []RepositoryConfig
+	catalog          map[string]domain.PluginManifest
+	downloaders      []downloader.Downloader
+	executorRegistry map[string]port.Executor
+	closableAdapters *[]io.Closer
 
 	// 并发控制锁
-	catalogMu        sync.RWMutex // 插件目录锁
-	runningPluginsMu sync.Mutex   // 插件进程锁
-	registryMu       sync.RWMutex // 注册映射锁
+	catalogMu sync.RWMutex
 }
 
 // RepositoryConfig 表示插件仓库的配置项
@@ -62,16 +60,42 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 		&downloader.FileDownloader{},
 	}
 
-	return &PluginManager{
+	// 初始化 PluginManager 自身的核心字段
+	pm := &PluginManager{
 		db:               db,
 		rootDir:          rootDir,
 		installDir:       installDir,
 		repositories:     repos,
 		catalog:          make(map[string]domain.PluginManifest),
 		downloaders:      supportedDownloaders,
-		runningPlugins:   make(map[string]*exec.Cmd),
 		executorRegistry: registry,
 		closableAdapters: closers,
-		bizToInstanceID:  make(map[string]string),
-	}, nil
+	}
+
+	// 定义一个 ManifestProvider 函数，它将作为参数传递给 LifecycleManager。
+	// 这个函数让 LifecycleManager 能够按需从 PluginManager 获取插件的清单信息。
+	manifestProvider := func(pluginID string) (*domain.PluginManifest, bool) {
+		pm.catalogMu.RLock()
+		defer pm.catalogMu.RUnlock()
+		manifest, ok := pm.catalog[pluginID]
+		// 返回清单的指针，即使未找到，也返回一个空指针和 false
+		if !ok {
+			return nil, false
+		}
+		return &manifest, true
+	}
+
+	// 初始化并嵌入 LifecycleManager
+	lifecycleMgr := plugin_lifecycle.NewLifecycleManager(
+		db,
+		installDir,
+		manifestProvider, // 传递上面定义的函数
+		registry,
+		closers,
+	)
+
+	// 将初始化好的 LifecycleManager 赋值给嵌入的字段
+	pm.LifecycleManager = lifecycleMgr
+
+	return pm, nil
 }
