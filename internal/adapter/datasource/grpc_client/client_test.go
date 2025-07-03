@@ -101,7 +101,6 @@ func TestClientAdapter_AllMethods(t *testing.T) {
 		t.Errorf("GetPluginInfo 返回值异常: %+v", info)
 	}
 
-	// HealthCheck
 	if err := adapter.HealthCheck(ctx); err != nil {
 		t.Errorf("HealthCheck 应成功，却返回错误: %v", err)
 	}

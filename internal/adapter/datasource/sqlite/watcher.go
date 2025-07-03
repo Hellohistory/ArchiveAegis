@@ -81,7 +81,6 @@ func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher)
 		}
 	}
 
-	// 非 .db 文件忽略
 	if !strings.HasSuffix(strings.ToLower(cleanPath), ".db") {
 		return
 	}

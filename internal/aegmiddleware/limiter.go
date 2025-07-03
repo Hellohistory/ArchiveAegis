@@ -28,9 +28,7 @@ type limiterEntry struct {
 	lastSeen time.Time
 }
 
-// ============================================================================
-//  业务性能限制器 (Business Performance Limiter) - V2 版本
-// ============================================================================
+//  业务性能限制器 (Business Performance Limiter)
 
 // BusinessRateLimiter 统一管理业务相关的多级速率限制，包括全局、IP、用户及业务维度。
 type BusinessRateLimiter struct {

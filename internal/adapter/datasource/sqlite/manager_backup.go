@@ -1,5 +1,5 @@
 // Package sqlite 提供 SQLite 数据源适配器的备份功能实现
-// 文件位置: internal/adapter/datasource/sqlite/manager_backup.go
+// file: internal/adapter/datasource/sqlite/manager_backup.go
 package sqlite
 
 import (

@@ -40,7 +40,7 @@ func (m *mockAdminConfigService) GetBizRateLimitSettings(ctx context.Context, bi
 	return nil, nil
 }
 
-// 其余方法在当前测试无关紧要，直接返回零值。
+// 其余方法在当前测试无关紧要，直接返回零值
 func (m *mockAdminConfigService) GetBizQueryConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
 	return nil, nil
 }

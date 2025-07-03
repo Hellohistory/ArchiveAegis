@@ -1,5 +1,5 @@
 // Package sqlite 提供 SQLite 数据源的辅助 SQL 构建函数
-// 文件位置: internal/adapter/datasource/sqlite/helpers.go
+// file: internal/adapter/datasource/sqlite/helpers.go
 package sqlite
 
 import (
