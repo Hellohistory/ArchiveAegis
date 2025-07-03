@@ -713,11 +713,12 @@ func installPluginHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
+// listInstancesHandler 返回所有插件实例的信息。
 func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		instances, err := pluginManager.ListInstances()
+		instances, err := pluginManager.LifecycleMgr.ListInstances()
 		if err != nil {
-			_ = c.Error(err)
+			_ = c.Error(fmt.Errorf("failed to list plugin instances: %w", err))
 			return
 		}
 		if instances == nil {
@@ -727,21 +728,23 @@ func listInstancesHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
+// deleteInstanceHandler 删除指定插件实例。
 func deleteInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
-		if err := pluginManager.DeleteInstance(instanceID); err != nil {
-			_ = c.Error(err)
+		if err := pluginManager.LifecycleMgr.DeleteInstance(instanceID); err != nil {
+			_ = c.Error(fmt.Errorf("failed to delete plugin instance '%s': %w", instanceID, err))
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功删除。", instanceID)})
 	}
 }
 
+// startInstanceHandler 启动指定插件实例。
 func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
-		if err := pluginManager.Start(instanceID); err != nil {
+		if err := pluginManager.LifecycleMgr.Start(instanceID); err != nil {
 			_ = c.Error(fmt.Errorf("启动插件实例 '%s' 失败: %w", instanceID, err))
 			return
 		}
@@ -749,17 +752,19 @@ func startInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Handl
 	}
 }
 
+// stopInstanceHandler 停止指定插件实例。
 func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
-		if err := pluginManager.Stop(instanceID); err != nil {
+		if err := pluginManager.LifecycleMgr.Stop(instanceID); err != nil {
 			_ = c.Error(fmt.Errorf("停止插件实例 '%s' 失败: %w", instanceID, err))
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功停止。", instanceID)})
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 的停止任务已成功提交。", instanceID)})
 	}
 }
 
+// createInstanceHandler 创建新的插件实例。
 func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		type createPayload struct {
@@ -770,12 +775,12 @@ func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Hand
 		}
 		var payload createPayload
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			_ = c.Error(err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
 			return
 		}
-		instanceID, err := pluginManager.CreateInstance(payload.DisplayName, payload.PluginID, payload.Version, payload.BizName)
+		instanceID, err := pluginManager.LifecycleMgr.CreateInstance(payload.DisplayName, payload.PluginID, payload.Version, payload.BizName)
 		if err != nil {
-			_ = c.Error(err)
+			_ = c.Error(fmt.Errorf("failed to create plugin instance: %w", err))
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{
