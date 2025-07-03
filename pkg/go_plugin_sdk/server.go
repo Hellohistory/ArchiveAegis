@@ -1,3 +1,5 @@
+// Package go_plugin_sdk 提供插件服务的通用运行框架
+// 文件位置: pkg/go_plugin_sdk/server.go
 package go_plugin_sdk
 
 import (
@@ -16,11 +18,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Serve 是 SDK 的主入口点。它处理所有服务启动的模板代码。
+// Serve 启动插件服务，封装插件实例初始化与 gRPC 注册流程
 func Serve(info PluginInfo, initializer Initializer) error {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true})))
 
-	// 自动处理命令行参数
 	portFlag := flag.Int("port", 50051, "服务监听端口")
 	bizNameFlag := flag.String("biz", "", "此插件管理的业务组名称 (必须)")
 	pluginNameFlag := flag.String("name", info.Name, "此插件实例的唯一名称")
@@ -40,7 +41,6 @@ func Serve(info PluginInfo, initializer Initializer) error {
 
 	slog.Info("🔌 启动插件服务...", "name", cfg.PluginName, "version", info.Version, "biz", cfg.BizName, "port", cfg.Port)
 
-	// 调用开发者提供的初始化函数来获取业务逻辑实例
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -49,7 +49,6 @@ func Serve(info PluginInfo, initializer Initializer) error {
 		return fmt.Errorf("插件初始化失败: %w", err)
 	}
 
-	// 启动 gRPC 服务器
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
 		return fmt.Errorf("gRPC 服务监听端口失败: %w", err)
@@ -57,7 +56,6 @@ func Serve(info PluginInfo, initializer Initializer) error {
 
 	grpcServer := grpc.NewServer()
 
-	// 创建一个内部的 gRPC 服务实现，它将请求路由到 pluginLogic
 	s := &grpcPluginServer{
 		logic:      pluginLogic,
 		info:       info,
@@ -69,7 +67,6 @@ func Serve(info PluginInfo, initializer Initializer) error {
 	go func() {
 		slog.Info("✅ 插件启动成功，开始提供服务...")
 		if err := grpcServer.Serve(lis); err != nil {
-			// 当 grpcServer.GracefulStop() 被调用时，Serve会返回错误，这是正常现象
 			slog.Info("gRPC 服务已停止", "error", err)
 		}
 	}()
@@ -90,28 +87,27 @@ func Serve(info PluginInfo, initializer Initializer) error {
 		return err
 	}
 	slog.Info("插件清理逻辑执行完毕。")
-
 	slog.Info("👋 插件已成功优雅关闭。")
 	return nil
 }
 
-// grpcPluginServer 是 datasourcev1.DataSourceServer 的内部实现。
+// grpcPluginServer 是 gRPC 服务 datasourcev1.DataSourceServer 的实现
 type grpcPluginServer struct {
 	datasourcev1.UnimplementedDataSourceServer
-	logic      Plugin     // 开发者实现的业务逻辑
-	info       PluginInfo // 插件元数据
-	pluginName string     // 运行时确定的插件名称
+	logic      Plugin     // 插件的业务逻辑实例
+	info       PluginInfo // 插件元信息
+	pluginName string     // 插件实例名称
 }
 
-// GetPluginInfo 自动根据 PluginInfo 和注册的处理器生成响应。
+// GetPluginInfo 返回插件的基本信息及支持能力
 func (s *grpcPluginServer) GetPluginInfo(context.Context, *datasourcev1.GetPluginInfoRequest) (*datasourcev1.GetPluginInfoResponse, error) {
 	return &datasourcev1.GetPluginInfoResponse{
-		Name:                s.pluginName, // 使用从 flag 解析出的最终名称
+		Name:                s.pluginName,
 		Version:             s.info.Version,
 		Type:                s.info.Type,
 		DescriptionMarkdown: s.info.DescriptionMarkdown,
 		ContractVersion:     &datasourcev1.ApiVersion{Major: 1, Minor: 0, Patch: 0},
-		SupportedPayloads: []string{ // 自动生成支持的载荷列表
+		SupportedPayloads: []string{
 			typeURL(&datasourcev1.DataQueryRequest{}),
 			typeURL(&datasourcev1.DataMutateRequest{}),
 			typeURL(&datasourcev1.GetSchemaRequest{}),
@@ -120,7 +116,7 @@ func (s *grpcPluginServer) GetPluginInfo(context.Context, *datasourcev1.GetPlugi
 	}, nil
 }
 
-// HealthCheck 直接代理到逻辑实现。
+// HealthCheck 执行插件的健康检查逻辑
 func (s *grpcPluginServer) HealthCheck(ctx context.Context, _ *datasourcev1.HealthCheckRequest) (*datasourcev1.HealthCheckResponse, error) {
 	if err := s.logic.HealthCheck(ctx); err != nil {
 		slog.Warn("插件健康检查失败", "error", err)
@@ -129,12 +125,12 @@ func (s *grpcPluginServer) HealthCheck(ctx context.Context, _ *datasourcev1.Heal
 	return &datasourcev1.HealthCheckResponse{Status: datasourcev1.HealthCheckResponse_SERVING}, nil
 }
 
-// Execute 直接代理到逻辑实现。
+// Execute 调用插件的通用执行逻辑处理请求
 func (s *grpcPluginServer) Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error) {
 	return s.logic.Execute(ctx, req)
 }
 
-// typeURL 是一个辅助函数，用于获取 Protobuf 消息的类型 URL
+// typeURL 返回 Protobuf 消息类型的 URL 表示
 func typeURL(m proto.Message) string {
 	return "type.googleapis.com/" + string(m.ProtoReflect().Descriptor().FullName())
 }

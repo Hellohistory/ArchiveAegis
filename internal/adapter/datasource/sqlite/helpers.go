@@ -1,4 +1,5 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/helpers.go
+// Package sqlite 提供 SQLite 数据源的辅助 SQL 构建函数
+// 文件位置: internal/adapter/datasource/sqlite/helpers.go
 package sqlite
 
 import (
@@ -8,7 +9,7 @@ import (
 	"strings"
 )
 
-// buildQuerySQL 构建用于获取数据的 SQL 查询
+// buildQuerySQL 构建 SELECT 查询语句及其参数列表
 func buildQuerySQL(tableName string, fields []string, params []queryParam) (string, []any, error) {
 	if tableName == "" || len(fields) == 0 {
 		return "", nil, errors.New("表名和查询字段不能为空 (buildQuerySQL)")
@@ -39,7 +40,7 @@ func buildQuerySQL(tableName string, fields []string, params []queryParam) (stri
 	return queryBuilder.String(), whereArgs, nil
 }
 
-// buildCountSQL 构建用于计算总行数的 SQL 查询
+// buildCountSQL 构建 SELECT COUNT(*) 查询语句及其参数列表
 func buildCountSQL(tableName string, params []queryParam) (string, []any, error) {
 	if tableName == "" {
 		return "", nil, errors.New("表名不能为空 (buildCountSQL)")
@@ -60,7 +61,7 @@ func buildCountSQL(tableName string, params []queryParam) (string, []any, error)
 	return queryBuilder.String(), whereArgs, nil
 }
 
-// buildWhereClause 是一个功能完善的、用于构建 WHERE 子句的通用辅助函数
+// buildWhereClause 构建 WHERE 子句及其参数列表
 func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 	if len(filters) == 0 {
 		return "", make([]interface{}, 0), nil
@@ -75,7 +76,6 @@ func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 
 		if p.Fuzzy {
 			operator = "LIKE"
-			// 对 LIKE 的值进行转义，并包裹通配符
 			escapedValue := strings.ReplaceAll(p.Value, `\`, `\\`)
 			escapedValue = strings.ReplaceAll(escapedValue, `%`, `\%`)
 			escapedValue = strings.ReplaceAll(escapedValue, `_`, `\_`)
@@ -87,9 +87,7 @@ func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 		conditions = append(conditions, fmt.Sprintf("%s %s ?", quotedField, operator))
 		args = append(args, value)
 
-		// 处理 AND / OR 逻辑连接符
 		if i < len(filters)-1 {
-			// 默认使用 AND，除非下一个 filter 明确指定了 OR
 			nextLogic := strings.ToUpper(filters[i+1].Logic)
 			if nextLogic == "OR" {
 				conditions = append(conditions, "OR")
@@ -101,7 +99,7 @@ func buildWhereClause(filters []queryParam) (string, []interface{}, error) {
 	return "WHERE " + strings.Join(conditions, " "), args, nil
 }
 
-// buildInsertSQL 安全地构建 INSERT 语句
+// buildInsertSQL 构建 INSERT INTO 语句及其参数列表
 func buildInsertSQL(tableName string, data map[string]interface{}) (string, []interface{}, error) {
 	if len(data) == 0 {
 		return "", nil, errors.New("INSERT 操作需要提供数据")
@@ -122,7 +120,7 @@ func buildInsertSQL(tableName string, data map[string]interface{}) (string, []in
 	return query, args, nil
 }
 
-// buildUpdateSQL 安全地构建 UPDATE 语句
+// buildUpdateSQL 构建 UPDATE 语句及其参数列表
 func buildUpdateSQL(tableName string, data map[string]interface{}, filters []queryParam) (string, []interface{}, error) {
 	if len(data) == 0 {
 		return "", nil, errors.New("UPDATE 操作需要提供更新数据")
@@ -150,7 +148,7 @@ func buildUpdateSQL(tableName string, data map[string]interface{}, filters []que
 	return query, args, nil
 }
 
-// buildDeleteSQL 安全地构建 DELETE 语句
+// buildDeleteSQL 构建 DELETE FROM 语句及其参数列表
 func buildDeleteSQL(tableName string, filters []queryParam) (string, []interface{}, error) {
 	whereClause, whereArgs, err := buildWhereClause(filters)
 	if err != nil {

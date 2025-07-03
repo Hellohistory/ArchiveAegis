@@ -1,4 +1,5 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/db_ops.go
+// Package sqlite 提供对 SQLite 数据库的访问与管理功能
+// 文件位置: internal/adapter/datasource/sqlite/db_ops.go
 package sqlite
 
 import (
@@ -10,7 +11,7 @@ import (
 	"strings"
 )
 
-// InitForBiz 根据指定的业务组名称，精确地初始化该业务组下的所有数据库。
+// InitForBiz 初始化指定业务组下的所有数据库文件
 func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -48,7 +49,7 @@ func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string
 	return nil
 }
 
-// openDBInternal 方法现在保存 dbInstance 结构体，其中包含连接和路径。
+// openDBInternal 打开并注册指定路径的数据库实例
 func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	rel, errRel := filepath.Rel(m.root, path)
 	if errRel != nil {
@@ -93,21 +94,21 @@ func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	return nil
 }
 
-// openDB 是 openDBInternal 的公开包装器，带锁。
+// openDB 为 openDBInternal 提供线程安全封装
 func (m *Manager) openDB(ctx context.Context, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.openDBInternal(ctx, path)
 }
 
-// closeDB 关闭指定路径的数据库连接，并清理相关缓存。带锁。
+// closeDB 关闭指定路径的数据库连接并清理缓存
 func (m *Manager) closeDB(path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	rel, errRel := filepath.Rel(m.root, path)
 	if errRel != nil {
-		return // Path is not relative to root, nothing to do.
+		return
 	}
 	parts := strings.SplitN(filepath.ToSlash(rel), "/", 2)
 	if len(parts) != 2 {
@@ -133,8 +134,7 @@ func (m *Manager) closeDB(path string) {
 	}
 }
 
-// HealthCheck 实现了 go_plugin_sdk.Plugin 接口。
-// 它通过 ping 插件自身的系统数据库来检查健康状况。
+// HealthCheck 检查插件系统数据库连接是否可用
 func (m *Manager) HealthCheck(ctx context.Context) error {
 	if m.pluginSysDB == nil {
 		return fmt.Errorf("系统数据库连接未初始化")
@@ -142,7 +142,7 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 	return m.pluginSysDB.PingContext(ctx)
 }
 
-// getAnyDB 随机返回一个当前加载的 *sql.DB 连接实例。
+// getAnyDB 返回当前加载的任意一个数据库连接实例
 func (m *Manager) getAnyDB() (*sql.DB, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

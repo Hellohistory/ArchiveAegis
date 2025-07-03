@@ -1,120 +1,144 @@
-// file: proto/datasource/datasource.proto
-
 syntax = "proto3";
-package datasource;
-option go_package = "gen/go/datasource/v1;datasourcev1";
-import "google/protobuf/any.proto";
 
+package datasource;
+
+option go_package = "gen/go/datasource/v1;datasourcev1";
+
+import "google/protobuf/any.proto";
 import "google/protobuf/struct.proto";
 
+// DataSource 服务定义插件通用的 RPC 接口
 service DataSource {
+  // 获取插件基本信息
   rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+
+  // 执行统一请求封装体
   rpc Execute(RequestEnvelope) returns (ResponseEnvelope);
+
+  // 执行健康检查
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
+// 请求封装体，支持通用负载
 message RequestEnvelope {
-  string request_id = 1;
-  string biz_name = 2;
-  map<string, string> metadata = 3;
-  google.protobuf.Any payload = 4;
+  string request_id = 1;             // 请求唯一标识
+  string biz_name = 2;               // 请求对应业务组名称
+  map<string, string> metadata = 3;  // 请求附加元数据
+  google.protobuf.Any payload = 4;   // 实际请求负载
 }
 
+// 响应封装体，包含状态与返回数据
 message ResponseEnvelope {
-  string request_id = 1;
-  Status status = 2;
-  google.protobuf.Any payload = 3;
+  string request_id = 1;           // 请求唯一标识
+  Status status = 2;               // 执行状态
+  google.protobuf.Any payload = 3; // 响应负载
 }
 
+// 状态信息结构
 message Status {
-  int32 code = 1;
-  string message = 2;
-  google.protobuf.Struct details = 3;
-
+  int32 code = 1;                     // 状态码
+  string message = 2;                // 状态描述信息
+  google.protobuf.Struct details = 3; // 附加详情
 }
 
+// 请求插件信息
 message GetPluginInfoRequest {}
 
+// 插件信息响应结构
 message GetPluginInfoResponse {
-  string name = 1;
-  string version = 2;
-  string type = 3;
-  string description_markdown = 4;
-  ApiVersion contract_version = 5;
-  repeated string supported_payloads = 6;
-  repeated string supported_capabilities = 7;
-
+  string name = 1;                        // 插件名称
+  string version = 2;                     // 插件版本
+  string type = 3;                        // 插件类型
+  string description_markdown = 4;        // 插件说明（Markdown 格式）
+  ApiVersion contract_version = 5;        // 协议版本
+  repeated string supported_payloads = 6; // 支持的负载类型
+  repeated string supported_capabilities = 7; // 支持的能力列表
 }
 
+// 协议版本定义
 message ApiVersion {
   int32 major = 1;
   int32 minor = 2;
   int32 patch = 3;
 }
 
+// 查询请求结构
 message DataQueryRequest {
-  google.protobuf.Struct query = 1;
+  google.protobuf.Struct query = 1; // 查询结构体
 }
 
+// 查询结果结构
 message DataQueryResult {
-  google.protobuf.Struct data = 1;
+  google.protobuf.Struct data = 1; // 查询结果数据
 }
 
+// 数据变更请求结构
 message DataMutateRequest {
-  string operation = 1;
-  google.protobuf.Struct payload = 2;
+  string operation = 1;               // 操作类型
+  google.protobuf.Struct payload = 2; // 操作负载
 }
 
+// 数据变更结果结构
 message DataMutateResult {
-  google.protobuf.Struct data = 1;
+  google.protobuf.Struct data = 1; // 操作结果数据
 }
 
+// 请求数据表结构
 message GetSchemaRequest {
-    string table_name = 1;
+  string table_name = 1; // 表名
 }
 
+// 数据表结构响应
 message SchemaResult {
-    map<string, TableSchema> tables = 1;
+  map<string, TableSchema> tables = 1; // 表名到结构映射
 }
 
+// 表结构定义
 message TableSchema {
-  repeated FieldDescription fields = 1;
+  repeated FieldDescription fields = 1; // 字段描述列表
 }
 
+// 字段描述结构
 message FieldDescription {
-  string name = 1;
-  string data_type = 2;
-  bool is_searchable = 3;
-  bool is_returnable = 4;
-  bool is_primary = 5;
-  string description = 6;
+  string name = 1;          // 字段名称
+  string data_type = 2;     // 数据类型
+  bool is_searchable = 3;   // 是否可搜索
+  bool is_returnable = 4;   // 是否可返回
+  bool is_primary = 5;      // 是否为主键
+  string description = 6;   // 字段描述
 }
 
+// 配置更新请求结构
 message UpdateConfigurationRequest {
-  google.protobuf.Struct new_config = 1;
+  google.protobuf.Struct new_config = 1; // 新配置内容
 }
 
+// 配置更新结果结构
 message UpdateConfigurationResult {
-  string message = 1;
+  string message = 1; // 返回消息
 }
 
+// 健康检查请求结构
 message HealthCheckRequest {}
 
+// 健康检查响应结构
 message HealthCheckResponse {
   enum ServingStatus {
-    UNKNOWN = 0;
-    SERVING = 1;
-    NOT_SERVING = 2;
+    UNKNOWN = 0;     // 状态未知
+    SERVING = 1;     // 正常提供服务
+    NOT_SERVING = 2; // 暂停提供服务
   }
-  ServingStatus status = 1;
+  ServingStatus status = 1; // 当前服务状态
 }
 
+// 触发备份请求结构
 message TriggerBackupRequest {
-  string backup_destination_dir = 1;
+  string backup_destination_dir = 1; // 备份目标目录
 }
 
+// 触发备份响应结构
 message TriggerBackupResult {
-  string final_backup_path = 1;
-  int64 file_size = 2;
-  int32 db_files_count = 3;
+  string final_backup_path = 1; // 最终备份文件路径
+  int64 file_size = 2;          // 备份文件大小（字节）
+  int32 db_files_count = 3;     // 包含的数据库文件数量
 }

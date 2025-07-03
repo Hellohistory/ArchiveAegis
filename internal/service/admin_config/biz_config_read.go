@@ -1,4 +1,5 @@
-// Package admin_config internal/service/admin_config/biz_config_read.go
+// Package admin_config 提供系统管理配置服务的实现
+// 文件位置: internal/service/admin_config/biz_config_read.go
 package admin_config
 
 import (
@@ -9,13 +10,13 @@ import (
 	"ArchiveAegis/internal/core/domain"
 )
 
-// GetBizQueryConfig 从数据库或缓存中获取指定业务组的查询配置。
+// GetBizQueryConfig 返回指定业务组的查询配置，优先从缓存读取，缓存未命中则从数据库加载
 func (s *AdminConfigServiceImpl) GetBizQueryConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
 	if bizName == "" {
 		return nil, fmt.Errorf("业务组名称 (bizName) 不能为空")
 	}
 
-	// 尝试从缓存获取
+	// 从缓存读取
 	config, found := s.cache.Get(bizName)
 	if found {
 		return config, nil
@@ -27,14 +28,14 @@ func (s *AdminConfigServiceImpl) GetBizQueryConfig(ctx context.Context, bizName 
 		return nil, err
 	}
 
-	// 加载成功则加入缓存
+	// 加载成功后写入缓存
 	if dbConfig != nil {
 		s.cache.Add(bizName, dbConfig)
 	}
 	return dbConfig, nil
 }
 
-// GetAllConfiguredBizNames 从 biz_overall_settings 表中检索所有已配置业务组的名称列表。
+// GetAllConfiguredBizNames 返回当前系统中所有已配置的业务组名称
 func (s *AdminConfigServiceImpl) GetAllConfiguredBizNames(ctx context.Context) ([]string, error) {
 	query := `SELECT biz_name FROM biz_overall_settings ORDER BY biz_name`
 	rows, err := s.db.QueryContext(ctx, query)
@@ -42,7 +43,7 @@ func (s *AdminConfigServiceImpl) GetAllConfiguredBizNames(ctx context.Context) (
 		return nil, fmt.Errorf("查询业务组列表失败: %w", err)
 	}
 
-	// 安全释放资源并记录错误
+	// 释放资源并处理关闭异常
 	defer func() {
 		if errClose := rows.Close(); errClose != nil {
 			log.Printf("警告: 查询业务组列表后关闭 rows 失败: %v", errClose)

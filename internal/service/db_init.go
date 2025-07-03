@@ -1,4 +1,5 @@
-// Package service file: internal/service/db_init.go
+// Package service 提供系统初始化与管理服务
+// 文件位置: internal/service/db_init.go
 package service
 
 import (
@@ -7,7 +8,7 @@ import (
 	"log"
 )
 
-// InitPlatformTables 负责在系统启动时，检查并创建/更新所有平台级的系统管理表。
+// InitPlatformTables 初始化平台级系统管理表结构
 func InitPlatformTables(db *sql.DB) error {
 	if err := initUserTable(db); err != nil {
 		return fmt.Errorf("初始化用户表失败: %w", err)
@@ -21,7 +22,6 @@ func InitPlatformTables(db *sql.DB) error {
 	if err := initGlobalSettingsTable(db); err != nil {
 		return fmt.Errorf("初始化全局设置表失败: %w", err)
 	}
-
 	if err := initPluginManagementTable(db); err != nil {
 		return fmt.Errorf("初始化插件管理表失败: %w", err)
 	}
@@ -33,24 +33,22 @@ func InitPlatformTables(db *sql.DB) error {
 	return nil
 }
 
-// initSystemFeaturesTable 创建一个表来跟踪可开启/关闭的内置系统功能。
+// initSystemFeaturesTable 创建系统功能开关配置表
 func initSystemFeaturesTable(db *sql.DB) error {
 	query := `
     CREATE TABLE IF NOT EXISTS system_features (
-        feature_id TEXT PRIMARY KEY NOT NULL, -- 例如: "io.archiveaegis.system.observability"
+        feature_id TEXT PRIMARY KEY NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT FALSE,
-        config_json TEXT, -- 为未来的功能配置预留
+        config_json TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("创建 'system_features' 表失败: %w", err)
 	}
 
-	// 默认为关闭
 	insertQuery := `
     INSERT OR IGNORE INTO system_features (feature_id, enabled) VALUES
-       ('io.archiveaegis.system.observability', FALSE);
-    `
+       ('io.archiveaegis.system.observability', FALSE);`
 	_, err := db.Exec(insertQuery)
 	return err
 }
@@ -63,21 +61,19 @@ func initUserTable(db *sql.DB) error {
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL,
-        rate_limit_per_second REAL, -- for user-specific rate limiting
+        rate_limit_per_second REAL,
         burst_size INTEGER
     );`
 	_, err := db.Exec(query)
 	if err != nil {
 		return fmt.Errorf("创建 '_user' 表失败: %w", err)
 	}
-	// 为常用查询创建索引
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_user_username ON _user (username);`)
 	return err
 }
 
-// initPermissionTables 创建或更新所有与权限配置相关的表
+// initPermissionTables 创建权限相关配置表
 func initPermissionTables(db *sql.DB) error {
-	// 创建业务组元数据表
 	queryBizOverall := `
     CREATE TABLE IF NOT EXISTS biz_overall_settings (
         biz_name TEXT PRIMARY KEY,
@@ -137,7 +133,7 @@ func initPermissionTables(db *sql.DB) error {
 	return nil
 }
 
-// initOperationLogTable 创建操作日志表，用于实现回滚功能
+// initOperationLogTable 创建操作日志表
 func initOperationLogTable(db *sql.DB) error {
 	query := `
     CREATE TABLE IF NOT EXISTS operation_log (
@@ -147,11 +143,11 @@ func initOperationLogTable(db *sql.DB) error {
         user_id INTEGER,
         biz_name TEXT NOT NULL,
         table_name TEXT NOT NULL,
-        operation_type TEXT NOT NULL, -- 'CREATE', 'UPDATE', 'DELETE'
+        operation_type TEXT NOT NULL,
         target_pk TEXT NOT NULL,
-        data_before TEXT, -- 操作前的数据快照 (JSON)
-        data_after TEXT,  -- 操作后的数据快照 (JSON)
-        status TEXT NOT NULL -- 'COMPLETED', 'ROLLED_BACK'
+        data_before TEXT,
+        data_after TEXT,
+        status TEXT NOT NULL
     );`
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("创建 'operation_log' 表失败: %w", err)
@@ -160,7 +156,7 @@ func initOperationLogTable(db *sql.DB) error {
 	return err
 }
 
-// initGlobalSettingsTable 创建全局设置和速率限制相关的表
+// initGlobalSettingsTable 创建全局设置及限流配置表
 func initGlobalSettingsTable(db *sql.DB) error {
 	queryGlobal := `
 	CREATE TABLE IF NOT EXISTS global_settings (
@@ -172,7 +168,7 @@ func initGlobalSettingsTable(db *sql.DB) error {
 	if _, err := db.Exec(queryGlobal); err != nil {
 		return fmt.Errorf("创建 'global_settings' 表失败: %w", err)
 	}
-	// 插入默认的IP速率限制值，如果不存在的话
+
 	insertGlobal := `
 	INSERT OR IGNORE INTO global_settings (key, value, description) VALUES
 		('ip_rate_limit_per_minute', '60', '未认证IP的默认每分钟请求数'),
@@ -195,9 +191,8 @@ func initGlobalSettingsTable(db *sql.DB) error {
 	return nil
 }
 
-// initPluginManagementTable 创建用于存储插件状态和实例配置的表。
+// initPluginManagementTable 创建插件管理与实例配置相关的表
 func initPluginManagementTable(db *sql.DB) error {
-	// 已安装插件表
 	queryInstalled := `
     CREATE TABLE IF NOT EXISTS installed_plugins (
         plugin_id TEXT NOT NULL,
@@ -216,9 +211,9 @@ func initPluginManagementTable(db *sql.DB) error {
 		display_name TEXT NOT NULL,
 		plugin_id TEXT NOT NULL,
 		version TEXT NOT NULL,
-		biz_name TEXT NOT NULL UNIQUE, -- 一个实例只服务一个业务组，且业务组不能重复
-		port INTEGER NOT NULL UNIQUE,    -- 每个实例拥有独立的端口号
-		status TEXT NOT NULL DEFAULT 'STOPPED', -- 状态: STOPPED, RUNNING, ERROR
+		biz_name TEXT NOT NULL UNIQUE,
+		port INTEGER NOT NULL UNIQUE,
+		status TEXT NOT NULL DEFAULT 'STOPPED',
 		enabled BOOLEAN NOT NULL DEFAULT TRUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		last_started_at DATETIME,

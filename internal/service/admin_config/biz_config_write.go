@@ -1,4 +1,5 @@
-// Package admin_config internal/service/admin_config/biz_config_write.go
+// Package admin_config 提供系统管理配置服务的实现
+// 文件位置: internal/service/admin_config/biz_config_write.go
 package admin_config
 
 import (
@@ -9,7 +10,7 @@ import (
 	"log"
 )
 
-// UpdateBizOverallSettings 更新业务组的总体设置。
+// UpdateBizOverallSettings 更新指定业务组的总体设置
 func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, bizName string, settings domain.BizOverallSettings) (err error) {
 	if bizName == "" {
 		return fmt.Errorf("业务组名称不能为空")
@@ -40,7 +41,7 @@ func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, b
 		isPubliclySearchable.Bool = *settings.IsPubliclySearchable
 		isPubliclySearchable.Valid = true
 	} else {
-		isPubliclySearchable.Bool = true // 默认为 true
+		isPubliclySearchable.Bool = true
 		isPubliclySearchable.Valid = true
 	}
 
@@ -57,8 +58,7 @@ func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, b
             is_publicly_searchable = excluded.is_publicly_searchable,
             default_query_table = excluded.default_query_table;`
 
-	_, execErr := tx.ExecContext(ctx, upsertQuery,
-		bizName, isPubliclySearchable, defaultQueryTable)
+	_, execErr := tx.ExecContext(ctx, upsertQuery, bizName, isPubliclySearchable, defaultQueryTable)
 	if execErr != nil {
 		return fmt.Errorf("更新/插入业务 '%s' 的总体配置失败: %w", bizName, execErr)
 	}
@@ -69,8 +69,7 @@ func (s *AdminConfigServiceImpl) UpdateBizOverallSettings(ctx context.Context, b
 	return nil
 }
 
-// UpdateBizSearchableTables 全量更新一个业务组下所有可搜索的表。
-// 该操作会先将该业务组下所有表的 is_searchable 状态置为 false，然后再将传入列表中的表的状态置为 true。
+// UpdateBizSearchableTables 全量更新指定业务组下所有可搜索的表名列表
 func (s *AdminConfigServiceImpl) UpdateBizSearchableTables(ctx context.Context, bizName string, tableNames []string) (err error) {
 	if bizName == "" {
 		return fmt.Errorf("业务组名称不能为空")
@@ -96,17 +95,19 @@ func (s *AdminConfigServiceImpl) UpdateBizSearchableTables(ctx context.Context, 
 		}
 	}()
 
+	// 将业务组下所有表的 is_searchable 字段设为 false
 	resetQuery := "UPDATE biz_searchable_tables SET is_searchable = FALSE WHERE biz_name = ?"
 	if _, err = tx.ExecContext(ctx, resetQuery, bizName); err != nil {
 		return fmt.Errorf("重置旧可搜索表状态失败 (业务 '%s'): %w", bizName, err)
 	}
 
+	// 如果无表名传入，则直接返回
 	if len(tableNames) == 0 {
 		s.InvalidateCacheForBiz(bizName)
-		return nil // 如果没有新表，重置后直接返回
+		return nil
 	}
 
-	// 如果表记录已存在，则只更新 is_searchable 字段；如果不存在，则插入新行，并将 is_searchable 设为 TRUE。
+	// 批量插入或更新指定表的 is_searchable 字段为 true
 	stmt, err := tx.PrepareContext(ctx, `
         INSERT INTO biz_searchable_tables (biz_name, table_name, is_searchable)
         VALUES (?, ?, TRUE)

@@ -1,4 +1,5 @@
-// Package sqlite file: internal/adapter/datasource/sqlite/watcher.go
+// Package sqlite 提供 SQLite 数据源适配器相关功能
+// 文件位置: internal/adapter/datasource/sqlite/watcher.go
 package sqlite
 
 import (
@@ -13,7 +14,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// StartWatcher 启动文件系统监视器，用于热加载/卸载数据库。
+// StartWatcher 启动文件系统监视器，用于监控数据库目录变化并支持热加载或卸载数据库
 func (m *Manager) StartWatcher(rootDir string) error {
 	if m.root == "" {
 		m.root = filepath.Clean(rootDir)
@@ -24,7 +25,7 @@ func (m *Manager) StartWatcher(rootDir string) error {
 		return fmt.Errorf("创建 fsnotify watcher 失败: %w", err)
 	}
 
-	// Goroutine to handle events
+	// 启动 goroutine 异步处理文件事件
 	go func() {
 		defer watcher.Close()
 		log.Printf("信息: [DBManager] 文件监视 goroutine 已启动。")
@@ -46,12 +47,14 @@ func (m *Manager) StartWatcher(rootDir string) error {
 		}
 	}()
 
+	// 添加根目录到监视器
 	if err := watcher.Add(m.root); err != nil {
 		log.Printf("错误: [DBManager] 添加根目录 '%s' 到监视器失败: %v", m.root, err)
 	} else {
 		log.Printf("信息: [DBManager] 已成功添加根目录 '%s' 到监视器。", m.root)
 	}
 
+	// 将现有业务子目录也加入监控
 	m.mu.RLock()
 	for bizName := range m.group {
 		bizPath := filepath.Join(m.root, bizName)
@@ -64,10 +67,11 @@ func (m *Manager) StartWatcher(rootDir string) error {
 	return nil
 }
 
-// handleFsEvent 处理单个文件系统事件。
+// handleFsEvent 处理单个文件系统事件，根据事件类型触发相应操作
 func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	cleanPath := filepath.Clean(event.Name)
 
+	// 新建目录事件：尝试将其添加至监视器
 	if event.Op.Has(fsnotify.Create) {
 		if info, err := os.Stat(cleanPath); err == nil && info.IsDir() {
 			if err := watcher.Add(cleanPath); err == nil {
@@ -77,10 +81,12 @@ func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher)
 		}
 	}
 
+	// 非 .db 文件忽略
 	if !strings.HasSuffix(strings.ToLower(cleanPath), ".db") {
 		return
 	}
 
+	// 防抖机制：若已有定时器则重置
 	m.eventTimersMu.Lock()
 	defer m.eventTimersMu.Unlock()
 	if timer, exists := m.eventTimers[cleanPath]; exists {
@@ -94,12 +100,13 @@ func (m *Manager) handleFsEvent(event fsnotify.Event, watcher *fsnotify.Watcher)
 	})
 }
 
-// processDebouncedEvent 在防抖后实际处理 .db 文件的变更。
+// processDebouncedEvent 在防抖处理后执行数据库文件的热加载或卸载，并刷新结构缓存
 func (m *Manager) processDebouncedEvent(path string) {
 	log.Printf("信息: [DBManager Debounced Event] 开始处理文件: '%s'", path)
 	ctxBg := context.Background()
 	needsSchemaRefresh := false
 
+	// 判断文件是否已删除
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		m.closeDB(path)
 		needsSchemaRefresh = true
@@ -113,6 +120,7 @@ func (m *Manager) processDebouncedEvent(path string) {
 		}
 	}
 
+	// 根据情况刷新数据库结构缓存
 	if needsSchemaRefresh {
 		log.Printf("信息: [DBManager Debounced Event] 因 '%s' 的文件事件，准备刷新 Schema 缓存。", path)
 		m.loadOrRefreshSchema()
