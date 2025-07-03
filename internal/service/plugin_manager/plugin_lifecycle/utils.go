@@ -1,5 +1,5 @@
 // Package plugin_lifecycle 提供插件实例管理中的辅助工具函数
-// 文件位置: internal/service/plugin_manager/plugin_lifecycle/utils.go
+// file: internal/service/plugin_manager/plugin_lifecycle/utils.go
 package plugin_lifecycle
 
 import (

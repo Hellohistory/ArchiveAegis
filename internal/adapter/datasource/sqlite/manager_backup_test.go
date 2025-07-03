@@ -1,5 +1,5 @@
 // Package sqlite 提供 SQLite 数据源适配器的备份功能测试
-// 文件位置: internal/adapter/datasource/sqlite/manager_backup_test.go
+// file: internal/adapter/datasource/sqlite/manager_backup_test.go
 package sqlite
 
 import (

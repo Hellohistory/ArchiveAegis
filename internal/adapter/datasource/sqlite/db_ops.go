@@ -49,7 +49,7 @@ func (m *Manager) InitForBiz(ctx context.Context, rootDir string, bizName string
 	return nil
 }
 
-// openDBInternal 打开并注册指定路径的数据库实例
+// openDBInternal 打开并注册指定路径的数据库连接
 func (m *Manager) openDBInternal(ctx context.Context, path string) error {
 	rel, errRel := filepath.Rel(m.root, path)
 	if errRel != nil {
@@ -143,6 +143,8 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 }
 
 // getAnyDB 返回当前加载的任意一个数据库连接实例
+//
+//nolint:unused
 func (m *Manager) getAnyDB() (*sql.DB, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

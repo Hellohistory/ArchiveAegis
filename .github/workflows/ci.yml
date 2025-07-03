@@ -8,20 +8,12 @@ on:
     branches: [ master, main ]
 
 jobs:
-  build-ubuntu:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
     uses: ./.github/workflows/reusable-build-and-test.yml
     with:
-      os: ubuntu-latest
-    secrets: inherit
-
-  build-macos:
-    uses: ./.github/workflows/reusable-build-and-test.yml
-    with:
-      os: macos-latest
-    secrets: inherit
-
-  build-windows:
-    uses: ./.github/workflows/reusable-build-and-test.yml
-    with:
-      os: windows-latest
+      os: ${{ matrix.os }}
     secrets: inherit

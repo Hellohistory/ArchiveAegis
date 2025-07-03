@@ -278,10 +278,6 @@ func (app *application) run() error {
 	return nil
 }
 
-// =============================================================================
-// 辅助函数
-// =============================================================================
-
 // generateServiceTokenAndExit 为指定服务账户生成访问令牌，并将其输出后终止程序
 func generateServiceTokenAndExit(db *sql.DB, username string) error {
 	id, role, ok := service.GetUserByUsername(db, username)

@@ -298,7 +298,7 @@ func readSchemaCache(bizDir string) (map[string][]string, map[string]map[string]
 	return sf.Tables, sf.Libs, nil
 }
 
-// writeSchemaCache 将 schema 信息写入缓存文件中
+// writeSchemaCache 将 schema 信息写入缓存文件
 func writeSchemaCache(bizDir string, libs map[string]map[string][]string, tables map[string][]string) error {
 	tmp := filepath.Join(bizDir, schemaCacheFilename+".tmp")
 	final := filepath.Join(bizDir, schemaCacheFilename)

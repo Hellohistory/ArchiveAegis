@@ -28,9 +28,7 @@ type limiterEntry struct {
 	lastSeen time.Time
 }
 
-// ============================================================================
-//  业务性能限制器 (Business Performance Limiter) - V2 版本
-// ============================================================================
+//  业务性能限制器 (Business Performance Limiter)
 
 // BusinessRateLimiter 统一管理业务相关的多级速率限制，包括全局、IP、用户及业务维度。
 type BusinessRateLimiter struct {
@@ -326,6 +324,8 @@ func (l *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 }
 
 // cleanupDaemon 定期清理长时间未使用的 IP 限速器实例。
+//
+//nolint:unused
 func (l *IPRateLimiter) cleanupDaemon() {
 	for {
 		time.Sleep(10 * time.Minute)

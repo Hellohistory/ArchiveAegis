@@ -13,32 +13,18 @@ jobs:
     runs-on: ${{ inputs.os }}
 
     steps:
-      - name: Checkout repository
+      - name: 拉取代码仓库
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install dos2unix on Linux
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dos2unix
-
-      - name: Install dos2unix on macOS
-        if: runner.os == 'macOS'
-        run: brew install dos2unix
-
-      - name: Ensure Unix line endings
-        if: runner.os != 'Windows'
-        run: find . -type f \( -name '*.sh' -o -name '*.yaml' \) -print0 | xargs -0 dos2unix || true
-
-      - name: Set up Go
+      - name: 设置 Go 环境
         uses: actions/setup-go@v5
         with:
           go-version: 1.23
           cache: false
 
-      - name: Cache Go modules & build cache
+      - name: 缓存 Go 模块和构建缓存
         uses: actions/cache@v4
         with:
           path: |
@@ -48,91 +34,74 @@ jobs:
           restore-keys: |
             go-${{ inputs.os }}-
 
-      - name: Download Go modules
+      - name: 下载 Go 模块
         run: go mod download
 
-      - name: Install Task
+      - name: 为端到端测试设置 Python 环境
+        if: steps.e2e_changes.outputs.any_changed == 'true' || runner.os != 'Windows'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+          cache-dependency-path: 'ci_test/requirements-ci.txt'
+
+      - name: 检查未提交的生成文件
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            git config core.autocrlf false
+          fi
+          if [[ -n "$(git status --porcelain | grep '\.pb\.go')" ]]; then
+            echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交变更。"
+            git --no-pager diff
+            exit 1
+          else
+            echo "✅ Protobuf 文件已是最新。"
+          fi
+        shell: bash
+
+      - name: 执行 GolangCI-Lint 检查
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          install-mode: binary
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          only-new-issues: false
+          skip-cache: false
+
+      - name: 执行 Go 漏洞扫描
+        uses: golang/govulncheck-action@v1
+
+      - name: 安装 Task 工具
         uses: arduino/setup-task@v2
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache protoc
+      - name: 缓存并安装 Protobuf 编译器
         id: cache-protoc
         uses: actions/cache@v4
         with:
           path: ~/protoc
           key: protoc-25.3-${{ inputs.os }}
 
-      - name: Install Protobuf Compiler
+      - name: 安装 Protobuf 编译器（如未缓存）
         if: steps.cache-protoc.outputs.cache-hit != 'true'
         uses: arduino/setup-protoc@v2
         with:
           version: 25.3
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Go protobuf plugins
+      - name: 安装 Go 的 protobuf 插件
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
           echo "${HOME}/go/bin" >> $GITHUB_PATH
         shell: bash
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-          cache: pip
-          cache-dependency-path: |
-            requirements-ci.txt
-            ci_test/requirements-ci.txt
-
-      - name: Install Python deps
-        run: |
-          python -m pip install -q --upgrade pip
-          if [[ -f requirements-ci.txt ]]; then
-            python -m pip install -q -r requirements-ci.txt
-          elif [[ -f ci_test/requirements-ci.txt ]]; then
-            python -m pip install -q -r ci_test/requirements-ci.txt
-          else
-            python -m pip install -q grpcio grpcio-tools requests
-          fi
-        shell: bash
-
-      - name: Generate protobuf files
+      - name: 生成 Protobuf 文件
         run: task gen
 
-      - name: Run go vet
-        run: go vet ./...
-        shell: bash
-
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-
-      - name: Find changed Go/proto files
-        id: changed
-        uses: tj-actions/changed-files@v44
-        with:
-          files: |
-            **/*.go
-            **/*.proto
-
-      - name: Run unit tests (affected packages)
-        if: steps.changed.outputs.any_changed == 'true'
-        run: |
-          PKGS=$(echo "${{ steps.changed.outputs.all_changed_files }}" \
-                 | sed 's|\\|/|g' \
-                 | xargs -n1 dirname \
-                 | sort -u \
-                 | sed 's|^|./|')
-          echo "Packages to test: $PKGS"
-          if [[ -n "$PKGS" ]]; then
-            go test -v -race -failfast $PKGS
-          else
-            echo "No affected packages."
-          fi
-        shell: bash
-
-      - name: Build ArchiveAegisCore
+      - name: 构建 ArchiveAegisCore 可执行文件
+        id: build
         run: |
           set -euo pipefail
           mkdir -p AegisBuild
@@ -143,15 +112,52 @@ jobs:
                 echo "$p"; return
               fi
             done
-            echo "::error::未找到入口包 main.go" >&2
+            echo "::error::未找到入口文件 main.go" >&2
             exit 1
           }
           TARGET=$(detect_target)
-          echo "Detected entry package: $TARGET"
+          echo "检测到入口包: $TARGET"
           go build -o "AegisBuild/ArchiveAegisCore${EXT}" "$TARGET"
+          echo "binary_path=${{ github.workspace }}/AegisBuild/ArchiveAegisCore${EXT}" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Check for relevant changes for E2E tests
+      - name: 获取变更的文件（用于单元测试）
+        uses: tj-actions/changed-files@v44
+        id: changed-go-files
+        with:
+          files: |
+            **/*.go
+            **/*.proto
+
+      - name: 执行单元测试并生成覆盖率报告
+        if: steps.changed-go-files.outputs.any_changed == 'true'
+        run: |
+          PKGS=$(echo "${{ steps.changed-go-files.outputs.all_changed_files }}" \
+                 | sed 's|\\|/|g' \
+                 | xargs -n1 dirname \
+                 | sort -u \
+                 | sed 's|^|./|')
+          echo "需要测试的包: $PKGS"
+          if [[ -n "$PKGS" ]]; then
+            go test -v -race -failfast -coverprofile=coverage.out -covermode=atomic $PKGS
+          else
+            echo "没有检测到需测试的 Go 包。"
+          fi
+        shell: bash
+
+      - name: 转换测试覆盖率为 HTML 报告
+        if: steps.changed-go-files.outputs.any_changed == 'true'
+        run: go tool cover -html=coverage.out -o coverage-report.html
+
+      - name: 上传覆盖率报告
+        if: steps.changed-go-files.outputs.any_changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ inputs.os }}
+          path: coverage-report.html
+          retention-days: 7
+
+      - name: 检查是否有影响端到端测试的改动
         id: e2e_changes
         uses: tj-actions/changed-files@v44
         with:
@@ -163,59 +169,46 @@ jobs:
             go.mod
             go.sum
 
-      - name: Configure Windows Environment for Test
+      - name: 安装端到端测试所需 Python 依赖
+        if: steps.e2e_changes.outputs.any_changed == 'true' || runner.os != 'Windows'
+        run: |
+          python -m pip install -q --upgrade pip
+          if [[ -f ci_test/requirements-ci.txt ]]; then
+            python -m pip install -q -r ci_test/requirements-ci.txt
+          else
+            python -m pip install -q grpcio grpcio-tools requests
+          fi
+        shell: bash
+
+      - name: 配置 Windows 环境以进行端到端测试
         if: runner.os == 'Windows' && steps.e2e_changes.outputs.any_changed == 'true'
         run: |
-          echo "Disabling Windows Defender real-time monitoring..."
+          echo "正在禁用 Windows Defender 实时监控..."
           Set-MpPreference -DisableRealtimeMonitoring $true
-          echo "Adding firewall rule for port 10224..."
+          echo "正在添加防火墙规则以开放端口 10224..."
           New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
+          sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
         shell: powershell
 
-      - name: Increase test timeout on Windows
-        if: runner.os == 'Windows' && steps.e2e_changes.outputs.any_changed == 'true'
-        run: |
-          sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
-          cat ci_test/test_ratelimit.py
-        shell: bash
-
-      - name: Run e2e rate-limit test
+      - name: 执行端到端限流测试
         if: runner.os != 'Windows' || steps.e2e_changes.outputs.any_changed == 'true'
-        run: |
-          python ci_test/test_ratelimit.py
+        run: python ci_test/test_ratelimit.py
         shell: bash
         env:
-          AEGIS_BIN: ${{ github.workspace }}/AegisBuild/ArchiveAegisCore${{ runner.os == 'Windows' && '.exe' || '' }}
+          AEGIS_BIN: ${{ steps.build.outputs.binary_path }}
           AEGIS_BASE_URL: http://localhost:10224/api/v1
 
-      - name: Cleanup Windows Environment
-        if: runner.os == 'Windows' && always()
+      - name: 清理 Windows 测试环境
+        if: runner.os == 'Windows' && always() && steps.e2e_changes.outputs.any_changed == 'true'
         shell: powershell
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $false
-          Write-Host "Windows Defender real-time monitoring re‑enabled."
+          Write-Host "Windows Defender 实时监控已重新启用。"
           $rule = Get-NetFirewallRule -DisplayName "Allow Aegis Test Port" -ErrorAction SilentlyContinue
           if ($rule) {
-            Write-Host "Firewall rule found—removing..."
             Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
-            Write-Host "Firewall rule removed."
-          } else {
-            Write-Host "No firewall rule found—skipping removal."
+            Write-Host "已移除防火墙规则 'Allow Aegis Test Port'。"
           }
 
-      - name: Check for uncommitted generated files
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            git config core.autocrlf false
-          fi
-          if [[ -n "$(git status --porcelain | grep -v '^??')" ]]; then
-            echo "::error::Protobuf 编译文件未提交！请运行 'task gen' 并提交。"
-            git --no-pager diff
-            exit 1
-          else
-            echo "✅ Protobuf 文件已是最新，无需提交。"
-          fi
-        shell: bash
-
-      - name: All checks passed
-        run: echo "✅🎉 ${{ inputs.os }} CI 全部通过！"
+      - name: 所有检查通过
+        run: echo "✅🎉 ${{ inputs.os }} 的 CI 流程已全部成功通过！"

@@ -80,7 +80,7 @@ func GetDefaultBizConfig(bizName string) *domain.BizQueryConfig {
 	}
 }
 
-// 为满足接口要求，实现其他空方法
+// 为满足接口要求，实现其他空方法，只为占位。
 func (m *mockAdminConfigService) GetAllConfiguredBizNames(ctx context.Context) ([]string, error) {
 	return nil, nil
 }

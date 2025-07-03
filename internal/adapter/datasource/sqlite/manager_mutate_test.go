@@ -176,7 +176,7 @@ func TestHandleDataMutate(t *testing.T) {
 	})
 
 	t.Run("权限错误(AllowCreate=false)", func(t *testing.T) {
-		// 并行执行子测试
+		// 并行执行以下子测试
 		t.Parallel()
 
 		// 初始化数据库并设置禁止创建权限的业务配置

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -40,7 +41,7 @@ func (m *mockAdminConfigService) GetBizRateLimitSettings(ctx context.Context, bi
 	return nil, nil
 }
 
-// 其余方法在当前测试无关紧要，直接返回零值。
+// 其余方法在当前测试无关紧要，直接返回零值
 func (m *mockAdminConfigService) GetBizQueryConfig(ctx context.Context, bizName string) (*domain.BizQueryConfig, error) {
 	return nil, nil
 }
@@ -83,7 +84,9 @@ func (m *mockAdminConfigService) InvalidateAllCaches()                 {}
 // 一个最小化的处理器，便于验证限流行为。
 var testHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	if _, err := w.Write([]byte("OK")); err != nil {
+		panic(fmt.Sprintf("写入响应失败: %v", err))
+	}
 })
 
 // 将 Claim 嵌入请求上下文的辅助函数。

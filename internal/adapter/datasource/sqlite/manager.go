@@ -26,7 +26,7 @@ var _ port.Executor = (*Manager)(nil)
 var _ go_plugin_sdk.Plugin = (*Manager)(nil)
 
 const (
-	// debounceDuration 定义事件去抖动的时间间隔
+	// debounceDuration 定义事件去抖动时间间隔
 	debounceDuration = 2 * time.Second
 )
 
