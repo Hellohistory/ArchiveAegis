@@ -145,15 +145,7 @@ jobs:
 
       - name: 执行单元测试并生成覆盖率报告
         if: steps.changed-go-files.outputs.any_changed == 'true'
-        run: |
-          # 使用 go list ... 来安全地获取所有包
-          PKGS=$(go list ./... | grep -v /vendor/)
-          echo "需要测试的包: $PKGS"
-          if [[ -n "$PKGS" ]]; then
-            go test -v -race -failfast -coverprofile=coverage.out -covermode=atomic $PKGS
-          else
-            echo "没有检测到需测试的 Go 包。"
-          fi
+        run: go test -v -race -failfast -coverprofile=coverage.out -covermode=atomic ./...
         shell: bash
 
       - name: 转换测试覆盖率为 HTML 报告
