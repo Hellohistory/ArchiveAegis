@@ -26,7 +26,8 @@ if _version_not_supported:
 
 
 class DataSourceStub(object):
-    """Missing associated documentation comment in .proto file."""
+    """DataSource 服务定义插件通用的 RPC 接口
+    """
 
     def __init__(self, channel):
         """Constructor.
@@ -52,22 +53,26 @@ class DataSourceStub(object):
 
 
 class DataSourceServicer(object):
-    """Missing associated documentation comment in .proto file."""
+    """DataSource 服务定义插件通用的 RPC 接口
+    """
 
     def GetPluginInfo(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """获取插件基本信息
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def Execute(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """执行统一请求封装体
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def HealthCheck(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """执行健康检查
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -99,7 +104,8 @@ def add_DataSourceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class DataSource(object):
-    """Missing associated documentation comment in .proto file."""
+    """DataSource 服务定义插件通用的 RPC 接口
+    """
 
     @staticmethod
     def GetPluginInfo(request,
