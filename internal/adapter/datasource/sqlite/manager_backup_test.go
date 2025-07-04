@@ -95,14 +95,14 @@ func TestHandleTriggerBackup(t *testing.T) {
 				bizName:        "non_existent_biz",
 				destDir:        backupDestDir,
 				expectedCode:   codes.NotFound,
-				expectedErrMsg: "未找到业务 'non_existent_biz' 的任何数据库实例进行备份",
+				expectedErrMsg: "未找到业务 'non_existent_biz' 的数据库实例进行备份",
 			},
 			{
 				name:           "目标目录为空",
 				bizName:        bizName,
 				destDir:        "",
 				expectedCode:   codes.InvalidArgument,
-				expectedErrMsg: "备份目标目录 'backup_destination_dir' 不能为空",
+				expectedErrMsg: "备份目标目录不能为空",
 			},
 			{
 				name:           "无法创建目标目录",
