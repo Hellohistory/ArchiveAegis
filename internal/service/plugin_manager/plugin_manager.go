@@ -41,6 +41,12 @@ type RepositoryConfig struct {
 	Enabled bool   `mapstructure:"enabled"` // 是否启用
 }
 
+// GetExecutor 根据业务组名称（biz_name）获取对应的插件执行器。
+func (pm *PluginManager) GetExecutor(bizName string) (port.Executor, bool) {
+	// 直接委托给 LifecycleManager 的同名方法，该方法是线程安全的。
+	return pm.LifecycleManager.GetExecutor(bizName)
+}
+
 // NewPluginManager 创建并返回一个新的插件管理器实例
 func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, installDir string, registry map[string]port.Executor, closers *[]io.Closer) (*PluginManager, error) {
 	if db == nil {

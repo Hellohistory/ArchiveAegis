@@ -57,3 +57,11 @@ func NewLifecycleManager(
 		runningInstances: make(map[string]*runningInstance),
 	}
 }
+
+// GetExecutor 根据业务组名称安全地获取对应的插件执行器。
+func (lm *LifecycleManager) GetExecutor(bizName string) (port.Executor, bool) {
+	lm.runningInstancesMu.RLock()
+	defer lm.runningInstancesMu.RUnlock()
+	executor, ok := lm.executorRegistry[bizName]
+	return executor, ok
+}
