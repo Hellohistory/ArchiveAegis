@@ -147,6 +147,7 @@ type ResponseEnvelope struct {
 	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 请求唯一标识
 	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`                        // 执行状态
 	Payload       *anypb.Any             `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`                      // 响应负载
+	Action        string                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"`                        // 用于指导工作流下一步动作
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -200,6 +201,13 @@ func (x *ResponseEnvelope) GetPayload() *anypb.Any {
 		return x.Payload
 	}
 	return nil
+}
+
+func (x *ResponseEnvelope) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
 }
 
 // 状态信息结构
@@ -1154,12 +1162,13 @@ const file_datasource_v1_datasource_proto_rawDesc = "" +
 	"\apayload\x18\x04 \x01(\v2\x14.google.protobuf.AnyR\apayload\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x01\n" +
 	"\x10ResponseEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12*\n" +
 	"\x06status\x18\x02 \x01(\v2\x12.datasource.StatusR\x06status\x12.\n" +
-	"\apayload\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\apayload\"i\n" +
+	"\apayload\x18\x03 \x01(\v2\x14.google.protobuf.AnyR\apayload\x12\x16\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\"i\n" +
 	"\x06Status\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x121\n" +
