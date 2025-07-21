@@ -1,5 +1,5 @@
-// Package sqlite 提供 SQLite 数据源适配器及内置执行器的实现
-// 文件位置: internal/adapter/datasource/sqlite/manager.go
+// file: internal/adapter/datasource/sqlite/manager.go
+
 package sqlite
 
 import (
@@ -32,8 +32,8 @@ const (
 
 // dbInstance 封装单个业务数据库连接及其文件路径
 type dbInstance struct {
-	conn *sql.DB // 数据库连接实例
-	path string  // 数据库文件绝对路径
+	conn *sql.DB
+	path string
 }
 
 // Manager 是 SQLite 数据源适配器的核心结构体，
@@ -76,15 +76,26 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 	var responsePayload proto.Message
 	var err error
 
+	// 预先定义一个默认的成功 action，如果后续操作有更具体的 action，可以覆盖它
+	action := "success"
+
 	switch req.Payload.TypeUrl {
 	case _typeUrl(&v1.DataQueryRequest{}):
 		responsePayload, err = m.handleDataQuery(ctx, req)
+		action = "query_success" // 查询成功
 	case _typeUrl(&v1.DataMutateRequest{}):
+		// 对于写操作，返回更具体的 action
+		var mutateReq v1.DataMutateRequest
+		if unmarshalErr := req.Payload.UnmarshalTo(&mutateReq); unmarshalErr == nil {
+			action = mutateReq.Operation // 例如 "create", "update", "delete"
+		}
 		responsePayload, err = m.handleDataMutate(ctx, req)
 	case _typeUrl(&v1.GetSchemaRequest{}):
 		responsePayload, err = m.handleGetSchema(ctx, req)
+		action = "get_schema_success"
 	case _typeUrl(&v1.TriggerBackupRequest{}):
 		responsePayload, err = m.handleTriggerBackup(ctx, req)
+		action = "backup_success"
 	default:
 		err = status.Errorf(codes.Unimplemented, "不支持的载荷类型: %s", req.Payload.TypeUrl)
 	}
@@ -92,22 +103,27 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 	if err != nil {
 		slog.Error("内置 SQLite 执行器执行失败", "request_id", req.RequestId, "error", err)
 		st, _ := status.FromError(err)
+		// 失败时，action 默认为 "error"
 		return &v1.ResponseEnvelope{
 			RequestId: req.RequestId,
 			Status: &v1.Status{
 				Code:    int32(st.Code()),
 				Message: st.Message(),
 			},
+			Action: "error",
 		}, nil
 	}
 
+	// 成功处理，但没有返回体
 	if responsePayload == nil {
 		return &v1.ResponseEnvelope{
 			RequestId: req.RequestId,
 			Status:    &v1.Status{Code: int32(codes.OK), Message: "Success"},
+			Action:    action, // <-- 设置 action
 		}, nil
 	}
 
+	// 成功处理，有返回体
 	packedPayload, packErr := anypb.New(responsePayload)
 	if packErr != nil {
 		slog.Error("打包响应载荷失败", "request_id", req.RequestId, "error", packErr)
@@ -117,6 +133,7 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 				Code:    int32(codes.Internal),
 				Message: fmt.Sprintf("打包响应载荷失败: %v", packErr),
 			},
+			Action: "error",
 		}, nil
 	}
 
@@ -124,20 +141,18 @@ func (m *Manager) Execute(ctx context.Context, req *v1.RequestEnvelope) (*v1.Res
 		RequestId: req.RequestId,
 		Status:    &v1.Status{Code: int32(codes.OK), Message: "Success"},
 		Payload:   packedPayload,
+		Action:    action,
 	}, nil
 }
 
-// GracefulShutdown 是插件生命周期接口的优雅关闭入口，
-// 负责依次关闭所有业务数据库以及系统数据库连接
+// GracefulShutdown 优雅关闭
 func (m *Manager) GracefulShutdown(ctx context.Context) error {
 	slog.Info("开始执行 SQLite Manager 优雅关闭")
-
 	if err := m.Close(); err != nil {
 		slog.Error("关闭业务数据库失败", "error", err)
 	} else {
 		slog.Info("所有业务数据库连接已关闭")
 	}
-
 	if m.pluginSysDB != nil {
 		slog.Info("正在关闭插件系统数据库连接")
 		if err := m.pluginSysDB.Close(); err != nil {
@@ -149,7 +164,7 @@ func (m *Manager) GracefulShutdown(ctx context.Context) error {
 	return nil
 }
 
-// Close 安全地关闭所有业务数据库连接，并清空相关缓存
+// Close 安全地关闭所有业务数据库连接
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
