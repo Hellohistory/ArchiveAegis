@@ -62,7 +62,7 @@ func NewAegisStandardNode(id string) *AegisStandardNode {
 func (asn *AegisStandardNode) Execute(ctx context.Context, dataCtx *AegisDataContext) (string, any, error) {
 	prepRes, err := asn.PrepFunc(ctx, dataCtx)
 	if err != nil {
-		return "", nil, fmt.Errorf("Prep阶段失败: %w", err)
+		return "", nil, fmt.Errorf("prep阶段失败: %w", err)
 	}
 
 	var execRes any
@@ -90,7 +90,7 @@ func (asn *AegisStandardNode) Execute(ctx context.Context, dataCtx *AegisDataCon
 
 	action, err := asn.PostFunc(ctx, dataCtx, execRes)
 	if err != nil {
-		return "", nil, fmt.Errorf("Post阶段失败: %w", err)
+		return "", nil, fmt.Errorf("post阶段失败: %w", err)
 	}
 
 	return action, execRes, nil
@@ -149,7 +149,7 @@ func NewAegisParallelBatchNode(id string) *AegisParallelBatchNode {
 func (apbn *AegisParallelBatchNode) parallelExec(ctx context.Context, dataCtx *AegisDataContext, prepResult any) (any, error) {
 	items, ok := prepResult.([]any)
 	if !ok {
-		return nil, fmt.Errorf("Prep阶段未返回 []any 类型，无法进行并行处理")
+		return nil, fmt.Errorf("prep阶段未返回 []any 类型，无法进行并行处理")
 	}
 	if len(items) == 0 {
 		return []any{}, nil
