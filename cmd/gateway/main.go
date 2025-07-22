@@ -10,6 +10,7 @@ import (
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/service/admin_config"
 	"ArchiveAegis/internal/service/plugin_manager"
+	"ArchiveAegis/internal/service/workflow"
 	"ArchiveAegis/internal/transport/http/router"
 	"context"
 	"crypto/rand"
@@ -33,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "v1.0.0-alpha10"
+const version = "v1.0.0-alpha_12"
 
 // =============================================================================
 // 配置与应用核心结构体
@@ -64,6 +65,7 @@ type application struct {
 	logger             *slog.Logger                       // 日志记录器
 	pluginManager      *plugin_manager.PluginManager      // 插件管理器
 	adminConfigService port.QueryAdminConfigService       // 管理配置服务接口
+	workflowService    *workflow.Service                  // 工作流服务
 	rateLimiter        *aegmiddleware.BusinessRateLimiter // 业务限流器
 	executorRegistry   map[string]port.Executor           // 执行器注册表（按业务名映射）
 	closableAdapters   *[]io.Closer                       // 所有可关闭的资源集合
@@ -178,6 +180,12 @@ func build() (*application, error) {
 		return nil, err
 	}
 
+	// 立即初始化并检查错误
+	workflowSvc, err := workflow.NewService(sysDB, pm)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 WorkflowService 失败: %w", err)
+	}
+
 	rateLimiter := aegmiddleware.NewBusinessRateLimiter(adminConfigService, 10, 30)
 
 	// 启用性能分析服务
@@ -193,6 +201,7 @@ func build() (*application, error) {
 		logger:             slog.Default(),
 		pluginManager:      pm,
 		adminConfigService: adminConfigService,
+		workflowService:    workflowSvc,
 		rateLimiter:        rateLimiter,
 		executorRegistry:   executorRegistry,
 		closableAdapters:   &closableAdapters,

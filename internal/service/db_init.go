@@ -28,6 +28,9 @@ func InitPlatformTables(db *sql.DB) error {
 	if err := initSystemFeaturesTable(db); err != nil {
 		return fmt.Errorf("初始化系统功能表失败: %w", err)
 	}
+	if err := initWorkflowTables(db); err != nil {
+		return fmt.Errorf("初始化工作流表失败: %w", err)
+	}
 
 	log.Println("✅ 数据库: 所有系统表结构初始化/检查完成。")
 	return nil
@@ -224,4 +227,50 @@ func initPluginManagementTable(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// initWorkflowTables 创建工作流定义相关的核心表
+func initWorkflowTables(db *sql.DB) error {
+	// 工作流主表
+	queryWorkflows := `
+    CREATE TABLE IF NOT EXISTS workflows (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        trigger_type TEXT NOT NULL DEFAULT 'API',
+        start_node_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );`
+	if _, err := db.Exec(queryWorkflows); err != nil {
+		return fmt.Errorf("创建 'workflows' 表失败: %w", err)
+	}
+
+	// 工作流节点表
+	queryNodes := `
+    CREATE TABLE IF NOT EXISTS workflow_nodes (
+        id TEXT PRIMARY KEY NOT NULL,
+        workflow_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        node_type TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );`
+	if _, err := db.Exec(queryNodes); err != nil {
+		return fmt.Errorf("创建 'workflow_nodes' 表失败: %w", err)
+	}
+
+	// 工作流边表 (连接)
+	queryEdges := `
+    CREATE TABLE IF NOT EXISTS workflow_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_id TEXT NOT NULL,
+        source_node_id TEXT NOT NULL,
+        target_node_id TEXT NOT NULL,
+        action TEXT NOT NULL DEFAULT 'default',
+        condition_json TEXT,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );`
+	_, err := db.Exec(queryEdges)
+	return err
 }
