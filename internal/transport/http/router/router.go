@@ -9,6 +9,7 @@ import (
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/service/plugin_manager"
+	"ArchiveAegis/internal/service/workflow"
 	"ArchiveAegis/internal/transport/http/middleware"
 	"database/sql"
 	"encoding/json"
@@ -40,6 +41,7 @@ type Dependencies struct {
 	AuthDB             *sql.DB
 	SetupToken         string
 	SetupTokenDeadline time.Time
+	WorkflowService    *workflow.Service
 }
 
 // New 创建并配置一个基于 Gin 的 HTTP 路由器
@@ -86,7 +88,7 @@ func New(deps Dependencies) http.Handler {
 			metaGroup.GET("/presentations", presentationsHandlerV1(deps.AdminConfigService))
 		}
 
-		// --- 数据平面 (已重构) ---
+		// --- 数据平面 ---
 		dataGroup := apiV1.Group("/data")
 		dataGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
 		{
@@ -96,6 +98,13 @@ func New(deps Dependencies) http.Handler {
 
 			// 新增的统一执行端点
 			dataGroup.POST("/execute", executeHandler(deps.Registry))
+		}
+
+		// --- 工作流操作平面 ---
+		workflowGroup := apiV1.Group("/workflows")
+		workflowGroup.Use(authMiddleware(authService), WrapNetHTTP(deps.RateLimiter.FullBusinessChain))
+		{
+			workflowGroup.POST("/:workflow_id/run", runWorkflowHandler(deps.WorkflowService))
 		}
 
 		// --- 控制平面 (Admin) ---
@@ -137,6 +146,16 @@ func New(deps Dependencies) http.Handler {
 			{
 				securityGroup.GET("/rate-limiting/global", adminGetIPLimitSettingsHandler(deps.AdminConfigService))
 				securityGroup.PUT("/rate-limiting/global", adminUpdateIPLimitSettingsHandler(deps.AdminConfigService))
+			}
+
+			// -- 工作流管理 ---
+			adminWorkflowGroup := adminGroup.Group("/workflows")
+			{
+				adminWorkflowGroup.POST("/", createWorkflowHandler(deps.WorkflowService))
+				adminWorkflowGroup.GET("/", listWorkflowsHandler(deps.WorkflowService))
+				adminWorkflowGroup.GET("/:workflow_id", getWorkflowHandler(deps.WorkflowService))
+				adminWorkflowGroup.PUT("/:workflow_id", updateWorkflowHandler(deps.WorkflowService))
+				adminWorkflowGroup.DELETE("/:workflow_id", deleteWorkflowHandler(deps.WorkflowService))
 			}
 		}
 	}
@@ -782,5 +801,117 @@ func createInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Hand
 			"message":     "插件实例创建成功",
 			"instance_id": instanceID,
 		})
+	}
+}
+
+// =============================================================================
+//  工作流 API 处理器
+// =============================================================================
+
+// runWorkflowHandler 触发一个工作流的执行
+func runWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	type runPayload struct {
+		InitialParams map[string]any `json:"initial_params"`
+	}
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		var payload runPayload
+		if err := c.ShouldBindJSON(&payload); err != nil && err.Error() != "EOF" {
+			_ = c.Error(err)
+			return
+		}
+		if payload.InitialParams == nil {
+			payload.InitialParams = make(map[string]any)
+		}
+
+		finalAction, err := workflowService.RunWorkflow(c.Request.Context(), workflowID, payload.InitialParams)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":       "completed",
+			"workflow_id":  workflowID,
+			"final_action": finalAction,
+		})
+	}
+}
+
+// createWorkflowHandler 创建一个新的工作流定义
+func createWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var payload workflow.FullWorkflowPayload
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		createdWorkflow, err := workflowService.CreateWorkflow(c.Request.Context(), payload.Workflow, payload.Nodes, payload.Edges)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusCreated, createdWorkflow)
+	}
+}
+
+// listWorkflowsHandler 列出所有工作流
+func listWorkflowsHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflows, err := workflowService.ListWorkflows(c.Request.Context())
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		if workflows == nil {
+			workflows = []domain.Workflow{}
+		}
+		c.JSON(http.StatusOK, workflows)
+	}
+}
+
+// getWorkflowHandler 获取单个工作流的完整定义
+func getWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		getWorkflow, err := workflowService.GetWorkflow(c.Request.Context(), workflowID)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, getWorkflow)
+	}
+}
+
+// updateWorkflowHandler 更新一个工作流的定义
+func updateWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		var payload workflow.FullWorkflowPayload
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		payload.Workflow.ID = workflowID
+
+		updatedWorkflow, err := workflowService.UpdateWorkflow(c.Request.Context(), payload.Workflow, payload.Nodes, payload.Edges)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, updatedWorkflow)
+	}
+}
+
+// deleteWorkflowHandler 删除一个工作流
+func deleteWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		if err := workflowService.DeleteWorkflow(c.Request.Context(), workflowID); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.Status(http.StatusNoContent)
 	}
 }
