@@ -101,7 +101,7 @@ func (s *Service) buildAegisRunnable(ctx context.Context, flowID string, initial
 			}
 			ast, issues := s.celEnv.Compile(condDef.Expression)
 			if issues != nil && issues.Err() != nil {
-				return nil, fmt.Errorf("编译边 %v 的条件表达式 '%s' 失败: %w", condDef.Expression, issues.Err())
+				return nil, fmt.Errorf("编译边 %v 的条件表达式 '%s' 失败: %w", edgeRecord.ID, condDef.Expression, issues.Err())
 			}
 			prg, err := s.celEnv.Program(ast)
 			if err != nil {
@@ -140,12 +140,17 @@ func (s *Service) buildAegisRunnable(ctx context.Context, flowID string, initial
 // =============================================================================
 
 // CreateWorkflow 在数据库中创建一个新的完整工作流定义。
-func (s *Service) CreateWorkflow(ctx context.Context, workflow domain.Workflow, nodes []domain.WorkflowNode, edges []domain.WorkflowEdge) (*FullWorkflowPayload, error) {
+func (s *Service) CreateWorkflow(ctx context.Context, workflow domain.Workflow, nodes []domain.WorkflowNode, edges []domain.WorkflowEdge) (payload *FullWorkflowPayload, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("开启事务失败: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		rErr := tx.Rollback()
+		if rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			err = fmt.Errorf("事务回滚失败: %v, 原有错误: %w", rErr, err)
+		}
+	}()
 
 	// 如果没有提供ID，则生成一个新的UUID
 	if workflow.ID == "" {
@@ -163,8 +168,7 @@ func (s *Service) CreateWorkflow(ctx context.Context, workflow domain.Workflow, 
 	const insertNode = `INSERT INTO workflow_nodes (id, workflow_id, name, node_type, config_json) VALUES (?, ?, ?, ?, ?)`
 	for _, node := range nodes {
 		node.WorkflowID = workflow.ID // 确保关联正确
-		_, err := tx.ExecContext(ctx, insertNode, node.ID, node.WorkflowID, node.Name, node.NodeType, node.Config)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, insertNode, node.ID, node.WorkflowID, node.Name, node.NodeType, node.Config); err != nil {
 			return nil, fmt.Errorf("插入节点 '%s' 失败: %w", node.Name, err)
 		}
 	}
@@ -173,13 +177,13 @@ func (s *Service) CreateWorkflow(ctx context.Context, workflow domain.Workflow, 
 	const insertEdge = `INSERT INTO workflow_edges (workflow_id, source_node_id, target_node_id, action, condition_json) VALUES (?, ?, ?, ?, ?)`
 	for _, edge := range edges {
 		edge.WorkflowID = workflow.ID // 确保关联正确
-		_, err := tx.ExecContext(ctx, insertEdge, edge.WorkflowID, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, insertEdge, edge.WorkflowID, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition); err != nil {
 			return nil, fmt.Errorf("插入从 '%s' 到 '%s' 的边失败: %w", edge.SourceNodeID, edge.TargetNodeID, err)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	// 提交事务
+	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("提交事务失败: %w", err)
 	}
 
@@ -188,23 +192,30 @@ func (s *Service) CreateWorkflow(ctx context.Context, workflow domain.Workflow, 
 }
 
 // ListWorkflows 返回所有已定义的工作流（仅基础信息）。
-func (s *Service) ListWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+func (s *Service) ListWorkflows(ctx context.Context) (workflows []domain.Workflow, err error) {
 	const query = `SELECT id, name, description, trigger_type, start_node_id FROM workflows ORDER BY name`
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("查询工作流列表失败: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil && err == nil {
+			err = fmt.Errorf("关闭数据库结果集失败: %w", cErr)
+		}
+	}()
 
-	var workflows []domain.Workflow
 	for rows.Next() {
 		var wf domain.Workflow
-		if err := rows.Scan(&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.StartNodeID); err != nil {
+		if err = rows.Scan(&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.StartNodeID); err != nil {
 			return nil, fmt.Errorf("扫描工作流数据失败: %w", err)
 		}
 		workflows = append(workflows, wf)
 	}
-	return workflows, rows.Err()
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历工作流列表时出错: %w", err)
+	}
+	return workflows, nil
 }
 
 // GetWorkflow 返回一个工作流的完整定义（包括节点和边）。
@@ -213,12 +224,17 @@ func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (*FullWork
 }
 
 // UpdateWorkflow 更新一个已存在的工作流。采用“先删除旧的子记录，再插入新的”策略。
-func (s *Service) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, nodes []domain.WorkflowNode, edges []domain.WorkflowEdge) (*FullWorkflowPayload, error) {
+func (s *Service) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, nodes []domain.WorkflowNode, edges []domain.WorkflowEdge) (payload *FullWorkflowPayload, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("开启更新事务失败: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		rErr := tx.Rollback()
+		if rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			err = fmt.Errorf("事务回滚失败: %v, 原有错误: %w", rErr, err)
+		}
+	}()
 
 	// 更新主记录
 	const updateWorkflow = `UPDATE workflows SET name = ?, description = ?, trigger_type = ?, start_node_id = ? WHERE id = ?`
@@ -232,11 +248,11 @@ func (s *Service) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, 
 
 	// 删除旧的节点和边
 	const deleteNodes = `DELETE FROM workflow_nodes WHERE workflow_id = ?`
-	if _, err := tx.ExecContext(ctx, deleteNodes, workflow.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, deleteNodes, workflow.ID); err != nil {
 		return nil, fmt.Errorf("删除旧节点失败: %w", err)
 	}
 	const deleteEdges = `DELETE FROM workflow_edges WHERE workflow_id = ?`
-	if _, err := tx.ExecContext(ctx, deleteEdges, workflow.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, deleteEdges, workflow.ID); err != nil {
 		return nil, fmt.Errorf("删除旧边失败: %w", err)
 	}
 
@@ -244,7 +260,7 @@ func (s *Service) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, 
 	const insertNode = `INSERT INTO workflow_nodes (id, workflow_id, name, node_type, config_json) VALUES (?, ?, ?, ?, ?)`
 	for _, node := range nodes {
 		node.WorkflowID = workflow.ID
-		if _, err := tx.ExecContext(ctx, insertNode, node.ID, node.WorkflowID, node.Name, node.NodeType, node.Config); err != nil {
+		if _, err = tx.ExecContext(ctx, insertNode, node.ID, node.WorkflowID, node.Name, node.NodeType, node.Config); err != nil {
 			return nil, fmt.Errorf("插入新节点 '%s' 失败: %w", node.Name, err)
 		}
 	}
@@ -253,12 +269,12 @@ func (s *Service) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, 
 	const insertEdge = `INSERT INTO workflow_edges (workflow_id, source_node_id, target_node_id, action, condition_json) VALUES (?, ?, ?, ?, ?)`
 	for _, edge := range edges {
 		edge.WorkflowID = workflow.ID
-		if _, err := tx.ExecContext(ctx, insertEdge, edge.WorkflowID, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition); err != nil {
+		if _, err = tx.ExecContext(ctx, insertEdge, edge.WorkflowID, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition); err != nil {
 			return nil, fmt.Errorf("插入新边 '%s' -> '%s' 失败: %w", edge.SourceNodeID, edge.TargetNodeID, err)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("提交更新事务失败: %w", err)
 	}
 
@@ -282,16 +298,22 @@ func (s *Service) DeleteWorkflow(ctx context.Context, workflowID string) error {
 }
 
 // getWorkflowInternal 是一个内部辅助函数，用于在一个事务中获取完整的工作流定义。
-func (s *Service) getWorkflowInternal(ctx context.Context, workflowID string) (*FullWorkflowPayload, error) {
+func (s *Service) getWorkflowInternal(ctx context.Context, workflowID string) (payload *FullWorkflowPayload, err error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("开启只读事务失败: %w", err)
 	}
-	defer tx.Rollback()
+	// 对于只读事务，Rollback是关闭它的正确方式。
+	defer func() {
+		rErr := tx.Rollback()
+		if rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			err = fmt.Errorf("事务回滚失败: %v, 原有错误: %w", rErr, err)
+		}
+	}()
 
 	var wf domain.Workflow
 	queryWorkflow := `SELECT id, name, description, trigger_type, start_node_id FROM workflows WHERE id = ?`
-	if err := tx.QueryRowContext(ctx, queryWorkflow, workflowID).Scan(&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.StartNodeID); err != nil {
+	if err = tx.QueryRowContext(ctx, queryWorkflow, workflowID).Scan(&wf.ID, &wf.Name, &wf.Description, &wf.TriggerType, &wf.StartNodeID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("未找到 ID 为 '%s' 的工作流", workflowID)
 		}
@@ -304,15 +326,20 @@ func (s *Service) getWorkflowInternal(ctx context.Context, workflowID string) (*
 	if err != nil {
 		return nil, fmt.Errorf("查询节点失败: %w", err)
 	}
-	defer rowsNodes.Close()
+	defer func() {
+		if cErr := rowsNodes.Close(); cErr != nil && err == nil {
+			err = fmt.Errorf("关闭节点结果集失败: %w", cErr)
+		}
+	}()
+
 	for rowsNodes.Next() {
 		var node domain.WorkflowNode
-		if err := rowsNodes.Scan(&node.ID, &node.WorkflowID, &node.Name, &node.NodeType, &node.Config); err != nil {
+		if err = rowsNodes.Scan(&node.ID, &node.WorkflowID, &node.Name, &node.NodeType, &node.Config); err != nil {
 			return nil, fmt.Errorf("扫描节点数据失败: %w", err)
 		}
 		nodes = append(nodes, node)
 	}
-	if err := rowsNodes.Err(); err != nil {
+	if err = rowsNodes.Err(); err != nil {
 		return nil, fmt.Errorf("遍历节点时出错: %w", err)
 	}
 
@@ -322,15 +349,20 @@ func (s *Service) getWorkflowInternal(ctx context.Context, workflowID string) (*
 	if err != nil {
 		return nil, fmt.Errorf("查询边失败: %w", err)
 	}
-	defer rowsEdges.Close()
+	defer func() {
+		if cErr := rowsEdges.Close(); cErr != nil && err == nil {
+			err = fmt.Errorf("关闭边结果集失败: %w", cErr)
+		}
+	}()
+
 	for rowsEdges.Next() {
 		var edge domain.WorkflowEdge
-		if err := rowsEdges.Scan(&edge.ID, &edge.WorkflowID, &edge.SourceNodeID, &edge.TargetNodeID, &edge.Action, &edge.Condition); err != nil {
+		if err = rowsEdges.Scan(&edge.ID, &edge.WorkflowID, &edge.SourceNodeID, &edge.TargetNodeID, &edge.Action, &edge.Condition); err != nil {
 			return nil, fmt.Errorf("扫描边数据失败: %w", err)
 		}
 		edges = append(edges, edge)
 	}
-	if err := rowsEdges.Err(); err != nil {
+	if err = rowsEdges.Err(); err != nil {
 		return nil, fmt.Errorf("遍历边时出错: %w", err)
 	}
 
@@ -375,20 +407,25 @@ func (s *Service) UpdateNode(ctx context.Context, workflowID string, nodeID stri
 }
 
 // DeleteNode 删除单个节点，并清除所有与之相关的边。
-func (s *Service) DeleteNode(ctx context.Context, workflowID string, nodeID string) error {
+func (s *Service) DeleteNode(ctx context.Context, workflowID string, nodeID string) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开启删除节点事务失败: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		rErr := tx.Rollback()
+		if rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			err = fmt.Errorf("事务回滚失败: %v, 原有错误: %w", rErr, err)
+		}
+	}()
 
-	// 1. 删除所有指向或来自该节点的边
+	// 删除所有指向或来自该节点的边
 	const deleteEdges = `DELETE FROM workflow_edges WHERE workflow_id = ? AND (source_node_id = ? OR target_node_id = ?)`
-	if _, err := tx.ExecContext(ctx, deleteEdges, workflowID, nodeID, nodeID); err != nil {
+	if _, err = tx.ExecContext(ctx, deleteEdges, workflowID, nodeID, nodeID); err != nil {
 		return fmt.Errorf("删除节点 '%s' 的关联边失败: %w", nodeID, err)
 	}
 
-	// 2. 删除节点本身
+	// 删除节点本身
 	const deleteNode = `DELETE FROM workflow_nodes WHERE id = ? AND workflow_id = ?`
 	res, err := tx.ExecContext(ctx, deleteNode, nodeID, workflowID)
 	if err != nil {
@@ -414,6 +451,7 @@ func (s *Service) AddEdge(ctx context.Context, workflowID string, edge domain.Wo
 
 	id, err := res.LastInsertId()
 	if err != nil {
+		// 注意: LastInsertId 可能不被所有数据库驱动支持 (例如 PostgreSQL)。
 		return nil, fmt.Errorf("获取新边的ID失败: %w", err)
 	}
 	edge.ID = id
@@ -468,7 +506,7 @@ func (s *Service) createAegisDataTransformNode(nodeID string, configData json.Ra
 	for key, expr := range config.Mappings {
 		compiled, err := jmespath.Compile(expr)
 		if err != nil {
-			return nil, fmt.Errorf("编译节点 '%s' 的 JMESPath 表达式 '%s' 失败: %w", expr, err)
+			return nil, fmt.Errorf("编译节点(key: %s)的 JMESPath 表达式 '%s' 失败: %w", key, expr, err)
 		}
 		compiledMappings[key] = compiled
 	}
