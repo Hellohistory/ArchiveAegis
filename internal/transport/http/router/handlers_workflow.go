@@ -4,7 +4,9 @@ package router
 import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/service/workflow"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,11 +18,28 @@ func registerWorkflowExecutionRoutes(group *gin.RouterGroup, deps Dependencies) 
 
 // registerWorkflowAdminRoutes 注册面向管理员的工作流管理（增删改查）路由。
 func registerWorkflowAdminRoutes(group *gin.RouterGroup, deps Dependencies) {
+	// --- 工作流级别的 CRUD ---
 	group.POST("/", createWorkflowHandler(deps.WorkflowService))
 	group.GET("/", listWorkflowsHandler(deps.WorkflowService))
 	group.GET("/:workflow_id", getWorkflowHandler(deps.WorkflowService))
 	group.PUT("/:workflow_id", updateWorkflowHandler(deps.WorkflowService))
 	group.DELETE("/:workflow_id", deleteWorkflowHandler(deps.WorkflowService))
+
+	// --- 节点级别的 CRUD ---
+	nodesGroup := group.Group("/:workflow_id/nodes")
+	{
+		nodesGroup.POST("/", addNodeHandler(deps.WorkflowService))
+		nodesGroup.PUT("/:node_id", updateNodeHandler(deps.WorkflowService))
+		nodesGroup.DELETE("/:node_id", deleteNodeHandler(deps.WorkflowService))
+	}
+
+	// --- 边级别的 CRUD ---
+	edgesGroup := group.Group("/:workflow_id/edges")
+	{
+		edgesGroup.POST("/", addEdgeHandler(deps.WorkflowService))
+		edgesGroup.PUT("/:edge_id", updateEdgeHandler(deps.WorkflowService))
+		edgesGroup.DELETE("/:edge_id", deleteEdgeHandler(deps.WorkflowService))
+	}
 }
 
 // =============================================================================
@@ -133,6 +152,128 @@ func deleteWorkflowHandler(workflowService *workflow.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		workflowID := c.Param("workflow_id")
 		if err := workflowService.DeleteWorkflow(c.Request.Context(), workflowID); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	}
+}
+
+// =============================================================================
+//  工作流节点和边精细化管理处理器
+// =============================================================================
+
+// --- Node Handlers ---
+
+func addNodeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		var node domain.WorkflowNode
+		if err := c.ShouldBindJSON(&node); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		createdNode, err := workflowService.AddNode(c.Request.Context(), workflowID, node)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusCreated, createdNode)
+	}
+}
+
+func updateNodeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		nodeID := c.Param("node_id")
+		var node domain.WorkflowNode
+		if err := c.ShouldBindJSON(&node); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		updatedNode, err := workflowService.UpdateNode(c.Request.Context(), workflowID, nodeID, node)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, updatedNode)
+	}
+}
+
+func deleteNodeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		nodeID := c.Param("node_id")
+
+		if err := workflowService.DeleteNode(c.Request.Context(), workflowID, nodeID); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	}
+}
+
+// --- Edge Handlers ---
+
+func addEdgeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		var edge domain.WorkflowEdge
+		if err := c.ShouldBindJSON(&edge); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		createdEdge, err := workflowService.AddEdge(c.Request.Context(), workflowID, edge)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusCreated, createdEdge)
+	}
+}
+
+func updateEdgeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		edgeID := c.Param("edge_id") // 注意：边ID是自增整数，需要类型转换
+
+		var edge domain.WorkflowEdge
+		if err := c.ShouldBindJSON(&edge); err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		// Gin的Param返回字符串，需要转换为int64
+		id, err := strconv.ParseInt(edgeID, 10, 64)
+		if err != nil {
+			c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
+			return
+		}
+
+		updatedEdge, err := workflowService.UpdateEdge(c.Request.Context(), workflowID, id, edge)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.JSON(http.StatusOK, updatedEdge)
+	}
+}
+
+func deleteEdgeHandler(workflowService *workflow.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		workflowID := c.Param("workflow_id")
+		edgeID := c.Param("edge_id")
+
+		id, err := strconv.ParseInt(edgeID, 10, 64)
+		if err != nil {
+			c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
+			return
+		}
+
+		if err := workflowService.DeleteEdge(c.Request.Context(), workflowID, id); err != nil {
 			_ = c.Error(err)
 			return
 		}

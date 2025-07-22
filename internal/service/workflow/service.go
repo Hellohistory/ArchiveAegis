@@ -338,6 +338,117 @@ func (s *Service) getWorkflowInternal(ctx context.Context, workflowID string) (*
 }
 
 // =============================================================================
+//  工作流细化管理 (Granular Admin CRUD)
+// =============================================================================
+
+// --- Node Methods ---
+
+// AddNode 向现有工作流中添加一个新节点。
+func (s *Service) AddNode(ctx context.Context, workflowID string, node domain.WorkflowNode) (*domain.WorkflowNode, error) {
+	node.WorkflowID = workflowID
+	if node.ID == "" {
+		node.ID = uuid.New().String()
+	}
+
+	const query = `INSERT INTO workflow_nodes (id, workflow_id, name, node_type, config_json) VALUES (?, ?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, query, node.ID, node.WorkflowID, node.Name, node.NodeType, node.Config)
+	if err != nil {
+		return nil, fmt.Errorf("向工作流 '%s' 添加节点 '%s' 失败: %w", workflowID, node.Name, err)
+	}
+
+	return &node, nil
+}
+
+// UpdateNode 更新单个节点的配置（目前只允许更新名称和配置）。
+func (s *Service) UpdateNode(ctx context.Context, workflowID string, nodeID string, node domain.WorkflowNode) (*domain.WorkflowNode, error) {
+	const query = `UPDATE workflow_nodes SET name = ?, config_json = ? WHERE id = ? AND workflow_id = ?`
+	res, err := s.db.ExecContext(ctx, query, node.Name, node.Config, nodeID, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("更新节点 '%s' 失败: %w", nodeID, err)
+	}
+	if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
+		return nil, fmt.Errorf("未找到要更新的节点: %s", nodeID)
+	}
+	node.ID = nodeID
+	node.WorkflowID = workflowID
+	return &node, nil
+}
+
+// DeleteNode 删除单个节点，并清除所有与之相关的边。
+func (s *Service) DeleteNode(ctx context.Context, workflowID string, nodeID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启删除节点事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. 删除所有指向或来自该节点的边
+	const deleteEdges = `DELETE FROM workflow_edges WHERE workflow_id = ? AND (source_node_id = ? OR target_node_id = ?)`
+	if _, err := tx.ExecContext(ctx, deleteEdges, workflowID, nodeID, nodeID); err != nil {
+		return fmt.Errorf("删除节点 '%s' 的关联边失败: %w", nodeID, err)
+	}
+
+	// 2. 删除节点本身
+	const deleteNode = `DELETE FROM workflow_nodes WHERE id = ? AND workflow_id = ?`
+	res, err := tx.ExecContext(ctx, deleteNode, nodeID, workflowID)
+	if err != nil {
+		return fmt.Errorf("删除节点 '%s' 失败: %w", nodeID, err)
+	}
+	if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
+		return fmt.Errorf("未找到要删除的节点: %s", nodeID)
+	}
+
+	return tx.Commit()
+}
+
+// --- Edge Methods ---
+
+// AddEdge 向现有工作流中添加一条新边。
+func (s *Service) AddEdge(ctx context.Context, workflowID string, edge domain.WorkflowEdge) (*domain.WorkflowEdge, error) {
+	edge.WorkflowID = workflowID
+	const query = `INSERT INTO workflow_edges (workflow_id, source_node_id, target_node_id, action, condition_json) VALUES (?, ?, ?, ?, ?)`
+	res, err := s.db.ExecContext(ctx, query, edge.WorkflowID, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition)
+	if err != nil {
+		return nil, fmt.Errorf("添加从 '%s' 到 '%s' 的边失败: %w", edge.SourceNodeID, edge.TargetNodeID, err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("获取新边的ID失败: %w", err)
+	}
+	edge.ID = id
+	return &edge, nil
+}
+
+// UpdateEdge 更新单条边的配置。
+func (s *Service) UpdateEdge(ctx context.Context, workflowID string, edgeID int64, edge domain.WorkflowEdge) (*domain.WorkflowEdge, error) {
+	const query = `UPDATE workflow_edges SET source_node_id = ?, target_node_id = ?, action = ?, condition_json = ? WHERE id = ? AND workflow_id = ?`
+	res, err := s.db.ExecContext(ctx, query, edge.SourceNodeID, edge.TargetNodeID, edge.Action, edge.Condition, edgeID, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("更新边 '%d' 失败: %w", edgeID, err)
+	}
+	if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
+		return nil, fmt.Errorf("未找到要更新的边: %d", edgeID)
+	}
+	edge.ID = edgeID
+	edge.WorkflowID = workflowID
+	return &edge, nil
+}
+
+// DeleteEdge 删除单条边。
+func (s *Service) DeleteEdge(ctx context.Context, workflowID string, edgeID int64) error {
+	const query = `DELETE FROM workflow_edges WHERE id = ? AND workflow_id = ?`
+	res, err := s.db.ExecContext(ctx, query, edgeID, workflowID)
+	if err != nil {
+		return fmt.Errorf("删除边 '%d' 失败: %w", edgeID, err)
+	}
+	if rowsAffected, _ := res.RowsAffected(); rowsAffected == 0 {
+		return fmt.Errorf("未找到要删除的边: %d", edgeID)
+	}
+	return nil
+}
+
+// =============================================================================
 // 节点创建辅助函数 (Node Factory Helper Functions)
 // =============================================================================
 
