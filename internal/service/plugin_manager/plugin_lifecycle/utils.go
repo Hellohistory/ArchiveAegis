@@ -3,6 +3,7 @@
 package plugin_lifecycle
 
 import (
+	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/adapter/datasource/grpc_client"
 	"ArchiveAegis/internal/core/domain"
 	"context"
@@ -17,8 +18,8 @@ import (
 	"time"
 )
 
-// tryConnectPlugin 尝试连接插件的 gRPC 服务，包含健康检查与重试机制。
-func (lm *LifecycleManager) tryConnectPlugin(address, instanceID string) (*grpc_client.ClientAdapter, error) {
+// tryConnectPlugin 尝试连接插件的 gRPC 服务，包含健康检查与重试机制，并返回协议版本。
+func (lm *LifecycleManager) tryConnectPlugin(address, instanceID string) (*grpc_client.ClientAdapter, string, error) {
 	var adapter *grpc_client.ClientAdapter
 	var err error
 	baseDelay := time.Second
@@ -28,25 +29,36 @@ func (lm *LifecycleManager) tryConnectPlugin(address, instanceID string) (*grpc_
 
 		adapter, err = grpc_client.New(address)
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err = adapter.HealthCheck(ctx)
-			cancel()
-			if err == nil {
-				log.Printf("✅ [LifecycleManager] 成功连接插件 '%s'", instanceID)
-				return adapter, nil
+			infoCtx, cancelInfo := context.WithTimeout(context.Background(), 3*time.Second)
+			infoResp, infoErr := adapter.GetPluginInfo(infoCtx)
+			cancelInfo()
+			if infoErr != nil {
+				err = fmt.Errorf("获取插件信息失败: %w", infoErr)
+			} else if compatErr := ensureProtocolCompatible(infoResp.GetContractVersion()); compatErr != nil {
+				_ = adapter.Close()
+				return nil, "", compatErr
+			} else {
+				healthCtx, cancelHealth := context.WithTimeout(context.Background(), 2*time.Second)
+				healthErr := adapter.HealthCheck(healthCtx)
+				cancelHealth()
+				if healthErr == nil {
+					version := formatAPIVersion(infoResp.GetContractVersion())
+					log.Printf("✅ [LifecycleManager] 成功连接插件 '%s'，协议版本 %s", instanceID, version)
+					return adapter, version, nil
+				}
+				err = healthErr
 			}
 		}
 
 		if adapter != nil {
-			adapter.Close()
+			_ = adapter.Close()
 		}
-
 		if i < 4 {
 			time.Sleep(baseDelay << i)
 		}
 	}
 
-	return nil, fmt.Errorf("连接插件 '%s' 超过最大重试次数: %w", instanceID, err)
+	return nil, "", fmt.Errorf("连接插件 '%s' 超过最大重试次数: %w", instanceID, err)
 }
 
 // getInstanceAssetPath 构造指定插件实例的资产文件路径。
@@ -117,4 +129,24 @@ func findVersion(versions []domain.PluginVersion, versionStr string) *domain.Plu
 		}
 	}
 	return nil
+}
+
+func ensureProtocolCompatible(ver *datasourcev1.ApiVersion) error {
+	if ver == nil {
+		return fmt.Errorf("%w: 插件未声明协议版本", ErrIncompatibleProtocol)
+	}
+	if ver.Major != gatewayProtocolMajor {
+		return fmt.Errorf("%w: 主版本不兼容 (插件: %d, 宿主: %d)", ErrIncompatibleProtocol, ver.Major, gatewayProtocolMajor)
+	}
+	if ver.Minor > gatewayProtocolMinor {
+		return fmt.Errorf("%w: 插件需要更高的协议次版本 %d.%d.%d", ErrIncompatibleProtocol, ver.Major, ver.Minor, ver.Patch)
+	}
+	return nil
+}
+
+func formatAPIVersion(ver *datasourcev1.ApiVersion) string {
+	if ver == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d", ver.Major, ver.Minor, ver.Patch)
 }

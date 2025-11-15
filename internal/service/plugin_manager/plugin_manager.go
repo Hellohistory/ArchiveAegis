@@ -34,6 +34,8 @@ type PluginManager struct {
 	catalogMu sync.RWMutex
 }
 
+var ErrInstanceNotRunning = plugin_lifecycle.ErrInstanceNotRunning
+
 // RepositoryConfig 表示插件仓库的配置项
 type RepositoryConfig struct {
 	Name    string `mapstructure:"name"`    // 仓库名称
@@ -45,6 +47,11 @@ type RepositoryConfig struct {
 func (pm *PluginManager) GetExecutor(bizName string) (port.Executor, bool) {
 	// 直接委托给 LifecycleManager 的同名方法，该方法是线程安全的。
 	return pm.LifecycleManager.GetExecutor(bizName)
+}
+
+// Reload 重新加载指定插件实例。
+func (pm *PluginManager) Reload(instanceID string) error {
+	return pm.LifecycleManager.Reload(instanceID)
 }
 
 // NewPluginManager 创建并返回一个新的插件管理器实例
@@ -102,6 +109,7 @@ func NewPluginManager(db *sql.DB, rootDir string, repos []RepositoryConfig, inst
 
 	// 将初始化好的 LifecycleManager 赋值给嵌入的字段
 	pm.LifecycleManager = lifecycleMgr
+	lifecycleMgr.StartHealthChecks(15 * time.Second)
 
 	return pm, nil
 }

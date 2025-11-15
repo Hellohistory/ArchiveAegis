@@ -247,11 +247,11 @@ func updateEdgeHandler(workflowService *workflow.Service) gin.HandlerFunc {
 		}
 
 		// Gin的Param返回字符串，需要转换为int64
-		id, err := strconv.ParseInt(edgeID, 10, 64)
-		if err != nil {
-			c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
-			return
-		}
+               id, err := strconv.ParseInt(edgeID, 10, 64)
+               if err != nil {
+                       _ = c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
+                       return
+               }
 
 		updatedEdge, err := workflowService.UpdateEdge(c.Request.Context(), workflowID, id, edge)
 		if err != nil {
@@ -267,11 +267,11 @@ func deleteEdgeHandler(workflowService *workflow.Service) gin.HandlerFunc {
 		workflowID := c.Param("workflow_id")
 		edgeID := c.Param("edge_id")
 
-		id, err := strconv.ParseInt(edgeID, 10, 64)
-		if err != nil {
-			c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
-			return
-		}
+               id, err := strconv.ParseInt(edgeID, 10, 64)
+               if err != nil {
+                       _ = c.Error(fmt.Errorf("无效的边ID: %s", edgeID))
+                       return
+               }
 
 		if err := workflowService.DeleteEdge(c.Request.Context(), workflowID, id); err != nil {
 			_ = c.Error(err)

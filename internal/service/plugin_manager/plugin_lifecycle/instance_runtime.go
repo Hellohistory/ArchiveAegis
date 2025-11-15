@@ -4,6 +4,7 @@ package plugin_lifecycle
 
 import (
 	"ArchiveAegis/internal/core/domain"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -15,15 +16,37 @@ import (
 	"time"
 )
 
+var (
+	ErrInstanceAlreadyRunning = errors.New("插件实例正在运行")
+	ErrInstanceNotRunning     = errors.New("插件实例未运行")
+	ErrIncompatibleProtocol   = errors.New("不兼容的插件协议版本")
+)
+
+const (
+	gatewayProtocolMajor   = 1
+	gatewayProtocolMinor   = 0
+	gatewayProtocolPatch   = 0
+	healthFailureThreshold = 3
+	circuitOpenDuration    = 45 * time.Second
+	heartbeatLossThreshold = 30 * time.Second
+	maxRecoveryAttempts    = 3
+)
+
 // Start 启动指定插件实例。
 // 启动过程包括实例配置读取、命令构造、进程启动、状态记录及运行时注册。
 func (lm *LifecycleManager) Start(instanceID string) (err error) {
 	lm.runningInstancesMu.Lock()
-	if _, isRunning := lm.runningInstances[instanceID]; isRunning {
-		lm.runningInstancesMu.Unlock()
-		return fmt.Errorf("插件实例 '%s' 已经在运行中", instanceID)
+	state, exists := lm.runningInstances[instanceID]
+	if !exists {
+		state = &runningInstance{}
+		lm.runningInstances[instanceID] = state
 	}
-	lm.runningInstances[instanceID] = &runningInstance{}
+	if state.cmd != nil {
+		lm.runningInstancesMu.Unlock()
+		return fmt.Errorf("%w: %s", ErrInstanceAlreadyRunning, instanceID)
+	}
+	state.healthStatus = HealthStatusRecovering
+	state.failureCount = 0
 	lm.runningInstancesMu.Unlock()
 
 	defer func() {
@@ -34,8 +57,8 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 
 	var inst domain.PluginInstance
 	var installPath string
-	query := `SELECT pi.display_name, pi.plugin_id, pi.version, pi.biz_name, pi.port, ip.install_path 
-              FROM plugin_instances pi 
+	query := `SELECT pi.display_name, pi.plugin_id, pi.version, pi.biz_name, pi.port, ip.install_path
+              FROM plugin_instances pi
               JOIN installed_plugins ip ON pi.plugin_id = ip.plugin_id AND pi.version = ip.version
               WHERE pi.instance_id = ?`
 	if err = lm.db.QueryRow(query, instanceID).Scan(&inst.DisplayName, &inst.PluginID, &inst.Version, &inst.BizName, &inst.Port, &installPath); err != nil {
@@ -93,15 +116,16 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 	}
 
 	lm.runningInstancesMu.Lock()
-	if ri, ok := lm.runningInstances[instanceID]; ok {
-		ri.cmd = cmd
-		ri.bizName = inst.BizName
-	} else {
+	state, ok = lm.runningInstances[instanceID]
+	if !ok {
 		lm.runningInstancesMu.Unlock()
-		log.Printf("[LifecycleManager] CRITICAL: 实例 '%s' 占位符丢失", instanceID)
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("实例 '%s' 状态不一致", instanceID)
 	}
+	state.cmd = cmd
+	state.bizName = inst.BizName
+	state.pid = cmd.Process.Pid
+	state.healthStatus = HealthStatusRecovering
 	lm.runningInstancesMu.Unlock()
 
 	log.Printf("[LifecycleManager] 插件实例 '%s' (%s) 已启动，PID: %d，日志路径: %s", inst.DisplayName, instanceID, cmd.Process.Pid, logPath)
@@ -112,23 +136,24 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 			StatusRunning, time.Now(), instanceID)
 	}()
 
-	go lm.registerAndMonitorPlugin(cmd, instanceID, "localhost:"+strconv.Itoa(inst.Port), inst.BizName)
+	go lm.registerAndMonitorPlugin(cmd, instanceID, inst)
 	return nil
 }
 
 // Stop 停止指定插件实例。
 // 尝试发送 SIGTERM 实现优雅停止，若超时则执行强制终止。
 func (lm *LifecycleManager) Stop(instanceID string) error {
-	lm.runningInstancesMu.RLock()
-	ri, isRunning := lm.runningInstances[instanceID]
-	lm.runningInstancesMu.RUnlock()
-
-	if !isRunning || ri.cmd == nil {
+	lm.runningInstancesMu.Lock()
+	ri, exists := lm.runningInstances[instanceID]
+	if !exists || ri.cmd == nil {
+		lm.runningInstancesMu.Unlock()
 		_, _ = lm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", StatusStopped, instanceID)
-		return fmt.Errorf("插件实例 '%s' 并未在运行中", instanceID)
+		return ErrInstanceNotRunning
 	}
-
 	cmd := ri.cmd
+	ri.healthStatus = HealthStatusRecovering
+	lm.runningInstancesMu.Unlock()
+
 	log.Printf("[LifecycleManager] INFO: 正在优雅停止插件实例 '%s' (PID: %d)", instanceID, cmd.Process.Pid)
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
@@ -161,6 +186,14 @@ func (lm *LifecycleManager) forceKill(instanceID string, cmd *exec.Cmd) error {
 	return fmt.Errorf("插件 '%s' 被强制终止", instanceID)
 }
 
+// Reload 停止并重新启动插件实例，实现热重载功能。
+func (lm *LifecycleManager) Reload(instanceID string) error {
+	if err := lm.Stop(instanceID); err != nil && !errors.Is(err, ErrInstanceNotRunning) {
+		return err
+	}
+	return lm.Start(instanceID)
+}
+
 // cleanupAfterStop 清理插件实例停止后的所有运行状态与资源。
 func (lm *LifecycleManager) cleanupAfterStop(instanceID string) {
 	lm.runningInstancesMu.Lock()
@@ -169,13 +202,6 @@ func (lm *LifecycleManager) cleanupAfterStop(instanceID string) {
 		lm.runningInstancesMu.Unlock()
 		return
 	}
-	delete(lm.runningInstances, instanceID)
-	lm.runningInstancesMu.Unlock()
-
-	pidPath, err := lm.getInstanceAssetPath(instanceID, "pid")
-	if err == nil {
-		cleanupPIDFile(pidPath)
-	}
 
 	if ri.bizName != "" {
 		delete(lm.executorRegistry, ri.bizName)
@@ -183,7 +209,19 @@ func (lm *LifecycleManager) cleanupAfterStop(instanceID string) {
 	}
 
 	if ri.adapter != nil {
-		ri.adapter.Close()
+		_ = ri.adapter.Close()
+	}
+
+	ri.cmd = nil
+	ri.executor = nil
+	ri.adapter = nil
+	ri.pid = 0
+	ri.healthStatus = HealthStatusUnreachable
+	lm.runningInstancesMu.Unlock()
+
+	pidPath, err := lm.getInstanceAssetPath(instanceID, "pid")
+	if err == nil {
+		cleanupPIDFile(pidPath)
 	}
 
 	log.Printf("[LifecycleManager] 插件实例 '%s' 已停止", instanceID)
@@ -193,7 +231,16 @@ func (lm *LifecycleManager) cleanupAfterStop(instanceID string) {
 // cleanupFailedStart 清理因启动失败而占用的实例状态。
 func (lm *LifecycleManager) cleanupFailedStart(instanceID string) {
 	lm.runningInstancesMu.Lock()
-	delete(lm.runningInstances, instanceID)
+	if ri, ok := lm.runningInstances[instanceID]; ok {
+		if ri.cmd != nil && ri.cmd.Process != nil {
+			_ = ri.cmd.Process.Kill()
+		}
+		ri.cmd = nil
+		ri.executor = nil
+		ri.adapter = nil
+		ri.pid = 0
+		ri.healthStatus = HealthStatusUnreachable
+	}
 	lm.runningInstancesMu.Unlock()
 	log.Printf("[LifecycleManager] 已清理启动失败的实例 '%s'", instanceID)
 }
