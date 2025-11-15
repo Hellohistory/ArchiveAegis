@@ -181,7 +181,7 @@ jobs:
           echo "正在添加防火墙规则以开放端口 10224..."
           New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
           # 增加 E2E 测试的超时时间
-          sed -i 's/_wait_until_ready(timeout=45)/_wait_until_ready(timeout=120)/' ci_test/test_ratelimit.py
+          (Get-Content ci_test/test_ratelimit.py) -replace '_wait_until_ready\(timeout=45\)', '_wait_until_ready(timeout=120)' | Set-Content -Encoding UTF8 ci_test/test_ratelimit.py
         shell: powershell
 
       - name: 执行端到端限流测试
@@ -201,7 +201,7 @@ jobs:
           $rule = Get-NetFirewallRule -DisplayName "Allow Aegis Test Port" -ErrorAction SilentlyContinue
           if ($rule) {
             Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
-            Write-Host "已移除防火墙规则 'Allow Aegis Test Port'。"
+            Write-Host '已移除防火墙规则 "Allow Aegis Test Port"。'
           }
 
       - name: 所有检查通过
