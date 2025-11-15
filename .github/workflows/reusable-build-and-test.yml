@@ -151,6 +151,7 @@ jobs:
       - name: 转换测试覆盖率为 HTML 报告
         if: steps.changed-go-files.outputs.any_changed == 'true'
         run: go tool cover -html=coverage.out -o coverage-report.html
+        shell: bash
 
       - name: 上传覆盖率报告
         if: steps.changed-go-files.outputs.any_changed == 'true'
