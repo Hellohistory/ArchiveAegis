@@ -1,0 +1,93 @@
+{
+  "_comment": "文件位置: docs/schemas/plugin.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ArchiveAegis 插件声明",
+  "type": "object",
+  "required": ["id", "name", "versions"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "插件唯一标识"
+    },
+    "name": {
+      "type": "string",
+      "description": "插件展示名称"
+    },
+    "description": {
+      "type": "string",
+      "description": "插件简要描述"
+    },
+    "author": {
+      "type": "string",
+      "description": "插件作者信息"
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "用于分类的标签"
+    },
+    "supported_biz_names": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "支持的业务组列表"
+    },
+    "versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["version_string", "min_gateway_version", "source", "execution"],
+        "properties": {
+          "version_string": {
+            "type": "string",
+            "pattern": "^v?\\d+\\.\\d+\\.\\d+$",
+            "description": "语义化版本号"
+          },
+          "release_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "版本发布日期"
+          },
+          "changelog": {
+            "type": "string",
+            "description": "更新说明"
+          },
+          "min_gateway_version": {
+            "type": "string",
+            "description": "兼容的最低主程序版本"
+          },
+          "source": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "插件包下载地址"
+              },
+              "checksum": {
+                "type": "string",
+                "description": "可选的 SHA 校验值"
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "required": ["entrypoint"],
+            "properties": {
+              "entrypoint": {
+                "type": "string",
+                "description": "插件启动可执行文件"
+              },
+              "args": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "传递给插件的参数，可包含 <port> 等占位符"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

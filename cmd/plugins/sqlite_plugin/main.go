@@ -30,6 +30,9 @@ func main() {
 		Type:                  "SQL",                   // 插件类型
 		DescriptionMarkdown:   pluginDescription,       // 插件说明
 		SupportedCapabilities: []string{"AGGREGATION"}, // 支持的能力标识
+		Meta: go_plugin_sdk.PluginMeta{
+			SupportedProtocolVersion: "1.0.0",
+		},
 	}
 
 	// 定义插件初始化逻辑，返回插件实例

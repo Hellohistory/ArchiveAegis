@@ -6,9 +6,19 @@ import (
 	"ArchiveAegis/internal/core/domain"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+type runtimeSnapshot struct {
+	pid              int
+	healthStatus     string
+	lastHeartbeat    time.Time
+	failureCount     int
+	circuitOpenUntil time.Time
+	protocolVersion  string
+}
 
 // CreateInstance 在数据库中创建插件实例配置。
 // 包括校验业务名称唯一性、分配实例 ID 和端口，并写入数据库。
@@ -56,6 +66,7 @@ func (lm *LifecycleManager) ListInstances() (_ []domain.PluginInstance, retErr e
 	}()
 
 	runningSet := lm.snapshotRunningInstanceIDs()
+	runtimeStates := lm.snapshotRuntimeStates()
 	var instances []domain.PluginInstance
 	for rows.Next() {
 		var inst domain.PluginInstance
@@ -68,6 +79,9 @@ func (lm *LifecycleManager) ListInstances() (_ []domain.PluginInstance, retErr e
 			continue
 		}
 		lm.reconcileStatus(&inst, runningSet)
+		if snap, ok := runtimeStates[inst.InstanceID]; ok {
+			lm.enrichRuntimeInfo(&inst, snap)
+		}
 		instances = append(instances, inst)
 	}
 
@@ -81,13 +95,15 @@ func (lm *LifecycleManager) ListInstances() (_ []domain.PluginInstance, retErr e
 // DeleteInstance 删除数据库中指定插件实例配置。
 // 仅在插件实例未运行时允许删除。
 func (lm *LifecycleManager) DeleteInstance(instanceID string) error {
-	lm.runningInstancesMu.RLock()
-	_, isRunning := lm.runningInstances[instanceID]
-	lm.runningInstancesMu.RUnlock()
-
-	if isRunning {
-		return fmt.Errorf("无法删除正在运行的插件实例 '%s'，请先停止它", instanceID)
+	lm.runningInstancesMu.Lock()
+	if state, exists := lm.runningInstances[instanceID]; exists {
+		if state.cmd != nil {
+			lm.runningInstancesMu.Unlock()
+			return fmt.Errorf("无法删除正在运行的插件实例 '%s'，请先停止它", instanceID)
+		}
+		delete(lm.runningInstances, instanceID)
 	}
+	lm.runningInstancesMu.Unlock()
 
 	res, err := lm.db.Exec("DELETE FROM plugin_instances WHERE instance_id = ?", instanceID)
 	if err != nil {
@@ -110,8 +126,10 @@ func (lm *LifecycleManager) snapshotRunningInstanceIDs() map[string]struct{} {
 	defer lm.runningInstancesMu.RUnlock()
 
 	clone := make(map[string]struct{}, len(lm.runningInstances))
-	for id := range lm.runningInstances {
-		clone[id] = struct{}{}
+	for id, state := range lm.runningInstances {
+		if state != nil && state.cmd != nil {
+			clone[id] = struct{}{}
+		}
 	}
 	return clone
 }
@@ -134,4 +152,59 @@ func (lm *LifecycleManager) reconcileStatus(inst *domain.PluginInstance, running
 			log.Printf("⚠️ [LifecycleManager] 插件实例状态修正失败 (实例: %s): %v", inst.InstanceID, err)
 		}
 	}
+}
+
+func (lm *LifecycleManager) snapshotRuntimeStates() map[string]runtimeSnapshot {
+	lm.runningInstancesMu.RLock()
+	defer lm.runningInstancesMu.RUnlock()
+
+	snapshot := make(map[string]runtimeSnapshot, len(lm.runningInstances))
+	for id, state := range lm.runningInstances {
+		if state == nil {
+			continue
+		}
+		health := state.healthStatus
+		if health == "" {
+			health = HealthStatusUnreachable
+		}
+		snapshot[id] = runtimeSnapshot{
+			pid:              state.pid,
+			healthStatus:     health,
+			lastHeartbeat:    state.lastHeartbeat,
+			failureCount:     state.failureCount,
+			circuitOpenUntil: state.circuitOpenUntil,
+			protocolVersion:  state.protocolVersion,
+		}
+	}
+	return snapshot
+}
+
+func (lm *LifecycleManager) enrichRuntimeInfo(inst *domain.PluginInstance, snap runtimeSnapshot) {
+	if snap.pid > 0 {
+		inst.RuntimePID = intPtr(snap.pid)
+	}
+	inst.HealthStatus = snap.healthStatus
+	if !snap.lastHeartbeat.IsZero() {
+		inst.LastHeartbeat = timePtr(snap.lastHeartbeat)
+	}
+	if snap.failureCount > 0 {
+		inst.FailureCount = intPtr(snap.failureCount)
+	}
+	if !snap.circuitOpenUntil.IsZero() {
+		inst.CircuitOpenUntil = timePtr(snap.circuitOpenUntil)
+		inst.CircuitBreakerOpen = snap.circuitOpenUntil.After(time.Now())
+	} else {
+		inst.CircuitBreakerOpen = false
+	}
+	inst.ProtocolVersion = snap.protocolVersion
+}
+
+func intPtr(v int) *int {
+	val := v
+	return &val
+}
+
+func timePtr(t time.Time) *time.Time {
+	val := t
+	return &val
 }

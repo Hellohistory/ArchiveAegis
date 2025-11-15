@@ -4,12 +4,15 @@ package go_plugin_sdk
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,10 +59,16 @@ func Serve(info PluginInfo, initializer Initializer) error {
 
 	grpcServer := grpc.NewServer()
 
+	apiVersion, err := parseProtocolVersion(info.Meta.SupportedProtocolVersion)
+	if err != nil {
+		return fmt.Errorf("插件声明的协议版本不合法: %w", err)
+	}
+
 	s := &grpcPluginServer{
 		logic:      pluginLogic,
 		info:       info,
 		pluginName: cfg.PluginName,
+		protocol:   apiVersion,
 	}
 
 	datasourcev1.RegisterDataSourceServer(grpcServer, s)
@@ -97,6 +106,7 @@ type grpcPluginServer struct {
 	logic      Plugin     // 插件的业务逻辑实例
 	info       PluginInfo // 插件元信息
 	pluginName string     // 插件实例名称
+	protocol   *datasourcev1.ApiVersion
 }
 
 // GetPluginInfo 返回插件的基本信息及支持能力
@@ -106,7 +116,7 @@ func (s *grpcPluginServer) GetPluginInfo(context.Context, *datasourcev1.GetPlugi
 		Version:             s.info.Version,
 		Type:                s.info.Type,
 		DescriptionMarkdown: s.info.DescriptionMarkdown,
-		ContractVersion:     &datasourcev1.ApiVersion{Major: 1, Minor: 0, Patch: 0},
+		ContractVersion:     s.protocol,
 		SupportedPayloads: []string{
 			typeURL(&datasourcev1.DataQueryRequest{}),
 			typeURL(&datasourcev1.DataMutateRequest{}),
@@ -133,4 +143,31 @@ func (s *grpcPluginServer) Execute(ctx context.Context, req *datasourcev1.Reques
 // typeURL 返回 Protobuf 消息类型的 URL 表示
 func typeURL(m proto.Message) string {
 	return "type.googleapis.com/" + string(m.ProtoReflect().Descriptor().FullName())
+}
+
+func parseProtocolVersion(version string) (*datasourcev1.ApiVersion, error) {
+	if strings.TrimSpace(version) == "" {
+		// 默认保持 1.0.0 以兼容旧插件
+		return &datasourcev1.ApiVersion{Major: 1, Minor: 0, Patch: 0}, nil
+	}
+
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("协议版本 '%s' 必须为 'major.minor.patch' 形式", version)
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return nil, errors.New("协议主版本必须为整数")
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, errors.New("协议次版本必须为整数")
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return nil, errors.New("协议修订版本必须为整数")
+	}
+
+	return &datasourcev1.ApiVersion{Major: int32(major), Minor: int32(minor), Patch: int32(patch)}, nil
 }

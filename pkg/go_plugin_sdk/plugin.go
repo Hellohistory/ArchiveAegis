@@ -20,6 +20,11 @@ type Plugin interface {
 	GracefulShutdown(ctx context.Context) error
 }
 
+// PluginMeta 描述插件在运行时需要向宿主声明的协议能力信息。
+type PluginMeta struct {
+	SupportedProtocolVersion string // 插件支持的插件协议版本 (SemVer)
+}
+
 // PluginInfo 表示插件的元数据信息
 type PluginInfo struct {
 	Name                  string   // 插件名称
@@ -27,6 +32,7 @@ type PluginInfo struct {
 	Type                  string   // 插件类型
 	DescriptionMarkdown   string   // 插件说明（Markdown 格式）
 	SupportedCapabilities []string // 插件支持的功能列表
+	Meta                  PluginMeta
 }
 
 // PluginConfig 表示插件初始化时提供的配置项

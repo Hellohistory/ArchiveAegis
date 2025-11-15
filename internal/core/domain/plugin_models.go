@@ -50,14 +50,21 @@ type Execution struct {
 
 // PluginInstance 表示一个已配置的插件实例
 type PluginInstance struct {
-	InstanceID    string       `json:"instance_id"`     // 插件实例唯一标识符
-	DisplayName   string       `json:"display_name"`    // 实例展示名称
-	PluginID      string       `json:"plugin_id"`       // 所属插件标识符
-	Version       string       `json:"version"`         // 使用的插件版本
-	BizName       string       `json:"biz_name"`        // 所属业务组名称
-	Port          int          `json:"port"`            // 插件监听端口
-	Status        string       `json:"status"`          // 插件当前状态
-	Enabled       bool         `json:"enabled"`         // 插件是否启用
-	CreatedAt     time.Time    `json:"created_at"`      // 插件实例创建时间
-	LastStartedAt sql.NullTime `json:"last_started_at"` // 插件最近启动时间
+        InstanceID    string       `json:"instance_id"`     // 插件实例唯一标识符
+        DisplayName   string       `json:"display_name"`    // 实例展示名称
+        PluginID      string       `json:"plugin_id"`       // 所属插件标识符
+        Version       string       `json:"version"`         // 使用的插件版本
+        BizName       string       `json:"biz_name"`        // 所属业务组名称
+        Port          int          `json:"port"`            // 插件监听端口
+        Status        string       `json:"status"`          // 插件当前状态
+        Enabled       bool         `json:"enabled"`         // 插件是否启用
+        CreatedAt     time.Time    `json:"created_at"`      // 插件实例创建时间
+        LastStartedAt sql.NullTime `json:"last_started_at"` // 插件最近启动时间
+        RuntimePID          *int        `json:"runtime_pid,omitempty"`           // 当前运行的进程 PID
+        HealthStatus        string      `json:"health_status,omitempty"`         // 运行时健康状态
+        LastHeartbeat       *time.Time  `json:"last_heartbeat,omitempty"`        // 最近一次心跳时间
+        FailureCount        *int        `json:"failure_count,omitempty"`         // 连续失败次数
+        CircuitOpenUntil    *time.Time  `json:"circuit_open_until,omitempty"`    // 熔断恢复时间
+        ProtocolVersion     string      `json:"protocol_version,omitempty"`     // 插件声明的协议版本
+        CircuitBreakerOpen  bool        `json:"circuit_breaker_open,omitempty"` // 是否处于熔断
 }

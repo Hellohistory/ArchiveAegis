@@ -4,6 +4,7 @@ package router
 import (
 	"ArchiveAegis/internal/core/domain"
 	"ArchiveAegis/internal/service/plugin_manager"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -19,6 +20,7 @@ func registerPluginAdminRoutes(group *gin.RouterGroup, deps Dependencies) {
 	group.DELETE("/instances/:instance_id", deleteInstanceHandler(deps.PluginManager))
 	group.POST("/instances/:instance_id/start", startInstanceHandler(deps.PluginManager))
 	group.POST("/instances/:instance_id/stop", stopInstanceHandler(deps.PluginManager))
+	group.POST("/instances/:instance_id/reload", reloadInstanceHandler(deps.PluginManager))
 }
 
 // =============================================================================
@@ -124,9 +126,24 @@ func stopInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.Handle
 	return func(c *gin.Context) {
 		instanceID := c.Param("instance_id")
 		if err := pluginManager.Stop(instanceID); err != nil {
+			if errors.Is(err, plugin_manager.ErrInstanceNotRunning) {
+				c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已处于停止状态。", instanceID)})
+				return
+			}
 			_ = c.Error(fmt.Errorf("停止插件实例 '%s' 失败: %w", instanceID, err))
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功停止。", instanceID)})
+	}
+}
+
+func reloadInstanceHandler(pluginManager *plugin_manager.PluginManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		instanceID := c.Param("instance_id")
+		if err := pluginManager.Reload(instanceID); err != nil {
+			_ = c.Error(fmt.Errorf("重载插件实例 '%s' 失败: %w", instanceID, err))
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("插件实例 '%s' 已成功重载。", instanceID)})
 	}
 }
