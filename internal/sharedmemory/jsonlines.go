@@ -80,7 +80,9 @@ func ReadJSONLines(handle *datasourcev1.SharedMemoryHandle) ([]map[string]any, e
 	if err != nil {
 		return nil, fmt.Errorf("mmap 映射失败: %w", err)
 	}
-	defer mm.Unmap()
+	defer func() {
+		_ = mm.Unmap()
+	}()
 
 	data := mm
 	if handle.Length > 0 && int64(len(mm)) > handle.Length {

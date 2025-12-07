@@ -64,11 +64,11 @@ func TestExpandResponseIfHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("展开句柄失败: %v", err)
 	}
-	var result datasourcev1.DataQueryResult
-	if err := expanded.Payload.UnmarshalTo(&result); err != nil {
+	result := &datasourcev1.DataQueryResult{}
+	if err := expanded.Payload.UnmarshalTo(result); err != nil {
 		t.Fatalf("解包展开结果失败: %v", err)
 	}
 	if result.GetData().GetFields()["items"].GetListValue().GetValues()[0].GetStructValue().GetFields()["name"].GetStringValue() != "carol" {
-		t.Fatalf("展开结果数据不正确: %+v", result)
+		t.Fatalf("展开结果数据不正确: %+v", result.GetData())
 	}
 }

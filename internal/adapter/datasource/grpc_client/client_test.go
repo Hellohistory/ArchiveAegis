@@ -134,7 +134,11 @@ func TestClientAdapter_ExecuteSharedMemory(t *testing.T) {
 	}
 	grpcServer := grpc.NewServer()
 	datasourcev1.RegisterDataSourceServer(grpcServer, server)
-	go grpcServer.Serve(lis)
+	go func() {
+		if serveErr := grpcServer.Serve(lis); serveErr != nil {
+			t.Fatalf("gRPC 服务启动失败: %v", serveErr)
+		}
+	}()
 	t.Cleanup(func() {
 		grpcServer.Stop()
 		if server.lastHandlePath != "" {
@@ -152,12 +156,12 @@ func TestClientAdapter_ExecuteSharedMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute 失败: %v", err)
 	}
-	var result datasourcev1.DataQueryResult
-	if err := resp.GetPayload().UnmarshalTo(&result); err != nil {
+	result := &datasourcev1.DataQueryResult{}
+	if err := resp.GetPayload().UnmarshalTo(result); err != nil {
 		t.Fatalf("解包共享内存展开结果失败: %v", err)
 	}
 	if result.GetData().GetFields()["items"].GetListValue().GetValues()[0].GetStructValue().GetFields()["name"].GetStringValue() != "bulk" {
-		t.Fatalf("展开后的数据内容不正确: %+v", result)
+		t.Fatalf("展开后的数据内容不正确: %+v", result.GetData())
 	}
 }
 
