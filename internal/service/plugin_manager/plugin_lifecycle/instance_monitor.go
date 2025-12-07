@@ -115,7 +115,7 @@ func (lm *LifecycleManager) performAllHealthChecks() {
 	ids := make([]string, 0, len(lm.runningInstances))
 	now := time.Now()
 	for id, state := range lm.runningInstances {
-		if state.executor == nil || state.cmd == nil {
+		if state == nil || state.executor == nil {
 			continue
 		}
 		if !state.circuitOpenUntil.IsZero() && now.Before(state.circuitOpenUntil) {

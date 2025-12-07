@@ -32,9 +32,12 @@ const (
 type runningInstance struct {
 	cmd      *exec.Cmd                  // 插件进程命令对象
 	bizName  string                     // 所属业务组名称
-	executor port.Executor              // gRPC 执行器
+	executor port.Executor              // 插件执行器
 	adapter  *grpc_client.ClientAdapter // gRPC 客户端适配器
 	pid      int                        // 插件进程 PID
+
+	mode   string    // 运行时类型: process/wasm
+	closer io.Closer // 需要在停止时关闭的额外资源
 
 	protocolVersion      string    // 协议版本声明
 	lastHeartbeat        time.Time // 最近一次健康检查成功时间

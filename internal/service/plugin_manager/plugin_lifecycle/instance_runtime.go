@@ -3,7 +3,9 @@
 package plugin_lifecycle
 
 import (
+	"ArchiveAegis/internal/adapter/datasource/wasm"
 	"ArchiveAegis/internal/core/domain"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -30,6 +32,8 @@ const (
 	circuitOpenDuration    = 45 * time.Second
 	heartbeatLossThreshold = 30 * time.Second
 	maxRecoveryAttempts    = 3
+	runtimeProcess         = "process"
+	runtimeWasm            = "wasm"
 )
 
 // Start 启动指定插件实例。
@@ -41,7 +45,7 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 		state = &runningInstance{}
 		lm.runningInstances[instanceID] = state
 	}
-	if state.cmd != nil {
+	if state.cmd != nil || state.executor != nil {
 		lm.runningInstancesMu.Unlock()
 		return fmt.Errorf("%w: %s", ErrInstanceAlreadyRunning, instanceID)
 	}
@@ -73,6 +77,15 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 	targetVersion := findVersion(manifest.Versions, inst.Version)
 	if targetVersion == nil {
 		return fmt.Errorf("插件 '%s' 的已安装版本 '%s' 的清单信息未找到", inst.PluginID, inst.Version)
+	}
+
+	runtimeKind := strings.ToLower(strings.TrimSpace(targetVersion.Execution.Runtime))
+	if runtimeKind == "" {
+		runtimeKind = runtimeProcess
+	}
+
+	if runtimeKind == runtimeWasm {
+		return lm.startWasmInstance(instanceID, inst, targetVersion, installPath)
 	}
 
 	cmdPath := filepath.Join(installPath, targetVersion.Execution.Entrypoint)
@@ -126,6 +139,8 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 	state.bizName = inst.BizName
 	state.pid = cmd.Process.Pid
 	state.healthStatus = HealthStatusRecovering
+	state.mode = runtimeProcess
+	state.closer = nil
 	lm.runningInstancesMu.Unlock()
 
 	log.Printf("[LifecycleManager] 插件实例 '%s' (%s) 已启动，PID: %d，日志路径: %s", inst.DisplayName, instanceID, cmd.Process.Pid, logPath)
@@ -140,15 +155,72 @@ func (lm *LifecycleManager) Start(instanceID string) (err error) {
 	return nil
 }
 
+func (lm *LifecycleManager) startWasmInstance(instanceID string, inst domain.PluginInstance, targetVersion *domain.PluginVersion, installPath string) error {
+	wasmPath := filepath.Join(installPath, targetVersion.Execution.Entrypoint)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	executor, info, err := wasm.NewExecutor(ctx, wasmPath, targetVersion.Execution)
+	if err != nil {
+		return fmt.Errorf("启动 wasm 插件失败: %w", err)
+	}
+
+	if compatErr := ensureProtocolCompatible(info.GetContractVersion()); compatErr != nil {
+		_ = executor.Close()
+		return compatErr
+	}
+
+	lm.runningInstancesMu.Lock()
+	state, ok := lm.runningInstances[instanceID]
+	if !ok {
+		lm.runningInstancesMu.Unlock()
+		_ = executor.Close()
+		return fmt.Errorf("实例 '%s' 状态不一致", instanceID)
+	}
+	state.executor = executor
+	state.adapter = nil
+	state.mode = runtimeWasm
+	state.closer = executor
+	state.healthStatus = HealthStatusHealthy
+	state.failureCount = 0
+	state.circuitOpenUntil = time.Time{}
+	state.lastHeartbeat = time.Now()
+	state.protocolVersion = formatAPIVersion(info.GetContractVersion())
+	state.bizName = inst.BizName
+	if inst.BizName != "" {
+		lm.executorRegistry[inst.BizName] = executor
+	}
+	*lm.closableAdapters = append(*lm.closableAdapters, executor)
+	lm.runningInstancesMu.Unlock()
+
+	go func() {
+		_, _ = lm.db.Exec(
+			"UPDATE plugin_instances SET status = ?, last_started_at = ? WHERE instance_id = ?",
+			StatusRunning, time.Now(), instanceID,
+		)
+	}()
+
+	log.Printf("[LifecycleManager] wasm 插件实例 '%s' 已启动并注册执行器。", instanceID)
+	return nil
+}
+
 // Stop 停止指定插件实例。
 // 尝试发送 SIGTERM 实现优雅停止，若超时则执行强制终止。
 func (lm *LifecycleManager) Stop(instanceID string) error {
 	lm.runningInstancesMu.Lock()
 	ri, exists := lm.runningInstances[instanceID]
-	if !exists || ri.cmd == nil {
+	if !exists || (ri.cmd == nil && ri.executor == nil) {
 		lm.runningInstancesMu.Unlock()
 		_, _ = lm.db.Exec("UPDATE plugin_instances SET status = ? WHERE instance_id = ?", StatusStopped, instanceID)
 		return ErrInstanceNotRunning
+	}
+	if ri.mode == runtimeWasm {
+		if ri.closer != nil {
+			_ = ri.closer.Close()
+		}
+		lm.runningInstancesMu.Unlock()
+		lm.cleanupAfterStop(instanceID)
+		return nil
 	}
 	cmd := ri.cmd
 	ri.healthStatus = HealthStatusRecovering
@@ -211,11 +283,16 @@ func (lm *LifecycleManager) cleanupAfterStop(instanceID string) {
 	if ri.adapter != nil {
 		_ = ri.adapter.Close()
 	}
+	if ri.closer != nil && ri.mode == runtimeWasm {
+		_ = ri.closer.Close()
+	}
 
 	ri.cmd = nil
 	ri.executor = nil
 	ri.adapter = nil
 	ri.pid = 0
+	ri.mode = ""
+	ri.closer = nil
 	ri.healthStatus = HealthStatusUnreachable
 	lm.runningInstancesMu.Unlock()
 
@@ -235,10 +312,15 @@ func (lm *LifecycleManager) cleanupFailedStart(instanceID string) {
 		if ri.cmd != nil && ri.cmd.Process != nil {
 			_ = ri.cmd.Process.Kill()
 		}
+		if ri.closer != nil {
+			_ = ri.closer.Close()
+		}
 		ri.cmd = nil
 		ri.executor = nil
 		ri.adapter = nil
 		ri.pid = 0
+		ri.mode = ""
+		ri.closer = nil
 		ri.healthStatus = HealthStatusUnreachable
 	}
 	lm.runningInstancesMu.Unlock()

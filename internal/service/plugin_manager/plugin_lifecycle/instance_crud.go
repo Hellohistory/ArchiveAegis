@@ -118,7 +118,7 @@ func (lm *LifecycleManager) ListInstances() (_ []domain.PluginInstance, retErr e
 func (lm *LifecycleManager) DeleteInstance(instanceID string) error {
 	lm.runningInstancesMu.Lock()
 	if state, exists := lm.runningInstances[instanceID]; exists {
-		if state.cmd != nil {
+		if state.executor != nil {
 			lm.runningInstancesMu.Unlock()
 			return fmt.Errorf("无法删除正在运行的插件实例 '%s'，请先停止它", instanceID)
 		}
@@ -148,7 +148,7 @@ func (lm *LifecycleManager) snapshotRunningInstanceIDs() map[string]struct{} {
 
 	clone := make(map[string]struct{}, len(lm.runningInstances))
 	for id, state := range lm.runningInstances {
-		if state != nil && state.cmd != nil {
+		if state != nil && state.executor != nil {
 			clone[id] = struct{}{}
 		}
 	}

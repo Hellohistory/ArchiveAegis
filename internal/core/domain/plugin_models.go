@@ -44,27 +44,39 @@ type Source struct {
 
 // Execution 表示插件运行时的配置
 type Execution struct {
-	Entrypoint string   `json:"entrypoint"` // 启动入口命令
-	Args       []string `json:"args"`       // 启动参数
+	Runtime    string      `json:"runtime"`        // 运行时类型：空值或 process 为外部进程，wasm 为内置沙箱
+	Entrypoint string      `json:"entrypoint"`     // 启动入口命令或 wasm 文件路径
+	Args       []string    `json:"args"`           // 启动参数
+	Wasm       *WasmConfig `json:"wasm,omitempty"` // wasm 运行时配置
+}
+
+// WasmConfig 描述 wasm 插件所需的运行时导出信息。
+// 文件位置: internal/core/domain/plugin_models.go
+type WasmConfig struct {
+	ExportedAlloc       string `json:"exported_alloc"`        // 用于内存分配的导出函数名
+	ExportedExecute     string `json:"exported_execute"`      // 处理 Execute 请求的导出函数名
+	ExportedHealthCheck string `json:"exported_health_check"` // 处理 HealthCheck 的导出函数名
+	ExportedPluginInfo  string `json:"exported_plugin_info"`  // 返回插件信息的导出函数名
+	EnableWASI          bool   `json:"enable_wasi"`           // 是否启用 WASI 环境
 }
 
 // PluginInstance 表示一个已配置的插件实例
 type PluginInstance struct {
-        InstanceID    string       `json:"instance_id"`     // 插件实例唯一标识符
-        DisplayName   string       `json:"display_name"`    // 实例展示名称
-        PluginID      string       `json:"plugin_id"`       // 所属插件标识符
-        Version       string       `json:"version"`         // 使用的插件版本
-        BizName       string       `json:"biz_name"`        // 所属业务组名称
-        Port          int          `json:"port"`            // 插件监听端口
-        Status        string       `json:"status"`          // 插件当前状态
-        Enabled       bool         `json:"enabled"`         // 插件是否启用
-        CreatedAt     time.Time    `json:"created_at"`      // 插件实例创建时间
-        LastStartedAt sql.NullTime `json:"last_started_at"` // 插件最近启动时间
-        RuntimePID          *int        `json:"runtime_pid,omitempty"`           // 当前运行的进程 PID
-        HealthStatus        string      `json:"health_status,omitempty"`         // 运行时健康状态
-        LastHeartbeat       *time.Time  `json:"last_heartbeat,omitempty"`        // 最近一次心跳时间
-        FailureCount        *int        `json:"failure_count,omitempty"`         // 连续失败次数
-        CircuitOpenUntil    *time.Time  `json:"circuit_open_until,omitempty"`    // 熔断恢复时间
-        ProtocolVersion     string      `json:"protocol_version,omitempty"`     // 插件声明的协议版本
-        CircuitBreakerOpen  bool        `json:"circuit_breaker_open,omitempty"` // 是否处于熔断
+	InstanceID         string       `json:"instance_id"`                    // 插件实例唯一标识符
+	DisplayName        string       `json:"display_name"`                   // 实例展示名称
+	PluginID           string       `json:"plugin_id"`                      // 所属插件标识符
+	Version            string       `json:"version"`                        // 使用的插件版本
+	BizName            string       `json:"biz_name"`                       // 所属业务组名称
+	Port               int          `json:"port"`                           // 插件监听端口
+	Status             string       `json:"status"`                         // 插件当前状态
+	Enabled            bool         `json:"enabled"`                        // 插件是否启用
+	CreatedAt          time.Time    `json:"created_at"`                     // 插件实例创建时间
+	LastStartedAt      sql.NullTime `json:"last_started_at"`                // 插件最近启动时间
+	RuntimePID         *int         `json:"runtime_pid,omitempty"`          // 当前运行的进程 PID
+	HealthStatus       string       `json:"health_status,omitempty"`        // 运行时健康状态
+	LastHeartbeat      *time.Time   `json:"last_heartbeat,omitempty"`       // 最近一次心跳时间
+	FailureCount       *int         `json:"failure_count,omitempty"`        // 连续失败次数
+	CircuitOpenUntil   *time.Time   `json:"circuit_open_until,omitempty"`   // 熔断恢复时间
+	ProtocolVersion    string       `json:"protocol_version,omitempty"`     // 插件声明的协议版本
+	CircuitBreakerOpen bool         `json:"circuit_breaker_open,omitempty"` // 是否处于熔断
 }
