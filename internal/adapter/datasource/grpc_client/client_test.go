@@ -3,6 +3,8 @@
 package grpc_client
 
 import (
+	"errors"
+
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/sharedmemory"
 	"context"
@@ -76,18 +78,23 @@ func startMockServer(tb testing.TB, healthy bool) (string, *grpc.Server) {
 	srv := grpc.NewServer()
 	datasourcev1.RegisterDataSourceServer(srv, &mockDataSourceServer{healthy: healthy})
 
+	serveErrCh := make(chan error, 1)
 	go func() {
-		if serveErr := srv.Serve(lis); serveErr != nil {
+		serveErrCh <- srv.Serve(lis)
+	}()
+
+	tb.Cleanup(func() {
+		srv.Stop()
+		if serveErr := <-serveErrCh; serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
 			tb.Fatalf("gRPC 服务启动失败: %v", serveErr)
 		}
-	}()
+	})
 
 	return lis.Addr().String(), srv
 }
 
 func TestClientAdapter_AllMethods(t *testing.T) {
-	addr, srv := startMockServer(t, true)
-	defer srv.Stop()
+	addr, _ := startMockServer(t, true)
 
 	adapter, err := New(addr)
 	if err != nil {
@@ -134,13 +141,15 @@ func TestClientAdapter_ExecuteSharedMemory(t *testing.T) {
 	}
 	grpcServer := grpc.NewServer()
 	datasourcev1.RegisterDataSourceServer(grpcServer, server)
+	serveErrCh := make(chan error, 1)
 	go func() {
-		if serveErr := grpcServer.Serve(lis); serveErr != nil {
-			t.Fatalf("gRPC 服务启动失败: %v", serveErr)
-		}
+		serveErrCh <- grpcServer.Serve(lis)
 	}()
 	t.Cleanup(func() {
 		grpcServer.Stop()
+		if serveErr := <-serveErrCh; serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
+			t.Fatalf("gRPC 服务启动失败: %v", serveErr)
+		}
 		if server.lastHandlePath != "" {
 			_ = os.Remove(server.lastHandlePath)
 		}
@@ -166,8 +175,7 @@ func TestClientAdapter_ExecuteSharedMemory(t *testing.T) {
 }
 
 func TestClientAdapter_HealthCheck_Failure(t *testing.T) {
-	addr, srv := startMockServer(t, false)
-	defer srv.Stop()
+	addr, _ := startMockServer(t, false)
 
 	adapter, err := New(addr)
 	if err != nil {
