@@ -143,3 +143,13 @@ message TriggerBackupResult {
   int64 file_size = 2;          // 备份文件大小（字节）
   int32 db_files_count = 3;     // 包含的数据库文件数量
 }
+
+// SharedMemoryHandle 描述了一块通过共享内存传递的大数据集的访问方式
+message SharedMemoryHandle {
+  string file_path = 1;              // 共享内存对应的文件路径
+  int64 offset = 2;                  // 数据开始的偏移量
+  int64 length = 3;                  // 数据长度（字节）
+  string format = 4;                 // 数据格式，如 "arrow.ipc"
+  int64 rows = 5;                    // 行数统计，便于上层校验
+  map<string, string> metadata = 6;  // 额外元数据，例如 schema 摘要
+}

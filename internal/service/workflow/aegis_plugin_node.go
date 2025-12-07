@@ -7,6 +7,7 @@ package workflow
 import (
 	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/internal/sharedmemory"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -89,6 +90,9 @@ func (apn *aegisPluginNode) executePlugin(ctx context.Context, reqPayload proto.
 	log.Printf("信息: [PluginNode] 正在调用插件 '%s' 的 '%s' 命令...", apn.config.BizName, apn.config.Command)
 	resEnvelope, err := apn.executor.Execute(ctx, envelope)
 	if err != nil {
+		return nil, err
+	}
+	if resEnvelope, err = sharedmemory.ExpandResponseIfHandle(resEnvelope); err != nil {
 		return nil, err
 	}
 	return resEnvelope, nil
