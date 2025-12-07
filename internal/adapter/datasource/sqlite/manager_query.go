@@ -6,12 +6,15 @@ package sqlite
 import (
 	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/internal/sharedmemory"
 	"container/heap"
 	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
+	"strconv"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
@@ -178,6 +181,15 @@ func (m *Manager) handleDataQuery(ctx context.Context, req *v1.RequestEnvelope) 
 		return nil, status.Errorf(codes.Internal, "查询数据失败: %v", err)
 	}
 
+	if shouldUseSharedMemory(len(results)) {
+		handle, err := sharedmemory.WriteJSONLines(results)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "构建共享内存结果失败: %v", err)
+		}
+		handle.Metadata["total"] = strconv.FormatInt(total, 10)
+		return handle, nil
+	}
+
 	// 将查询结果转换为 Protobuf 结构。
 	itemsAsInterface := make([]interface{}, len(results))
 	for i, item := range results {
@@ -193,6 +205,16 @@ func (m *Manager) handleDataQuery(ctx context.Context, req *v1.RequestEnvelope) 
 
 	// 封装并返回最终的 DataQueryResult。
 	return &v1.DataQueryResult{Data: resultData}, nil
+}
+
+func shouldUseSharedMemory(resultSize int) bool {
+	threshold := 1_000_000
+	if env := os.Getenv("AEGIS_SHM_THRESHOLD"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			threshold = v
+		}
+	}
+	return resultSize >= threshold
 }
 
 // queryInternal 是核心查询逻辑，它协调校验、并发查询、多路归并和内存分页。

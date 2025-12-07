@@ -7,6 +7,7 @@ package grpc_client
 import (
 	datasourcev1 "ArchiveAegis/gen/go/proto/datasource/v1" // gRPC generated DataSource service client interface
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/internal/sharedmemory"
 	"context"
 	"fmt"
 	"log/slog"
@@ -43,7 +44,11 @@ func New(pluginAddress string) (*ClientAdapter, error) {
 // Execute 仅做透传，不做重试或超时控制；调用方可在 ctx 中设置 deadline。
 func (a *ClientAdapter) Execute(ctx context.Context, req *datasourcev1.RequestEnvelope) (*datasourcev1.ResponseEnvelope, error) {
 	slog.Debug("grpc_client: Execute", "request_id", req.RequestId, "biz", req.BizName)
-	return a.client.Execute(ctx, req)
+	resp, err := a.client.Execute(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return sharedmemory.ExpandResponseIfHandle(resp)
 }
 
 // GetPluginInfo queries the plugin for its metadata such as version and

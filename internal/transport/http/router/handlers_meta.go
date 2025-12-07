@@ -4,6 +4,7 @@ package router
 import (
 	v1 "ArchiveAegis/gen/go/proto/datasource/v1"
 	"ArchiveAegis/internal/core/port"
+	"ArchiveAegis/internal/sharedmemory"
 	"errors"
 	"fmt"
 	"net/http"
@@ -51,6 +52,10 @@ func executeAndRespond(c *gin.Context, registry map[string]port.Executor, bizNam
 
 	resEnvelope, err := executor.Execute(c.Request.Context(), envelope)
 	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if resEnvelope, err = sharedmemory.ExpandResponseIfHandle(resEnvelope); err != nil {
 		_ = c.Error(err)
 		return
 	}
