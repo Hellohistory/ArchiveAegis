@@ -176,14 +176,14 @@ jobs:
       - name: 配置 Windows 环境以进行端到端测试
         if: runner.os == 'Windows' && steps.e2e_changes.outputs.any_changed == 'true'
         run: |
-          echo "正在禁用 Windows Defender 实时监控..."
+          Write-Host '正在禁用 Windows Defender 实时监控...'
           Set-MpPreference -DisableRealtimeMonitoring $true
-          echo "正在添加防火墙规则以开放端口 10224..."
-          New-NetFirewallRule -DisplayName "Allow Aegis Test Port" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
+          Write-Host '正在添加防火墙规则以开放端口 10224...'
+          New-NetFirewallRule -DisplayName 'Allow Aegis Test Port' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 10224
           # 增加 E2E 测试的超时时间
-          $ratelimitPath = "ci_test/test_ratelimit.py"
+          $ratelimitPath = 'ci_test/test_ratelimit.py'
           $content = Get-Content -Raw -Path $ratelimitPath
-          $updated = $content -replace "_wait_until_ready\(timeout=45\)", "_wait_until_ready(timeout=120)"
+          $updated = $content -replace '_wait_until_ready\(timeout=45\)', '_wait_until_ready(timeout=120)'
           Set-Content -Path $ratelimitPath -Value $updated -Encoding UTF8
         shell: powershell
 
@@ -200,11 +200,11 @@ jobs:
         shell: powershell
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $false
-          Write-Host "Windows Defender 实时监控已重新启用。"
-          $rule = Get-NetFirewallRule -DisplayName "Allow Aegis Test Port" -ErrorAction SilentlyContinue
+          Write-Host 'Windows Defender 实时监控已重新启用。'
+          $rule = Get-NetFirewallRule -DisplayName 'Allow Aegis Test Port' -ErrorAction SilentlyContinue
           if ($rule) {
-            Remove-NetFirewallRule -DisplayName "Allow Aegis Test Port"
-            Write-Host "已移除防火墙规则 `\"Allow Aegis Test Port`\"。"
+            Remove-NetFirewallRule -DisplayName 'Allow Aegis Test Port'
+            Write-Host '已移除防火墙规则 "Allow Aegis Test Port"。'
           }
 
       - name: 所有检查通过
