@@ -23,6 +23,12 @@ type runtimeSnapshot struct {
 // CreateInstance 在数据库中创建插件实例配置。
 // 包括校验业务名称唯一性、分配实例 ID 和端口，并写入数据库。
 func (lm *LifecycleManager) CreateInstance(displayName, pluginID, version, bizName string) (string, error) {
+	return lm.CreateInstanceWithPlacement("", 0, displayName, pluginID, version, bizName)
+}
+
+// CreateInstanceWithPlacement 支持在共识流程中复用同一实例 ID 与端口。
+// 当 instanceID 或 port 为零值时，函数会自动分配；否则使用显式传入的值以保证多节点一致。
+func (lm *LifecycleManager) CreateInstanceWithPlacement(instanceID string, port int, displayName, pluginID, version, bizName string) (string, error) {
 	var count int
 	if err := lm.db.QueryRow("SELECT COUNT(*) FROM plugin_instances WHERE biz_name = ?", bizName).Scan(&count); err != nil {
 		return "", fmt.Errorf("检查 biz_name 时数据库出错: %w", err)
@@ -31,23 +37,38 @@ func (lm *LifecycleManager) CreateInstance(displayName, pluginID, version, bizNa
 		return "", fmt.Errorf("业务组名称 (biz_name) '%s' 已被其他插件实例占用", bizName)
 	}
 
-	freePort, err := findFreePort()
-	if err != nil {
-		return "", fmt.Errorf("寻找可用端口失败: %w", err)
+	if instanceID == "" {
+		instanceID = uuid.New().String()
+	}
+	if port == 0 {
+		freePort, err := findFreePort()
+		if err != nil {
+			return "", fmt.Errorf("寻找可用端口失败: %w", err)
+		}
+		port = freePort
 	}
 
-	instanceID := uuid.New().String()
 	const insert = `
         INSERT INTO plugin_instances
             (instance_id, display_name, plugin_id, version, biz_name, port)
         VALUES (?, ?, ?, ?, ?, ?)
     `
-	if _, err := lm.db.Exec(insert, instanceID, displayName, pluginID, version, bizName, freePort); err != nil {
+	if _, err := lm.db.Exec(insert, instanceID, displayName, pluginID, version, bizName, port); err != nil {
 		return "", fmt.Errorf("创建插件实例配置失败: %w", err)
 	}
 
-	log.Printf("✅ [LifecycleManager] 已成功创建插件实例 '%s' (ID: %s)，绑定到业务组 '%s'。", displayName, instanceID, bizName)
+	log.Printf("✅ [LifecycleManager] 已成功创建插件实例 '%s' (ID: %s)，绑定到业务组 '%s'，端口 %d。", displayName, instanceID, bizName, port)
 	return instanceID, nil
+}
+
+// AllocateInstancePlacement 为实例创建提前分配唯一 ID 与端口，用于共识复制前保持幂等性。
+func (lm *LifecycleManager) AllocateInstancePlacement() (string, int, error) {
+	id := uuid.New().String()
+	port, err := findFreePort()
+	if err != nil {
+		return "", 0, err
+	}
+	return id, port, nil
 }
 
 // ListInstances 查询数据库中所有插件实例记录，并结合当前运行时快照调整其状态。

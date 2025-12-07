@@ -6,6 +6,7 @@ package main
 import (
 	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/aegobserve"
+	"ArchiveAegis/internal/cluster"
 	"ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/service/admin_config"
@@ -56,6 +57,7 @@ type ServerConfig struct {
 type Config struct {
 	Server           ServerConfig           `mapstructure:"server"`            // HTTP 服务配置
 	PluginManagement PluginManagementConfig `mapstructure:"plugin_management"` // 插件管理配置
+	Cluster          cluster.Config         `mapstructure:"cluster"`           // 集群共识配置
 }
 
 // application 表示服务应用的核心结构体，聚合了所有运行时依赖
@@ -69,6 +71,7 @@ type application struct {
 	rateLimiter        *aegmiddleware.BusinessRateLimiter // 业务限流器
 	executorRegistry   map[string]port.Executor           // 执行器注册表（按业务名映射）
 	closableAdapters   *[]io.Closer                       // 所有可关闭的资源集合
+	clusterManager     *cluster.Manager                   // 集群与共识管理器
 }
 
 // =============================================================================
@@ -159,6 +162,10 @@ func build() (*application, error) {
 		}
 	}
 
+	if config.Cluster.RaftDir != "" && !filepath.IsAbs(config.Cluster.RaftDir) {
+		config.Cluster.RaftDir = filepath.Join(rootDir, config.Cluster.RaftDir)
+	}
+
 	// 初始化服务组件
 	adminConfigService, err := admin_config.NewAdminConfigServiceImpl(sysDB, 1000, 5*time.Minute)
 	if err != nil {
@@ -194,6 +201,19 @@ func build() (*application, error) {
 	}
 	slog.Info("监控: metrics 已通过包初始化自动注册。")
 
+	// 初始化集群共识（可选）
+	var clusterManager *cluster.Manager
+	if config.Cluster.NodeID != "" {
+		clusterHandler := cluster.NewBusinessCommandHandler(pm, workflowSvc)
+		clusterManager, err = cluster.NewManager(config.Cluster, clusterHandler, slog.Default())
+		if err != nil {
+			return nil, fmt.Errorf("初始化集群子系统失败: %w", err)
+		}
+		slog.Info("集群模块已启动", "node_id", config.Cluster.NodeID)
+	} else {
+		slog.Warn("未配置 cluster.node_id，网关将以单节点模式运行。")
+	}
+
 	// 构建 application 实例
 	app := &application{
 		config:             config,
@@ -205,6 +225,7 @@ func build() (*application, error) {
 		rateLimiter:        rateLimiter,
 		executorRegistry:   executorRegistry,
 		closableAdapters:   &closableAdapters,
+		clusterManager:     clusterManager,
 	}
 	return app, nil
 }
@@ -237,6 +258,7 @@ func (app *application) run() error {
 			Registry:           app.executorRegistry,
 			AdminConfigService: app.adminConfigService,
 			PluginManager:      app.pluginManager,
+			ClusterManager:     app.clusterManager,
 			RateLimiter:        app.rateLimiter,
 			AuthDB:             app.db,
 			SetupToken:         setupToken,

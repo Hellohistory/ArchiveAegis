@@ -10,3 +10,12 @@ plugin_management:
     - name: "本地测试仓库"
       url: "./configs/local_repository.json" # 相对于项目根目录即可
       enabled: true
+
+cluster:
+  node_id: "gateway-1"
+  raft_dir: "./instance/raft"
+  raft_bind: "0.0.0.0:6001"
+  raft_advertise: "127.0.0.1:6001"
+  gossip_bind: "0.0.0.0:7946"
+  join: []
+  bootstrap: true

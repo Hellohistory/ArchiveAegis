@@ -4,7 +4,8 @@ package router
 import (
 	"ArchiveAegis/internal/aegmiddleware"
 	"ArchiveAegis/internal/aegobserve"
-	"ArchiveAegis/internal/core/port"
+        "ArchiveAegis/internal/cluster"
+        "ArchiveAegis/internal/core/port"
 	"ArchiveAegis/internal/service"
 	"ArchiveAegis/internal/service/plugin_manager"
 	"ArchiveAegis/internal/service/workflow"
@@ -20,12 +21,13 @@ import (
 
 // Dependencies 结构体定义了所有路由处理器所依赖的服务和配置
 type Dependencies struct {
-	Registry           map[string]port.Executor
-	AdminConfigService port.QueryAdminConfigService
-	PluginManager      *plugin_manager.PluginManager
-	RateLimiter        *aegmiddleware.BusinessRateLimiter
-	AuthDB             *sql.DB
-	SetupToken         string
+        Registry           map[string]port.Executor
+        AdminConfigService port.QueryAdminConfigService
+        PluginManager      *plugin_manager.PluginManager
+        ClusterManager     *cluster.Manager
+        RateLimiter        *aegmiddleware.BusinessRateLimiter
+        AuthDB             *sql.DB
+        SetupToken         string
 	SetupTokenDeadline time.Time
 	WorkflowService    *workflow.Service
 }
