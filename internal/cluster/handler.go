@@ -121,6 +121,37 @@ func (h *BusinessCommandHandler) HandleCommand(cmd Command) (any, error) {
 	}
 }
 
+// SnapshotState 导出插件与工作流的完整状态。
+func (h *BusinessCommandHandler) SnapshotState(ctx context.Context) (*StateSnapshot, error) {
+	plugins, err := h.pluginManager.SnapshotState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	flows, err := h.workflowService.SnapshotState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &StateSnapshot{Plugins: plugins, Workflows: flows}, nil
+}
+
+// RestoreState 根据快照重建业务状态。
+func (h *BusinessCommandHandler) RestoreState(ctx context.Context, snapshot *StateSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("快照数据为空")
+	}
+	if snapshot.Plugins != nil {
+		if err := h.pluginManager.RestoreState(ctx, snapshot.Plugins); err != nil {
+			return err
+		}
+	}
+	if snapshot.Workflows != nil {
+		if err := h.workflowService.RestoreState(ctx, snapshot.Workflows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func decodeStruct(input interface{}, target interface{}) error {
 	data, err := json.Marshal(input)
 	if err != nil {

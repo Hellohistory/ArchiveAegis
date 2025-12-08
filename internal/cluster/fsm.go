@@ -4,9 +4,13 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+
+	"ArchiveAegis/internal/service/plugin_manager"
+	"ArchiveAegis/internal/service/workflow"
 
 	"github.com/hashicorp/raft"
 )
@@ -14,6 +18,8 @@ import (
 // CommandHandler 负责将共识后的指令落地到业务层。
 type CommandHandler interface {
 	HandleCommand(cmd Command) (any, error)
+	SnapshotState(ctx context.Context) (*StateSnapshot, error)
+	RestoreState(ctx context.Context, snapshot *StateSnapshot) error
 }
 
 // fsm 实现 Raft FSM 接口，用于在每个节点上重放指令。
@@ -42,17 +48,51 @@ func (f *fsm) Apply(logEntry *raft.Log) interface{} {
 }
 
 func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
-	return &noopSnapshot{}, nil
+	state, err := f.handler.SnapshotState(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	return &noopSnapshot{data: data}, nil
 }
 
 func (f *fsm) Restore(r io.ReadCloser) error {
 	if r != nil {
 		defer r.Close()
 	}
-	return nil
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	var snapshot StateSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return err
+	}
+	return f.handler.RestoreState(context.Background(), &snapshot)
 }
 
-type noopSnapshot struct{}
+type noopSnapshot struct {
+	data []byte
+}
 
-func (n *noopSnapshot) Persist(_ raft.SnapshotSink) error { return nil }
-func (n *noopSnapshot) Release()                          {}
+func (n *noopSnapshot) Persist(sink raft.SnapshotSink) error {
+	if _, err := sink.Write(n.data); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	if err := sink.Close(); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	return nil
+}
+func (n *noopSnapshot) Release() {}
+
+// StateSnapshot 汇总插件与工作流的当前状态，便于 Raft 快照持久化。
+type StateSnapshot struct {
+	Plugins   *plugin_manager.Snapshot `json:"plugins"`
+	Workflows *workflow.Snapshot       `json:"workflows"`
+}
