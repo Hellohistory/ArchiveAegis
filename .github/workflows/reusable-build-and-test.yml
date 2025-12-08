@@ -183,7 +183,9 @@ jobs:
           # 增加 E2E 测试的超时时间
           $ratelimitPath = 'ci_test/test_ratelimit.py'
           $content = Get-Content -Raw -Path $ratelimitPath
-          $updated = $content -replace '_wait_until_ready\(timeout=45\)', '_wait_until_ready(timeout=120)'
+          $pattern = "_wait_until_ready\(timeout=45\)"
+          $replacement = "_wait_until_ready(timeout=120)"
+          $updated = $content -replace $pattern, $replacement
           Set-Content -Path $ratelimitPath -Value $updated -Encoding UTF8
         shell: powershell
 
